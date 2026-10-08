@@ -1,0 +1,10 @@
+node_modules/
+lib/
+.pnpm-store/
+*.log
+.DS_Store
+
+# Third-party source dumps used as read-only evidence while writing the recon
+# reports. They stay local: the reports cite exact line numbers, but shipping
+# someone else's full checkout in this repository's history is not the point.
+docs/recon/_analysis/

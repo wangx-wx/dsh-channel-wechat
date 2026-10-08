@@ -1,0 +1,9 @@
+packages:
+  - .
+
+nodeLinker: hoisted
+
+# tsdown and vitest both build on esbuild; leaving this undecided makes pnpm
+# refuse the install on a clean checkout.
+allowBuilds:
+  esbuild: true
