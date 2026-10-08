@@ -15,6 +15,10 @@ export default defineConfig({
           name: 'integration',
           include: ['tests/integration/**/*.spec.ts'],
           environment: 'node',
+          // These suites import the published artifact, so they build it
+          // first: a fresh clone must not depend on someone having run
+          // `pnpm build` by hand.
+          globalSetup: ['tests/support/global-setup.ts'],
           testTimeout: 120_000,
           hookTimeout: 120_000,
         },

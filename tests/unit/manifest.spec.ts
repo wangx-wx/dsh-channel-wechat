@@ -7,11 +7,9 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import semver from 'semver'
 
-const root = fileURLToPath(new URL('../..', import.meta.url))
 const manifest = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as {
   name: string
   version: string
@@ -54,13 +52,14 @@ describe('package manifest', () => {
     expect(manifest.type).toBe('module')
   })
 
-  it('points every declared entry at a file the build actually emits', () => {
-    // A manifest whose entry path drifts from the builder's output installs
-    // cleanly and then fails at load with no actionable message, so the two
-    // are pinned to each other rather than to a remembered filename.
+  it('declares a root export as a plain path string', () => {
+    // dsh reads exports["."] directly; a conditional object without a usable
+    // default is the shape that fails at load rather than at install.
     const entry = manifest.exports?.['.']
-    const target = typeof entry === 'string' ? entry : entry && typeof entry === 'object' && 'default' in entry ? String(entry.default) : undefined
-    expect(target, 'root export must be a resolvable path').toBeTypeOf('string')
-    expect(existsSync(new URL(`../../${target}`, import.meta.url)), `missing build output ${target}`).toBe(true)
+    const target = typeof entry === 'string'
+      ? entry
+      : entry && typeof entry === 'object' && 'default' in entry ? entry.default : undefined
+    expect(target, 'root export must resolve to a path').toBeTypeOf('string')
+    expect(target).toMatch(/^\.\/.+\.js$/u)
   })
 })

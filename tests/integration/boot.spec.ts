@@ -14,7 +14,7 @@
  * same evidence dsh's own app-boot tests use.
  */
 
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -60,5 +60,17 @@ describe('plugin mounts in a real cordis context', () => {
     expect(module['default']).toBeUndefined()
     expect(module['name']).toBe('channel-wechat')
     expect(Array.isArray(module['inject'])).toBe(true)
+  })
+
+  it('builds the entry the manifest advertises', () => {
+    // A manifest whose entry path drifts from the builder's output installs
+    // cleanly and then fails at load with no actionable message, so the two
+    // are pinned to each other rather than to a remembered filename. This
+    // lives here, not in the unit suite, because it needs a real build.
+    const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')) as { exports?: Record<string, unknown> }
+    const entry = manifest.exports?.['.']
+    const target = typeof entry === 'string' ? entry : entry && typeof entry === 'object' && 'default' in entry ? entry.default : undefined
+    expect(target, 'root export must resolve to a path').toBeTypeOf('string')
+    expect(existsSync(join(REPO_ROOT, String(target))), `missing build output ${String(target)}`).toBe(true)
   })
 })
