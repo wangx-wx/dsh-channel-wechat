@@ -60,6 +60,10 @@ function build(options: {
   messages?: unknown[]
   send?: ReplySender
   onReplyError?: (error: unknown, peerId: string, text: string) => void
+  /** Called when a turn begins, so a test can see one in flight. */
+  onTurnStarted?: () => void
+  /** Replaces the command router's cancel, for /stop tests. */
+  cancelRunning?: () => Promise<boolean>
 }) {
   const polls: (string | undefined)[] = []
   const sent: { peerId: string; text: string; token: string | undefined }[] = []
@@ -84,6 +88,10 @@ function build(options: {
     pollTimeoutMs: 1_000,
     maxRunMs: 2_000,
     ...(options.onReplyError === undefined ? {} : { onReplyError: options.onReplyError }),
+    ...(options.onTurnStarted === undefined ? {} : { onTurnStarted: options.onTurnStarted }),
+    ...(options.cancelRunning === undefined ? {} : { cancelRunning: options.cancelRunning }),
+    // The harness's command runtime; the channel forwards unknown names to it.
+    executeNativeCommand: async (line: string) => ({ kind: 'success' as const, text: `native: ${line}` }),
   })
   channels.push(channel)
   return { channel, polls, sent }
@@ -207,6 +215,88 @@ describe('the answer comes back out', () => {
     await channel.settled()
 
     expect(sent).toEqual([])
+  })
+})
+
+describe('slash commands', () => {
+  it('answers a command without starting a model turn', async () => {
+    // A command is the channel's business, not the model's: delivering
+    // "/status" as a prompt would burn a turn to answer a question the channel
+    // already knows the answer to.
+    const f = fakeRegistry()
+    const { channel, sent } = build({
+      registry: f,
+      messages: [{ message_id: 1, from_user_id: 'user-7', message_type: 1, context_token: 'ctx-1', item_list: [{ type: 1, text_item: { text: '/status' } }] }],
+    })
+
+    await channel.run()
+    await channel.settled()
+
+    expect(f.followed).toEqual([])
+    expect(sent).toHaveLength(1)
+    expect(sent[0]?.peerId).toBe('user-7')
+  })
+
+  it('runs a command even while that peer has a turn in flight', async () => {
+    // This is the M3 acceptance criterion and the reason commands bypass the
+    // queue: a /stop that queued behind the turn it means to stop can never
+    // arrive. `turnIsRunning` reports whether the turn had already started.
+    const f = fakeRegistry()
+    let turnRunning = false
+    let cancelled = false
+    const { channel, sent } = build({
+      registry: f,
+      messages: [],
+      onTurnStarted: () => { turnRunning = true },
+      cancelRunning: async () => { cancelled = true; return true },
+    })
+
+    await channel.run()
+    await channel.settled()
+
+    // Start a turn that stays in flight, then send /stop from the same peer.
+    const handler = channel as unknown as { handleMessage: (message: unknown) => Promise<void> }
+    void handler.handleMessage({
+      message_id: 1, from_user_id: 'user-7', message_type: 1,
+      item_list: [{ type: 1, text_item: { text: 'long task' } }],
+    })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    await handler.handleMessage({
+      message_id: 2, from_user_id: 'user-7', message_type: 1,
+      item_list: [{ type: 1, text_item: { text: '/stop' } }],
+    })
+
+    expect(turnRunning).toBe(true)
+    expect(cancelled).toBe(true)
+    expect(sent.map(entry => entry.text).join('')).toContain('停止')
+  })
+
+  it('passes an unknown command to the harness rather than the model', async () => {
+    const f = fakeRegistry()
+    const { channel, sent } = build({
+      registry: f,
+      messages: [{ message_id: 1, from_user_id: 'user-7', message_type: 1, item_list: [{ type: 1, text_item: { text: '/nonexistent-cmd' } }] }],
+    })
+
+    await channel.run()
+    await channel.settled()
+
+    expect(f.followed).toEqual([])
+    expect(sent).toHaveLength(1)
+  })
+
+  it('still delivers ordinary text to the model', async () => {
+    // The bypass must not swallow normal messages.
+    const f = fakeRegistry()
+    const { channel } = build({
+      registry: f,
+      messages: [{ message_id: 1, from_user_id: 'user-7', message_type: 1, item_list: [{ type: 1, text_item: { text: 'hello' } }] }],
+    })
+
+    await channel.run()
+    await channel.settled()
+
+    expect(f.followed).toEqual([{ sessionId: 'channel-wechat-user-7', text: 'hello' }])
   })
 })
 

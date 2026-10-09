@@ -18,6 +18,8 @@
 import { PeerMap, type AgentHandleLike, type AgentRegistryLike } from '../bridge/peer-map.ts'
 import { deliverInbound } from '../bridge/dispatcher.ts'
 import { ReplyQueue, extractAssistantText, type ReplySender } from '../bridge/reply.ts'
+import { parseCommandLine, routeCommand } from '../bridge/commands.ts'
+import { runLocalCommand, type LocalCommandContext } from '../bridge/local-commands.ts'
 import { parseInboundMessage } from '../wechat/inbound.ts'
 import { monitorLoop, type MonitorResponse } from './monitor.ts'
 
@@ -47,6 +49,16 @@ export interface ChannelOptions {
   onReplyError?: (error: unknown, peerId: string, text: string) => void
   /** Observe a handler failure; the loop continues either way. */
   onMessageError?: (error: unknown, message: unknown) => void
+  /** Observe a turn beginning, so a caller can tell work is in flight. */
+  onTurnStarted?: () => void
+  /** Cancel one peer's running turn; defaults to cancelling the live agent. */
+  cancelRunning?: (peerId: string) => Promise<boolean>
+  /** Forward a line to the harness's command runtime. */
+  executeNativeCommand?: (line: string, peerId: string) => Promise<{ kind: 'success' | 'error'; text?: string } | undefined>
+  /** The account being polled, reported by `/status`. */
+  accountId?: string | undefined
+  /** Command names the harness offers, listed by `/help`. */
+  nativeCommands?: readonly string[]
   /**
    * Provider and model each new session selects.
    *
@@ -112,6 +124,15 @@ export class Channel {
       serialize: async (message, work) => {
         const peerId = peerIdOf(message)
         if (peerId === undefined) return work()
+        // This hook decides *queuing*, not routing: a command must run
+        // immediately rather than behind the turn it may be intended to stop,
+        // because anything queued behind that turn can never arrive. What the
+        // command itself does is `handleMessage`'s decision.
+        const text = textOf(message)
+        if (text !== undefined && parseCommandLine(text) !== undefined) {
+          await work()
+          return
+        }
         const task = this.peers.runExclusive(peerId, work)
         this.turnWork.add(task)
         try {
@@ -181,6 +202,70 @@ export class Channel {
     void this.replies.enqueue(peerId, text, this.tokens.get(peerId))
   }
 
+  /**
+   * Answer one slash command for a peer.
+   *
+   * Deliberately outside the peer's queue, and deliberately not delivered to
+   * the model: the reply is the command's own output, so no turn runs and the
+   * answer goes straight back out.
+   * @param peerId - the peer whose message carried the command.
+   * @param text - the command line.
+   */
+  private async handleCommand(peerId: string, text: string): Promise<void> {
+    const outcome = await routeCommand(text, {
+      handleLocal: command => runLocalCommand(command, this.localCommandContext(peerId)),
+      executeNative: async line => {
+        const execute = this.options.executeNativeCommand
+        if (execute === undefined) return undefined
+        return execute(line, peerId)
+      },
+    })
+    if (outcome === undefined) return
+    await this.replies.enqueue(peerId, outcome.text ?? `${outcome.kind === 'success' ? '完成' : '失败'}`, this.tokens.get(peerId))
+  }
+
+  /**
+   * The context this channel's own commands run against.
+   * @param peerId - the peer whose command is running.
+   * @returns the command context.
+   */
+  private localCommandContext(peerId: string): LocalCommandContext {
+    return {
+      peerId,
+      cancelRunning: async () => {
+        const cancel = this.options.cancelRunning
+        if (cancel !== undefined) return cancel(peerId)
+        return this.cancelPeer(peerId)
+      },
+      endSession: async () => { await this.endPeerSession(peerId) },
+      accountId: this.options.accountId,
+      sessionCount: this.peers.size,
+      nativeCommands: this.options.nativeCommands ?? [],
+    }
+  }
+
+  /** Cancel a peer's running turn through its live agent. */
+  private async cancelPeer(peerId: string): Promise<boolean> {
+    // Waits out a session still being created: the turn can start before the
+    // session is recorded, which is exactly when a stop matters most.
+    const handle = await this.peers.liveHandleFor(peerId)
+    if (handle === undefined) return false
+    const agent = handle.agent as unknown as { cancel?: (cause: { kind: string }) => void }
+    if (typeof agent.cancel !== 'function') return false
+    agent.cancel({ kind: 'user' })
+    return true
+  }
+
+  /** End a peer's session so the next message starts a fresh one. */
+  private async endPeerSession(peerId: string): Promise<void> {
+    const handle = this.peers.handleFor(peerId)
+    this.peers.forget(peerId)
+    if (handle === undefined) return
+    const id = String(handle.agent.id)
+    this.sessionToPeer.delete(id)
+    await handle.dispose()
+  }
+
   /** Read, parse, and deliver one polled message. */
   /** Read, parse, and deliver one polled message. */
   /** Options passed to every `create`/`resume` for a peer's session. */
@@ -198,9 +283,18 @@ export class Channel {
     // the reply it triggers reads it back.
     this.tokens.set(parsed.peerId, parsed.contextToken)
 
+    // A command is answered here rather than delivered: the channel knows the
+    // answer, so running a turn for it would burn the user's tokens answering
+    // a question this plugin already knows.
+    if (parseCommandLine(parsed.text) !== undefined) {
+      await this.handleCommand(parsed.peerId, parsed.text)
+      return
+    }
+
     const handle = await this.peers.sessionFor(parsed.peerId)
     this.sessionToPeer.set(String(handle.agent.id), parsed.peerId)
     this.peers.require(handle)
+    this.options.onTurnStarted?.()
     deliverInbound(agentOf(handle), parsed, { isLive: () => this.peers.has(parsed.peerId) })
 
     // Wait for the turn this message started. The answer is read from the
@@ -209,6 +303,11 @@ export class Channel {
     // would let the channel report itself settled with the turn still running.
     await agentOf(handle).whenIdle?.()
   }
+}
+
+/** The text a raw message carries, when it has any. */
+function textOf(message: unknown): string | undefined {
+  return parseInboundMessage(message as never)?.text
 }
 
 /** The peer id a raw message claims to come from, when it has one. */

@@ -76,6 +76,15 @@ export class PeerMap {
   private readonly sessionOptions: { provider: string; model: string } | undefined
   private readonly entries = new Map<string, Entry>()
   /**
+   * Session creations still in flight, per peer.
+   *
+   * Creating an agent is slow enough that a second message can arrive before
+   * the first peer's session exists - and a `/stop` that arrived in that window
+   * would find no handle and give up, leaving the turn it meant to stop running
+   * to completion.
+   */
+  private readonly pending = new Map<string, Promise<AgentHandleLike>>()
+  /**
    * Per-peer turn queues, kept apart from the session entries: a peer has a
    * queue from its first message, which is what stops two early messages from
    * running at once before either has created a session.
@@ -102,6 +111,18 @@ export class PeerMap {
     // a disposal would swallow every message delivered through it.
     if (current !== undefined && this.registry.get(current.handle.agent.id) !== undefined) return current.handle
 
+    // One creation per peer: two messages arriving together must not each
+    // create a session for the same id, which the registry rejects.
+    const existing = this.pending.get(peerId)
+    if (existing !== undefined) return existing
+
+    const creation = this.createSession(peerId).finally(() => { this.pending.delete(peerId) })
+    this.pending.set(peerId, creation)
+    return creation
+  }
+
+  /** Create or resume one peer's session and record it. */
+  private async createSession(peerId: string): Promise<AgentHandleLike> {
     const sessionId = sessionIdFor(peerId)
     const agentOptions = this.sessionOptions === undefined
       ? {}
@@ -111,6 +132,42 @@ export class PeerMap {
       : await this.registry.create({ sessionId, ...agentOptions })
     this.entries.set(peerId, { handle })
     return handle
+  }
+
+  /** How many peers currently hold a session. */
+  get size(): number {
+    return this.entries.size
+  }
+
+  /**
+   * The live handle for one peer, without creating or resuming anything.
+   * @param peerId - the WeChat sender id.
+   * @returns the handle, or `undefined` when this peer has none.
+   */
+  handleFor(peerId: string): AgentHandleLike | undefined {
+    const entry = this.entries.get(peerId)
+    if (entry === undefined) return undefined
+    return this.registry.get(entry.handle.agent.id) === undefined ? undefined : entry.handle
+  }
+
+  /**
+   * The live handle for a peer, waiting out a creation already in flight.
+   *
+   * A caller that must act on work the peer has started needs this rather than
+   * {@link handleFor}: the turn can begin before the session is recorded, so
+   * looking only at what exists would miss exactly the case where a stop is
+   * most needed.
+   * @param peerId - the WeChat sender id.
+   * @returns the handle, or `undefined` when this peer has none.
+   */
+  async liveHandleFor(peerId: string): Promise<AgentHandleLike | undefined> {
+    const pendingCreation = this.pending.get(peerId)
+    if (pendingCreation !== undefined) {
+      // A creation that fails leaves no session, which is the same answer as
+      // never having had one.
+      await pendingCreation.catch(() => undefined)
+    }
+    return this.handleFor(peerId)
   }
 
   /**
@@ -178,6 +235,9 @@ export class PeerMap {
    * @returns when every handle has been disposed.
    */
   async disposeAll(): Promise<void> {
+    // Let in-flight creations finish first, or their handles are never disposed
+    // and keep a registry slot and write lease after this map is gone.
+    await Promise.allSettled([...this.pending.values()])
     const entries = [...this.entries.values()]
     this.entries.clear()
     this.tails.clear()

@@ -126,6 +126,85 @@ describe('a real agent answers a WeChat message', () => {
   })
 })
 
+describe('/stop over a real agent loop', () => {
+  it('interrupts a running turn and answers the peer', async () => {
+    // M3's acceptance criterion. The turn below never finishes on its own, so
+    // the only way this test ends is if /stop actually reaches the live agent
+    // while that turn is in flight.
+    const ctx = new Context()
+    contexts.push(ctx)
+    await mountAgentLoopTestDependencies(ctx)
+    await mountAgentLoopTestHarness(ctx)
+
+    // A model that honors cancellation the way a real adapter must.
+    class Hanging extends LlmAdapter {
+      override async * stream(options: { signal?: AbortSignal }): AsyncIterable<StreamChunk> {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 10_000)
+          options.signal?.addEventListener('abort', () => {
+            clearTimeout(timer)
+            reject(new Error('aborted'))
+          }, { once: true })
+        })
+        yield { type: 'block-start', index: 0, blockType: 'text' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      }
+    }
+    ctx.llm.registerAdapter(['wechat-hanging'], new Hanging())
+
+    const sent: { peerId: string; text: string }[] = []
+    let clock = 0
+    let polls = 0
+    // Both messages arrive through the poll, so the test drives the same path a
+    // profile does - including the monitor's queue, which is where a command
+    // would otherwise wait behind the turn it is meant to stop.
+    const channel = new Channel({
+      registry: ctx.agents as never,
+      poll: async () => {
+        polls += 1
+        if (polls === 1) {
+          return {
+            msgs: [{
+              message_id: 1, from_user_id: 'user-7', message_type: 1,
+              item_list: [{ type: 1, text_item: { text: 'a very long task' } }],
+            }],
+            get_updates_buf: 'c1',
+          }
+        }
+        if (polls === 2) {
+          return {
+            msgs: [{
+              message_id: 2, from_user_id: 'user-7', message_type: 1, context_token: 'ctx-1',
+              item_list: [{ type: 1, text_item: { text: '/stop' } }],
+            }],
+            get_updates_buf: 'c2',
+          }
+        }
+        return { msgs: [], get_updates_buf: `c${String(polls)}` }
+      },
+      send: async (peerId, text) => void sent.push({ peerId, text }),
+      saveCursor: async () => {},
+      sleep: async (ms: number) => { clock += ms },
+      now: () => clock,
+      pollTimeoutMs: 1_000,
+      maxRunMs: 5_000,
+      sessionOptions: { provider: 'wechat-hanging', model: 'hanging' },
+    })
+    channel.attach(ctx as never)
+    channels.push(channel)
+
+    const started = Date.now()
+    await channel.run()
+    await channel.settled()
+    const elapsed = Date.now() - started
+
+    // The hanging model would run for 10 seconds; anything near that means the
+    // stop never reached it.
+    expect(elapsed).toBeLessThan(5_000)
+    expect(sent.map(entry => entry.text).join('')).toContain('停止')
+  }, 30_000)
+})
+
 describe('a message with no answer still reaches the agent', () => {
   it('does not send anything when the model produces no text', async () => {
     // A tool-only turn is a real outcome; sending an empty bubble is not.
