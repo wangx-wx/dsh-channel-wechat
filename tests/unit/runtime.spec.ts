@@ -28,12 +28,20 @@ function bench(accounts: WechatAccount[]) {
   const messages: unknown[] = []
   const disposed: string[] = []
 
-  return {
+  const b = {
     polls,
     sent,
     saved,
     messages,
     disposed,
+    /** Harness commands this run forwarded, in order. */
+    forwarded: [] as string[],
+    /** Command names the harness offers, for `/help`. */
+    nativeCommands: undefined as readonly string[] | undefined,
+    /** Set to override the forwarder; defaults to a recording success. */
+    executeNativeCommand: undefined as
+      | ((line: string) => Promise<{ kind: 'success' | 'error'; text?: string } | undefined>)
+      | undefined,
     run: (signal?: AbortSignal) => startChannelFromStore({
       listAccounts: async () => accounts,
       api: {
@@ -65,6 +73,13 @@ function bench(accounts: WechatAccount[]) {
         get: () => undefined,
       }),
       saveCursor: async cursor => void saved.push(cursor),
+      executeNativeCommand: (line: string) => {
+        const custom = b.executeNativeCommand
+        if (custom !== undefined) return custom(line)
+        b.forwarded.push(line)
+        return Promise.resolve({ kind: 'success' as const, text: 'ok' })
+      },
+      ...(b.nativeCommands === undefined ? {} : { nativeCommands: async () => b.nativeCommands ?? [] }),
       sleep: async (ms: number) => { clock += ms },
       now: () => clock,
       pollTimeoutMs: 1_000,
@@ -72,6 +87,7 @@ function bench(accounts: WechatAccount[]) {
       ...(signal === undefined ? {} : { signal }),
     }),
   }
+  return b
 }
 
 describe('starting from a stored account', () => {
@@ -124,6 +140,62 @@ describe('starting from a stored account', () => {
     await b.run()
 
     expect(b.polls).toEqual([])
+  })
+})
+
+describe('the command surface', () => {
+  it('names the polling account so /status is useful', async () => {
+    // Without the account id the channel cannot say which login is live, and
+    // the user has no way to tell a working start from a stale one.
+    const b = bench([account()])
+    b.messages.push({
+      message_id: 1, from_user_id: 'user-7', message_type: 1,
+      item_list: [{ type: 1, text_item: { text: '/status' } }],
+    })
+
+    await b.run()
+
+    expect(b.sent.map(entry => entry.text).join('')).toContain('bot-9')
+  })
+
+  it('forwards a harness command instead of sending it to the model', async () => {
+    // `/goal off` belongs to the harness; letting it reach the model would burn
+    // a turn to have the model explain a command it cannot run.
+    const b = bench([account()])
+    b.messages.push({
+      message_id: 1, from_user_id: 'user-7', message_type: 1,
+      item_list: [{ type: 1, text_item: { text: '/goal off' } }],
+    })
+
+    await b.run()
+
+    expect(b.forwarded).toEqual(['/goal off'])
+  })
+
+  it('lists the harness commands to /help', async () => {
+    // The native surface is the larger half of what a user can type.
+    const b = bench([account()])
+    b.nativeCommands = ['compact', 'goal']
+    b.messages.push({
+      message_id: 1, from_user_id: 'user-7', message_type: 1,
+      item_list: [{ type: 1, text_item: { text: '/help' } }],
+    })
+
+    await b.run()
+
+    expect(b.sent.map(entry => entry.text).join('')).toContain('/goal')
+  })
+
+  it('does not forward an ordinary message as a command', async () => {
+    const b = bench([account()])
+    b.messages.push({
+      message_id: 1, from_user_id: 'user-7', message_type: 1,
+      item_list: [{ type: 1, text_item: { text: 'hello' } }],
+    })
+
+    await b.run()
+
+    expect(b.forwarded).toEqual([])
   })
 })
 

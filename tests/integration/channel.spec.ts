@@ -14,6 +14,7 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import CredentialsLocal from '@deepseek-ai/dsh-credentials-local'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
+import CommandRuntime from '@deepseek-ai/dsh-commands'
 import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apply as applyChannel, inject as channelInject } from '../../src/index.ts'
@@ -125,11 +126,13 @@ describe('a profile boot with the login action', () => {
 
 describe('the row\'s declared dependencies', () => {
   it('waits for the parsed invocation and the credentials store', () => {
-    // All three are load-bearing: without `wechatStartup` the row cannot know
+    // All four are load-bearing: without `wechatStartup` the row cannot know
     // what was asked, without `credentials` it would activate before the store
-    // it writes through exists, and without `agents` the channel would reach
-    // for an unmounted registry and start polling with nowhere to deliver.
-    expect(channelInject).toEqual(['wechatStartup', 'credentials', 'agents'])
+    // it writes through exists, without `agents` the channel would reach for an
+    // unmounted registry and start polling with nowhere to deliver, and without
+    // `commands` the harness's own command surface would be unreachable over
+    // WeChat.
+    expect(channelInject).toEqual(['wechatStartup', 'credentials', 'agents', 'commands'])
   })
 })
 
@@ -157,6 +160,7 @@ describe('a profile boot with no action', () => {
     // The channel creates sessions through the agent registry, so a profile
     // that starts it must have one mounted.
     await ctx.plugin(AgentRegistry)
+    await ctx.plugin(CommandRuntime)
     await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
     await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
     await ctx.plugin({ name: 'channel-wechat', inject: ['wechatStartup', 'credentials', 'agents'], apply: applyChannel })

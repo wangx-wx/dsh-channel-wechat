@@ -28,7 +28,7 @@ function bench(overrides: Partial<LocalCommandContext> = {}) {
     endSession: async () => void ended.push('user-7'),
     accountId: 'bot-9',
     sessionCount: 3,
-    nativeCommands: ['compact', 'goal', 'permission'],
+    nativeCommands: async () => ['compact', 'goal', 'permission'],
     ...overrides,
   }
   return { ctx, cancelled, ended, run: (name: string, args = '') => runLocalCommand({ name, args }, ctx) }

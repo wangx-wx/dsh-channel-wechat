@@ -29,8 +29,13 @@ export interface LocalCommandContext {
   accountId: string | undefined
   /** How many peers currently have a session. */
   sessionCount: number
-  /** Command names the harness offers, for `/help`. */
-  nativeCommands: readonly string[]
+  /**
+   * Resolve the command names the harness offers this peer, for `/help`.
+   *
+   * A function rather than a list because the available commands come from the
+   * agent's own scoped view: which plugins that agent mounted decides them.
+   */
+  nativeCommands: () => Promise<readonly string[]>
 }
 
 /** Commands this channel has not implemented yet. */
@@ -90,7 +95,7 @@ async function startNew(ctx: LocalCommandContext): Promise<CommandOutcome> {
 }
 
 /** List both command surfaces. */
-function help(ctx: LocalCommandContext): CommandOutcome {
+async function help(ctx: LocalCommandContext): Promise<CommandOutcome> {
   const lines = [
     '本通道命令：',
     '  /stop          停止当前任务',
@@ -101,7 +106,7 @@ function help(ctx: LocalCommandContext): CommandOutcome {
     '  /reconnect     重连（尚未实现）',
     '',
     'Harness 命令（由 DSH 提供）：',
-    ...ctx.nativeCommands.map(name => `  /${name}`),
+    ...(await ctx.nativeCommands()).map(name => `  /${name}`),
   ]
   return { kind: 'success', text: lines.join('\n') }
 }

@@ -45,6 +45,13 @@ export interface RuntimeOptions {
   sessionOptions?: { provider: string; model: string }
   /** Called once the channel is polling, for a start-up log line. */
   onStarted?: (accountId: string) => void
+  /**
+   * Forward a command line to the harness's command runtime.
+   * @returns the harness's outcome, or `undefined` when it does not know the command.
+   */
+  executeNativeCommand?: (line: string, peerId: string) => Promise<{ kind: 'success' | 'error'; text?: string } | undefined>
+  /** Resolve the command names the harness offers one peer, listed by `/help`. */
+  nativeCommands?: ((peerId: string) => Promise<readonly string[]>) | undefined
 }
 
 /**
@@ -94,6 +101,11 @@ export async function startChannelFromStore(options: RuntimeOptions): Promise<vo
     ...(options.pollTimeoutMs === undefined ? {} : { pollTimeoutMs: options.pollTimeoutMs }),
     ...(options.maxRunMs === undefined ? {} : { maxRunMs: options.maxRunMs }),
     ...(options.sessionOptions === undefined ? {} : { sessionOptions: options.sessionOptions }),
+    // The channel needs these to tell the user which login is live and to reach
+    // the harness's own commands from WeChat.
+    accountId: account.accountId,
+    ...(options.executeNativeCommand === undefined ? {} : { executeNativeCommand: options.executeNativeCommand }),
+    ...(options.nativeCommands === undefined ? {} : { nativeCommands: options.nativeCommands }),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   })
 

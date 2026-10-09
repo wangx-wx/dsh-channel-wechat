@@ -57,8 +57,13 @@ export interface ChannelOptions {
   executeNativeCommand?: (line: string, peerId: string) => Promise<{ kind: 'success' | 'error'; text?: string } | undefined>
   /** The account being polled, reported by `/status`. */
   accountId?: string | undefined
-  /** Command names the harness offers, listed by `/help`. */
-  nativeCommands?: readonly string[]
+  /**
+   * Resolve the command names the harness offers one peer, listed by `/help`.
+   *
+   * Per peer because the harness resolves commands against an agent's own
+   * scoped view.
+   */
+  nativeCommands?: (peerId: string) => Promise<readonly string[]>
   /**
    * Provider and model each new session selects.
    *
@@ -84,6 +89,14 @@ export class Channel {
   private controller: AbortController | undefined
   private running: Promise<void> | undefined
   private readonly turnWork = new Set<Promise<void>>()
+  /**
+   * Command work in flight.
+   *
+   * A command is deliberately not queued, so the queue cannot be what a caller
+   * waits on - without this, `settled` would return while a command was still
+   * running and its reply had not been sent.
+   */
+  private readonly commandWork = new Set<Promise<void>>()
 
   /**
    * @param options - the poll, the send, and the policy.
@@ -130,7 +143,10 @@ export class Channel {
         // command itself does is `handleMessage`'s decision.
         const text = textOf(message)
         if (text !== undefined && parseCommandLine(text) !== undefined) {
-          await work()
+          const command = work()
+          this.commandWork.add(command)
+          void command.finally(() => this.commandWork.delete(command))
+          await command
           return
         }
         const task = this.peers.runExclusive(peerId, work)
@@ -154,8 +170,11 @@ export class Channel {
   /** Wait for queued work to finish; call after {@link run} in tests. */
   async settled(): Promise<void> {
     await this.running
-    await this.replies.drain()
     await Promise.allSettled([...this.turnWork])
+    // Commands may still be running after the loop exits; their replies are
+    // queued from inside them, so waiting for the queue first would miss them.
+    await Promise.allSettled([...this.commandWork])
+    await this.replies.drain()
   }
 
   /** Stop the loop and release every session this channel owns. */
@@ -163,6 +182,7 @@ export class Channel {
     this.controller?.abort()
     // Draining first means a reply already queued is attempted rather than
     // dropped; WeChat will never replay it.
+    await Promise.allSettled([...this.commandWork])
     await this.replies.drain()
     await this.running?.catch(() => {})
     this.running = undefined
@@ -217,6 +237,10 @@ export class Channel {
       executeNative: async line => {
         const execute = this.options.executeNativeCommand
         if (execute === undefined) return undefined
+        // The harness resolves a command against an agent's own scoped view, so
+        // a native command needs a session even when it is the peer's first
+        // message. Creating it here is what lets `/goal …` open a conversation.
+        await this.peers.sessionFor(peerId)
         return execute(line, peerId)
       },
     })
@@ -240,7 +264,9 @@ export class Channel {
       endSession: async () => { await this.endPeerSession(peerId) },
       accountId: this.options.accountId,
       sessionCount: this.peers.size,
-      nativeCommands: this.options.nativeCommands ?? [],
+      nativeCommands: async () => this.options.nativeCommands === undefined
+        ? []
+        : this.options.nativeCommands(peerId),
     }
   }
 

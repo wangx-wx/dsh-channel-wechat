@@ -14,6 +14,8 @@ import { loadAccount, listAccounts, saveAccount, forgetAccount } from './credent
 import { runStartupAction } from './login-command.ts'
 import { WECHAT_STARTUP_SERVICE, type WechatStartupValues } from './startup.ts'
 import { createApiClient } from './wechat/api.ts'
+import { sessionIdFor } from './bridge/peer-map.ts'
+import { createNativeCommandExecutor, createNativeCommandLister, type CommandRuntimeLike } from './bridge/native-commands.ts'
 import { CursorStore } from './channel/cursor-store.ts'
 import { startChannelFromStore } from './channel/runtime.ts'
 
@@ -23,9 +25,11 @@ export const name = 'channel-wechat'
 /**
  * Host services this plugin needs. `wechatStartup` is the parsed invocation,
  * `credentials` is where a login is persisted, and `agents` is what the channel
- * creates its sessions through; the loader parks this row until all three exist.
+ * creates its sessions through; the loader parks this row until all four exist.
+ * `commands` is the harness's own command surface, which WeChat forwards to
+ * rather than maintaining a list of its own.
  */
-export const inject = ['wechatStartup', 'credentials', 'agents'] as const
+export const inject = ['wechatStartup', 'credentials', 'agents', 'commands'] as const
 
 /**
  * Act on the invocation the startup row parsed.
@@ -99,6 +103,17 @@ async function startChannel(ctx: Context): Promise<void> {
     // rather than replaying the conversation it already answered.
     ...(account === undefined ? {} : { initialCursor: await cursors.load(account.accountId) }),
     saveCursor: cursor => account === undefined ? Promise.resolve() : cursors.save(account.accountId, cursor),
+    // The harness owns the wider command surface; the channel forwards to it so
+    // `/goal`, `/compact` and the rest work over WeChat without this plugin
+    // tracking them.
+    executeNativeCommand: createNativeCommandExecutor({
+      commands: commandsOf(ctx),
+      agentFor: peerId => agentFor(ctx, peerId),
+    }),
+    nativeCommands: createNativeCommandLister({
+      commands: commandsOf(ctx),
+      agentFor: peerId => agentFor(ctx, peerId),
+    }),
     onStarted: accountId => { ctx.logger(name).info('polling as %s', accountId) },
     onMessageError: (error, _message) => { ctx.logger(name).warn('inbound message failed: %s', String(error)) },
     onReplyError: (error, peerId) => { ctx.logger(name).warn('reply to %s failed: %s', peerId, String(error)) },
@@ -106,6 +121,32 @@ async function startChannel(ctx: Context): Promise<void> {
   }).catch((error: unknown) => {
     ctx.logger(name).warn('channel stopped: %s', String(error))
   })
+}
+
+/** The harness's command runtime. */
+function commandsOf(ctx: Context): CommandRuntimeLike {
+  const commands = ctx.get('commands') as CommandRuntimeLike | undefined
+  if (commands === undefined) {
+    // `inject` guarantees this, so reaching it means the composition changed
+    // under the plugin; failing loudly beats commands silently doing nothing.
+    throw new Error('channel-wechat: ctx.commands is not mounted')
+  }
+  return commands
+}
+
+/**
+ * Resolve the live agent for one peer.
+ *
+ * Command resolution is per agent: `ctx.commands` answers against the scoped
+ * view of the agent it is given, so a peer with no session has no commands
+ * rather than a global fallback.
+ * @param ctx - the plugin's cordis context.
+ * @param peerId - the WeChat sender id.
+ * @returns the agent, or `undefined` when this peer has no session.
+ */
+function agentFor(ctx: Context, peerId: string): unknown {
+  const agents = ctx.get('agents') as { get?: (id: string) => unknown } | undefined
+  return agents?.get?.(sessionIdFor(peerId))
 }
 
 /**

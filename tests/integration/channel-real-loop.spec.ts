@@ -14,10 +14,12 @@
 
 import { Context } from '@deepseek-ai/cordis'
 import { mountAgentLoopTestDependencies, mountAgentLoopTestHarness } from '@deepseek-ai/dsh-agent-loop-testkit'
+import CommandRuntime from '@deepseek-ai/dsh-commands'
 import { LlmAdapter, type StreamChunk } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Channel } from '../../src/channel/channel.ts'
+import { createNativeCommandExecutor, createNativeCommandLister } from '../../src/bridge/native-commands.ts'
 
 /** A model that answers every call with one fixed line of text. */
 class ScriptedAdapter extends LlmAdapter {
@@ -202,6 +204,72 @@ describe('/stop over a real agent loop', () => {
     // stop never reached it.
     expect(elapsed).toBeLessThan(5_000)
     expect(sent.map(entry => entry.text).join('')).toContain('停止')
+  }, 30_000)
+})
+
+describe('the harness\'s own commands over WeChat', () => {
+  it('runs a registered harness command and sends its reply', async () => {
+    // M3's other acceptance clause: a native command answers over WeChat. The
+    // command is registered on a real runtime, so this proves the forwarding
+    // reaches the surface the harness actually serves rather than a stub.
+    const ctx = new Context()
+    contexts.push(ctx)
+    await mountAgentLoopTestDependencies(ctx)
+    await ctx.plugin(CommandRuntime)
+    await mountAgentLoopTestHarness(ctx)
+
+    const commands = ctx.get('commands') as unknown as { register: (definition: unknown) => void }
+    commands.register({
+      name: 'probe-native',
+      description: 'a command the harness owns',
+      handler: () => ({ kind: 'success', text: 'native reply' }),
+    })
+
+    // The provider must match what the session selects, even though no model
+    // call happens: a session with no adapter would fail to create.
+    const sent: { peerId: string; text: string }[] = []
+    let clock = 0
+    let polls = 0
+    const channel = new Channel({
+      registry: ctx.agents as never,
+      poll: async () => {
+        polls += 1
+        if (polls === 1) {
+          return {
+            msgs: [{
+              message_id: 1, from_user_id: 'user-7', message_type: 1, context_token: 'ctx-1',
+              item_list: [{ type: 1, text_item: { text: '/probe-native' } }],
+            }],
+            get_updates_buf: 'c1',
+          }
+        }
+        return { msgs: [], get_updates_buf: `c${String(polls)}` }
+      },
+      send: async (peerId, text) => void sent.push({ peerId, text }),
+      saveCursor: async () => {},
+      sleep: async (ms: number) => { clock += ms },
+      now: () => clock,
+      pollTimeoutMs: 1_000,
+      maxRunMs: 3_000,
+      sessionOptions: { provider: 'wechat-scripted', model: 'scripted' },
+      executeNativeCommand: createNativeCommandExecutor({
+        commands: commands as never,
+        agentFor: peerId => ctx.agents.get(SessionId(`channel-wechat-${peerId}`)),
+      }),
+      nativeCommands: createNativeCommandLister({
+        commands: commands as never,
+        agentFor: peerId => ctx.agents.get(SessionId(`channel-wechat-${peerId}`)),
+      }),
+    })
+    channel.attach(ctx as never)
+    channels.push(channel)
+
+    await channel.run()
+    await channel.settled()
+
+    // The command needs a session to resolve against, which the channel
+    // creates before forwarding; the reply is the harness's own text.
+    expect(sent.map(entry => entry.text).join('')).toContain('native reply')
   }, 30_000)
 })
 

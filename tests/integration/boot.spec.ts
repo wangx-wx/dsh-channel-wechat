@@ -51,6 +51,7 @@ describe('plugin mounts in a real cordis context', () => {
     ctx.provide('credentials', {})
     ctx.provide('wechatStartup', { action: 'none' })
     ctx.provide('agents', {})
+    ctx.provide('commands', {})
     const fiber = ctx.plugin(module)
     await fiber
 
