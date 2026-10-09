@@ -10,15 +10,27 @@
  * a small piece of channel state that this plugin owns.
  */
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
 import { CursorStore, cursorFilePath } from '../../src/channel/cursor-store.ts'
+
+/** Every directory a test created, removed after it, pass or fail. */
+const created: string[] = []
+
+afterEach(() => {
+  // Cleanup registered here rather than at the end of each test body: an
+  // in-body cleanup leaks the directory precisely when an assertion fails,
+  // which is when someone is about to run the suite repeatedly.
+  for (const dir of created.splice(0)) rmSync(dir, { recursive: true, force: true })
+})
 
 /** A temporary directory for one test; nothing touches the developer's home. */
 function tempDir(): string {
-  return mkdtempSync(join(tmpdir(), 'dsh-cursor-'))
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-cursor-'))
+  created.push(dir)
+  return dir
 }
 
 describe('the cursor file', () => {
@@ -49,7 +61,6 @@ describe('reading and writing', () => {
     await store.save('bot-9', 'cursor-abc')
 
     expect(await store.load('bot-9')).toBe('cursor-abc')
-    rmSync(dir, { recursive: true, force: true })
   })
 
   it('returns nothing for an account that never polled', async () => {
@@ -57,7 +68,6 @@ describe('reading and writing', () => {
     const store = new CursorStore(dir)
 
     expect(await store.load('never-seen')).toBeUndefined()
-    rmSync(dir, { recursive: true, force: true })
   })
 
   it('keeps two accounts apart', async () => {
@@ -69,7 +79,6 @@ describe('reading and writing', () => {
 
     expect(await store.load('bot-1')).toBe('one')
     expect(await store.load('bot-2')).toBe('two')
-    rmSync(dir, { recursive: true, force: true })
   })
 
   it('replaces an earlier cursor for the same account', async () => {
@@ -80,7 +89,6 @@ describe('reading and writing', () => {
     await store.save('bot-9', 'second')
 
     expect(await store.load('bot-9')).toBe('second')
-    rmSync(dir, { recursive: true, force: true })
   })
 
   it('treats an empty saved cursor as absent', async () => {
@@ -92,7 +100,6 @@ describe('reading and writing', () => {
     writeFileSync(cursorFilePath(dir, 'bot-9'), JSON.stringify({ cursor: '' }))
 
     expect(await store.load('bot-9')).toBeUndefined()
-    rmSync(dir, { recursive: true, force: true })
   })
 
   it('survives a corrupt file rather than failing the start', async () => {
@@ -102,7 +109,6 @@ describe('reading and writing', () => {
     writeFileSync(cursorFilePath(dir, 'bot-9'), '{"not":"the shape"}')
 
     expect(await store.load('bot-9')).toBeUndefined()
-    rmSync(dir, { recursive: true, force: true })
   })
 
   it('leaves no partial file behind for a reader to find', async () => {
@@ -115,7 +121,6 @@ describe('reading and writing', () => {
 
     const entries = readFileSync(cursorFilePath(dir, 'bot-9'), 'utf8')
     expect(JSON.parse(entries)).toEqual({ cursor: 'cursor-1' })
-    rmSync(dir, { recursive: true, force: true })
   })
 
   it('creates its directory on first save', async () => {
@@ -125,7 +130,6 @@ describe('reading and writing', () => {
     await store.save('bot-9', 'c')
 
     expect(await store.load('bot-9')).toBe('c')
-    rmSync(dirname(dir), { recursive: true, force: true })
   })
 
   it('clears a cursor on request', async () => {
@@ -136,7 +140,6 @@ describe('reading and writing', () => {
     await store.clear('bot-9')
 
     expect(await store.load('bot-9')).toBeUndefined()
-    rmSync(dir, { recursive: true, force: true })
   })
 
   it('writes the file with owner-only permissions', async () => {
@@ -148,7 +151,6 @@ describe('reading and writing', () => {
 
     const mode = statSync(cursorFilePath(dir, 'bot-9')).mode & 0o777
     expect(mode).toBe(0o600)
-    rmSync(dir, { recursive: true, force: true })
   })
 
   it('leaves exactly one file for the account after a save', async () => {
@@ -162,8 +164,6 @@ describe('reading and writing', () => {
 
     await store.save('bot-9', 'a'.repeat(10_000))
 
-    const { readdirSync } = await import('node:fs')
     expect(readdirSync(dir)).toEqual([expect.stringContaining('bot-9')])
-    rmSync(dir, { recursive: true, force: true })
   })
 })
