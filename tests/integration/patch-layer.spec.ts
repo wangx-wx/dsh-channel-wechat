@@ -21,14 +21,29 @@ describe('bundle patch layer', () => {
 
   afterAll(() => harness?.cleanup())
 
-  it('composes our row into the profile tree', () => {
+  it('composes both of our rows into the profile tree', () => {
     const result = runDsh(harness, ['--dump-config'])
     expect(result.status, result.stderr.slice(-2000)).toBe(0)
 
-    // Assert the exact (id, name) pair rather than substrings: a package name
+    // Assert the exact (id, name) pairs rather than substrings: a package name
     // like dsh-channel-wechat-TYPO contains the correct one, so a substring
     // check cannot disagree with a broken patch.
-    expect(parseRows(result.stdout)).toContainEqual({ id: 'channel-wechat', name: packageName })
+    const rows = parseRows(result.stdout)
+    expect(rows).toContainEqual({ id: 'channel-wechat', name: packageName })
+    // The startup row is what makes `login` reach us at all; its absence would
+    // leave the app argument silently unclaimed.
+    expect(rows).toContainEqual({ id: 'channel-wechat-startup', name: `${packageName}/startup` })
+  })
+
+  it('resolves the startup subpath the row names', async () => {
+    // The composition only proves the row text; the loader still has to
+    // resolve `dsh-channel-wechat/startup` to a real module. A subpath export
+    // the build never emitted fails here rather than in a user's profile.
+    const startup = await import('dsh-channel-wechat/startup')
+
+    expect(typeof startup.apply).toBe('function')
+    expect(startup.WECHAT_STARTUP_SERVICE).toBe('wechatStartup')
+    expect(startup.inject).toEqual(['cmdlineArgs'])
   })
 
   it('does not merely warn the layer away', () => {

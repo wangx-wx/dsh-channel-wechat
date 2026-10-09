@@ -17,8 +17,9 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import { afterEach, describe, expect, it } from 'vitest'
-import { REPO_ROOT } from '../support/harness.ts'
+import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { createTestHarness, linkRepoAsBundle, REPO_ROOT, setProfileBundles, type TestHarness } from '../support/harness.ts'
 
 /**
  * Cordis FiberState values. The enum is `const`, so it is inlined at compile
@@ -72,5 +73,34 @@ describe('plugin mounts in a real cordis context', () => {
     const target = typeof entry === 'string' ? entry : entry && typeof entry === 'object' && 'default' in entry ? entry.default : undefined
     expect(target, 'root export must resolve to a path').toBeTypeOf('string')
     expect(existsSync(join(REPO_ROOT, String(target))), `missing build output ${String(target)}`).toBe(true)
+  })
+})
+
+describe('the startup row activates in a real profile', () => {
+  let harness: TestHarness
+
+  beforeAll(() => {
+    harness = createTestHarness()
+    const packageName = linkRepoAsBundle(harness)
+    setProfileBundles(harness, ['@deepseek-ai/dsh-base', packageName])
+  })
+
+  afterAll(() => harness?.cleanup())
+
+  it('publishes the login request when the app argument says login', async () => {
+    // Everything above proves the row composed and the module resolves. This
+    // proves the launcher's app argument actually reaches it: an unclaimed
+    // argument is ignored in silence, so a boot that looks successful is the
+    // failure mode being ruled out.
+    const module = await import('dsh-channel-wechat/startup')
+    const ctx = new Context()
+    provideCmdline(ctx, {
+      args: ['login'],
+      exit: () => {},
+      ready: { commit: () => {}, await: async () => {} },
+    } as never)
+    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: module.apply })
+
+    expect(ctx.get(module.WECHAT_STARTUP_SERVICE)).toEqual({ action: 'login' })
   })
 })

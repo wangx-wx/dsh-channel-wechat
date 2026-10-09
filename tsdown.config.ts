@@ -8,7 +8,10 @@ import type { UserConfig } from 'tsdown'
  * single cordis instance, and bundling a copy would break service identity.
  */
 const config: UserConfig = {
-  entry: { index: 'src/index.ts' },
+  // `startup` is a separate entry because the profile loader must resolve it
+  // by subpath: it declares `inject`, and only a row naming it gets the
+  // launcher-provided command line.
+  entry: { index: 'src/index.ts', startup: 'src/startup.ts' },
   outDir: 'lib',
   format: 'esm',
   platform: 'node',
@@ -20,7 +23,9 @@ const config: UserConfig = {
   sourcemap: false,
   clean: true,
   deps: {
-    neverBundle: (specifier: string) => specifier.startsWith('@deepseek-ai/'),
+    // commander is a runtime dependency, not a copy of the harness: bundling
+    // it would duplicate a singleton the host already owns.
+    neverBundle: (specifier: string) => specifier.startsWith('@deepseek-ai/') || specifier === 'commander',
   },
 }
 

@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import CredentialsLocal from '@deepseek-ai/dsh-credentials-local'
 import { afterEach, describe, expect, it } from 'vitest'
-import { loadAccount, saveAccount, WECHAT_CREDENTIAL_SCOPE } from '../../src/credentials.ts'
+import { listAccounts, loadAccount, saveAccount, WECHAT_CREDENTIAL_SCOPE } from '../../src/credentials.ts'
 
 /** One isolated harness home plus its mounted provider. */
 interface Bench {
@@ -147,6 +147,45 @@ describe('surviving a restart', () => {
     const stored = readFileSync(join(home, '.credentials.yaml'), 'utf8')
     expect(stored).toContain('bot-9')
     expect(stored).toContain('tok-1')
+  })
+})
+
+describe('listing stored logins', () => {
+  it('reports each account this channel has stored', async () => {
+    const { ctx } = await mount()
+
+    await saveAccount(ctx, { botToken: 'a', accountId: 'bot-1' })
+    await saveAccount(ctx, { botToken: 'b', accountId: 'bot-2' })
+
+    const accounts = await listAccounts(ctx)
+    expect(accounts.map(account => account.accountId).sort()).toEqual(['bot-1', 'bot-2'])
+    expect(accounts.find(account => account.accountId === 'bot-2')?.botToken).toBe('b')
+  })
+
+  it('ignores records belonging to another plugin that look like ours', async () => {
+    // The payload is deliberately shaped like a WeChat login: without a scope
+    // check this record is indistinguishable from one of ours, which is what
+    // makes the scope the load-bearing part of the key.
+    const { ctx } = await mount()
+    await saveAccount(ctx, { botToken: 'mine', accountId: 'bot-1' })
+    await (ctx as unknown as { credentials: { modifyRecord: Function } }).credentials
+      .modifyRecord('other-plugin/bot-1', async () => ({
+        kind: 'grant',
+        payload: { botToken: 'theirs', baseUrl: 'https://elsewhere.test' },
+      }))
+
+    const records = await credentialsOf(ctx).listRecords()
+    expect(records.map(record => record.key).sort()).toEqual(['channel-wechat/bot-1', 'other-plugin/bot-1'])
+    // Only ours is read back: a foreign record with a colliding id must not
+    // appear, and must not shadow ours either.
+    const accounts = await listAccounts(ctx)
+    expect(accounts).toEqual([{ botToken: 'mine', accountId: 'bot-1' }])
+  })
+
+  it('reports nothing before any login', async () => {
+    const { ctx } = await mount()
+
+    expect(await listAccounts(ctx)).toEqual([])
   })
 })
 

@@ -13,10 +13,15 @@
   "exports": {
     ".": "./lib/index.js",
     "./package.json": "./package.json",
-    "./cordis.patch.yml": "./cordis.patch.yml"
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./startup": {
+      "types": "./src/startup.ts",
+      "default": "./lib/startup.js"
+    }
   },
   "files": [
     "lib/index.js",
+    "lib/startup.js",
     "cordis.patch.yml"
   ],
   "scripts": {
@@ -40,13 +45,18 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.4",
+    "@deepseek-ai/dsh-cmdline": "0.2.0-rc.1",
     "@deepseek-ai/dsh-credentials": "0.2.0-rc.1",
     "@deepseek-ai/dsh-credentials-local": "0.2.0-rc.1",
     "@types/node": "^24.10.1",
     "@types/semver": "^7.7.1",
+    "commander": "^15.0.0",
     "semver": "^7.8.5",
     "tsdown": "0.22.2",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "commander": "^15.0.0"
   }
 }

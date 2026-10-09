@@ -52,6 +52,22 @@ describe('package manifest', () => {
     expect(manifest.type).toBe('module')
   })
 
+  it('declares every exported subpath in a form the loader can resolve', () => {
+    // A subpath the patch rows name (`dsh-channel-wechat/startup`) has to be
+    // resolvable, and its type face has to point at something that ships or
+    // `tsc` falls back to `any` for every consumer.
+    const entries = Object.entries(manifest.exports ?? {})
+    expect(entries.length).toBeGreaterThan(0)
+    for (const [subpath, target] of entries) {
+      if (subpath === './package.json') continue
+      const resolved = typeof target === 'string' ? target : (target as { default?: string; types?: string })
+      const main = typeof resolved === 'string' ? resolved : resolved.default
+      expect(main, `${subpath} must declare a runtime target`).toBeTypeOf('string')
+    }
+    const startup = manifest.exports?.['./startup']
+    expect(startup, 'the startup row names this subpath').toBeDefined()
+  })
+
   it('declares a root export as a plain path string', () => {
     // dsh reads exports["."] directly; a conditional object without a usable
     // default is the shape that fails at load rather than at install.

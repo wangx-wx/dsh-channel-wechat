@@ -38,6 +38,7 @@ interface CredentialsService {
     mutate: (current: unknown) => Promise<unknown>,
   ) => Promise<unknown>
   readRecord: (key: CredentialKey) => Promise<unknown>
+  listRecords: () => Promise<readonly { key: string }[]>
 }
 
 /**
@@ -93,7 +94,43 @@ export async function saveAccount(ctx: Context, account: WechatAccount): Promise
  * @returns the login, or `undefined` when this account never logged in.
  */
 export async function loadAccount(ctx: Context, accountId: string): Promise<WechatAccount | undefined> {
-  const record = await credentialsOf(ctx).readRecord(accountKey(accountId))
+  return accountFromPayload(accountId, await credentialsOf(ctx).readRecord(accountKey(accountId)))
+}
+
+/**
+ * Forget one account's login.
+ * @param ctx - plugin context carrying the credentials service.
+ * @param accountId - the account to remove.
+ */
+export async function forgetAccount(ctx: Context, accountId: string): Promise<void> {
+  await credentialsOf(ctx).modifyRecord(accountKey(accountId), async () => undefined)
+}
+
+/**
+ * Enumerate this channel's stored logins.
+ * @param ctx - plugin context carrying the credentials service.
+ * @returns every account this channel owns, newest last as the store lists it.
+ */
+export async function listAccounts(ctx: Context): Promise<WechatAccount[]> {
+  const records = await credentialsOf(ctx).listRecords()
+  const prefix = `${WECHAT_CREDENTIAL_SCOPE}/`
+  const service = credentialsOf(ctx)
+  const accounts: WechatAccount[] = []
+  for (const record of records) {
+    // The scope is the owner: another plugin's record is not ours to interpret,
+    // even when its id happens to match one of ours.
+    if (!record.key.startsWith(prefix)) continue
+    // Read the payload through this record's own key rather than re-deriving
+    // one from the id, so the scope check above is what decides inclusion.
+    const stored = await service.readRecord(record.key as CredentialKey)
+    const account = accountFromPayload(record.key.slice(prefix.length), stored)
+    if (account !== undefined) accounts.push(account)
+  }
+  return accounts
+}
+
+/** Build an account from one stored record's payload. */
+function accountFromPayload(accountId: string, record: unknown): WechatAccount | undefined {
   if (record === undefined || record === null) return undefined
   const payload = (record as { payload?: unknown }).payload
   if (payload === undefined || typeof payload !== 'object') return undefined
@@ -104,13 +141,4 @@ export async function loadAccount(ctx: Context, accountId: string): Promise<Wech
     ...(typeof fields.baseUrl === 'string' ? { baseUrl: fields.baseUrl } : {}),
     ...(typeof fields.userId === 'string' ? { userId: fields.userId } : {}),
   }
-}
-
-/**
- * Forget one account's login.
- * @param ctx - plugin context carrying the credentials service.
- * @param accountId - the account to remove.
- */
-export async function forgetAccount(ctx: Context, accountId: string): Promise<void> {
-  await credentialsOf(ctx).modifyRecord(accountKey(accountId), async () => undefined)
 }
