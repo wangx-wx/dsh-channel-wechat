@@ -198,7 +198,7 @@ ctx.on('approval/request', handler, { prepend: true })   // 必须 prepend + 不
 | 阶段 | 交付 | 验收 |
 |---|---|---|
 | **M0 骨架** ✅ | 包结构 + 插件骨架 + 真组合测试跑通 | ~~日志有插件名~~ → **cordis fiber 达到 ACTIVE**（见下方修订） |
-| **M1 登录** | 移植 `auth` + `startup.ts` + 凭证进 `ctx.credentials` | `dsh channel-wechat login` 扫码成功，重启免登录 |
+| **M1 登录** ✅ | 协议移植改为全新写（见下方修订）+ `startup.ts` + 凭证进 `ctx.credentials` | `dsh <profile> login` 扫码成功，重启免登录 |
 | **M2 文本端到端** | 移植 `api` + monitor 长轮询 + queue + dispatcher + reply | 微信发「hi」→ DSH 回复到达 |
 | **M3 命令** | `ctx.commands` 透传 + 6 个自管命令 + `/stop` | `/plan off` 有原生回执；`/stop` 能中断正在跑的任务 |
 | **M4 媒体** | 移植 `cdn`/`media` + 图片/文件/语音/视频双向 + 引用 | 发图能理解；产出文件能收到 |
@@ -207,6 +207,29 @@ ctx.on('approval/request', handler, { prepend: true })   // 必须 prepend + 不
 | **M7 发布** | README 双语 + LICENSE + npm 发布 | `dsh plugin add dsh-channel-wechat` 一条命令装好 |
 
 **M2 是第一个真实闭环**，也是「集成契约是否正确」的验证点——协议层移植量最大，但风险最高的是全新写的集成层。
+
+### M1 完成记录（2026-10-09）
+
+**与原计划的两处偏差**：
+
+1. **协议层不是「移植」而是「照协议文档重写」**。官方 `login-qr.ts` 有 497 行且**无测试**，
+   与其搬一份无基线的代码，不如按 `protocol_zh_CN.md` 的状态表重写——结果是纯 reducer
+   （8 状态可脱离网络验证）+ 编排层。移植的收益在 M4 的 CDN/媒体加密，那里才有值得搬的算法。
+2. **拆成 6 个 seam、6 次提交**：S1 HTTP 层 → S2 状态机 → S3 编排 → S4 凭证 → S5 CLI 入口
+   → S6 动作执行 → 收口接线。
+
+**测试**：78 个（63 单元 + 15 集成），全部经变异验证。
+
+**三条被测试抓出的真实缺陷**（非测试问题）：
+
+| 缺陷 | 表现 |
+|---|---|
+| `withRefreshedQr(...).state` | 刷新二维码后 state 变 `undefined`，登录静默卡死 |
+| payload 含 `undefined` | provider 拒绝写入（JSON 不可表示），仅带 token 的确认**完全无法持久化** |
+| 子路径导出声明了不存在的 dts | `tsc` 对消费者退化为 `any` |
+
+**一条等价变异（已记录，未粉饰）**：去掉 `none` 动作的提前返回不改变行为——动作执行器
+内部对 `none` 也早返回。该 guard 保留是为意图表达与 M2 的挂载点，**当前不承重**。
 
 ### M0 完成后的验收标准修订（2026-10-09）
 
