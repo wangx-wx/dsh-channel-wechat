@@ -139,3 +139,103 @@ describe('base_info', () => {
     expect(info.bot_agent.length).toBeGreaterThan(0)
   })
 })
+
+describe('the two calls the channel makes', () => {
+  it('polls updates with the cursor and the base metadata', async () => {
+    const { fetchImpl, calls } = stubFetch({ body: '{"ret":0,"msgs":[],"get_updates_buf":"c2"}' })
+    const api = createApiClient({ fetchImpl, channelVersion: '1.2.3' })
+
+    const response = await api.getUpdates({
+      baseUrl: 'https://example.test/',
+      token: 'tok-1',
+      cursor: 'c1',
+      timeoutMs: 5_000,
+    })
+
+    const body = JSON.parse(String(calls[0]?.init.body)) as Record<string, unknown>
+    // The cursor is what stops the server replaying the whole conversation.
+    expect(body['get_updates_buf']).toBe('c1')
+    expect(body['base_info']).toEqual({ channel_version: '1.2.3', bot_agent: expect.any(String) })
+    expect(response.get_updates_buf).toBe('c2')
+    expect(calls[0]?.url).toContain('getupdates')
+  })
+
+  it('sends the first poll without a cursor', async () => {
+    // The protocol says to send an empty string on a fresh start.
+    const { fetchImpl, calls } = stubFetch({ body: '{}' })
+    const api = createApiClient({ fetchImpl })
+
+    await api.getUpdates({ baseUrl: 'https://example.test/', token: 'tok-1' })
+
+    const body = JSON.parse(String(calls[0]?.init.body)) as Record<string, unknown>
+    expect(body['get_updates_buf']).toBe('')
+  })
+
+  it('sends text with the destination and the conversation token', async () => {
+    const { fetchImpl, calls } = stubFetch({ body: '{"ret":0}' })
+    const api = createApiClient({ fetchImpl })
+
+    await api.sendText({
+      baseUrl: 'https://example.test/',
+      token: 'tok-1',
+      to: 'user-7',
+      text: 'hello',
+      contextToken: 'ctx-1',
+    })
+
+    const body = JSON.parse(String(calls[0]?.init.body)) as { msg: Record<string, unknown> }
+    expect(body.msg['to_user_id']).toBe('user-7')
+    expect(body.msg['context_token']).toBe('ctx-1')
+    expect(body.msg['message_type']).toBe(2)
+    expect(body.msg['message_state']).toBe(2)
+    expect(body.msg['item_list']).toEqual([{ type: 1, text_item: { text: 'hello' } }])
+    // Every send needs its own id, or the server cannot tell a retry from a
+    // new message.
+    expect(typeof body.msg['client_id']).toBe('string')
+    expect((body.msg['client_id'] as string).length).toBeGreaterThan(0)
+  })
+
+  it('omits the token when the conversation never issued one', async () => {
+    // The protocol's client sends anyway and warns; a fabricated token would be
+    // worse than none.
+    const { fetchImpl, calls } = stubFetch({ body: '{"ret":0}' })
+    const api = createApiClient({ fetchImpl })
+
+    await api.sendText({ baseUrl: 'https://example.test/', token: 'tok-1', to: 'user-7', text: 'hi' })
+
+    const body = JSON.parse(String(calls[0]?.init.body)) as { msg: Record<string, unknown> }
+    expect(body.msg['context_token']).toBeUndefined()
+  })
+
+  it('gives two sends different client ids', async () => {
+    const { fetchImpl, calls } = stubFetch({ body: '{"ret":0}' })
+    const api = createApiClient({ fetchImpl })
+
+    await api.sendText({ baseUrl: 'https://example.test/', token: 't', to: 'u', text: 'a' })
+    await api.sendText({ baseUrl: 'https://example.test/', token: 't', to: 'u', text: 'b' })
+
+    const first = (JSON.parse(String(calls[0]?.init.body)) as { msg: Record<string, string> }).msg['client_id']
+    const second = (JSON.parse(String(calls[1]?.init.body)) as { msg: Record<string, string> }).msg['client_id']
+    expect(first).not.toBe(second)
+  })
+
+  it('rejects a non-zero business code instead of reporting success', async () => {
+    // `ret` is the protocol's own success flag; an HTTP 200 carrying a failure
+    // is still a failure.
+    const { fetchImpl } = stubFetch({ body: '{"ret":-14,"errmsg":"session expired"}' })
+    const api = createApiClient({ fetchImpl })
+
+    await expect(api.sendText({ baseUrl: 'https://example.test/', token: 't', to: 'u', text: 'hi' }))
+      .rejects.toThrow(/session expired|-14/u)
+  })
+
+  it('accepts a response that carries no business code', async () => {
+    // Not every endpoint sets `ret`; an absent one is not a failure.
+    const { fetchImpl } = stubFetch({ body: '{}' })
+    const api = createApiClient({ fetchImpl })
+
+    // Resolving is the whole assertion: this call returns nothing.
+    await expect(api.sendText({ baseUrl: 'https://example.test/', token: 't', to: 'u', text: 'hi' }))
+      .resolves.toBeUndefined()
+  })
+})

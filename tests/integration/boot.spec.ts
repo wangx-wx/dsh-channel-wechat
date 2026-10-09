@@ -50,6 +50,7 @@ describe('plugin mounts in a real cordis context', () => {
     provideCmdline(ctx, { args: [], exit: () => {}, ready: { commit() {}, await: async () => {} } } as never)
     ctx.provide('credentials', {})
     ctx.provide('wechatStartup', { action: 'none' })
+    ctx.provide('agents', {})
     const fiber = ctx.plugin(module)
     await fiber
 

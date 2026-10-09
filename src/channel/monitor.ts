@@ -22,12 +22,18 @@ export type PollFn = (cursor: string | undefined, timeoutMs: number) => Promise<
 
 /** The subset of a `getUpdates` response the monitor acts on. */
 export interface MonitorResponse {
-  /** Messages received since the cursor. */
-  msgs?: unknown[]
-  /** Cursor for the next poll. */
-  get_updates_buf?: string
+  /** Messages received since the cursor; the loop only reads them. */
+  msgs?: readonly unknown[]
+  /**
+   * Cursor for the next poll.
+   *
+   * Explicitly `| undefined` rather than merely optional: the API client
+   * returns the field whenever the response carried it, and a response without
+   * one is a distinct case from an absent key.
+   */
+  get_updates_buf?: string | undefined
   /** Server-suggested poll timeout in milliseconds. */
-  longpolling_timeout_ms?: number
+  longpolling_timeout_ms?: number | undefined
 }
 
 /** Collaborators and policy for {@link monitorLoop}. */

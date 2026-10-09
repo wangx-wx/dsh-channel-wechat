@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+
 /**
  * Wire layer for the WeChat iLink bot API.
  *
@@ -42,12 +44,71 @@ export interface ApiPostParams extends ApiGetParams {
   token?: string
 }
 
-/** The API surface later layers depend on. */
-export interface ApiClient {
+/**
+ * The raw transports, which is all the login path needs.
+ *
+ * Kept separate from {@link ApiClient} so a caller that only polls QR status
+ * does not have to provide the message methods it never calls.
+ */
+export interface ApiTransport {
   /** Send an unauthenticated GET. */
   get(params: ApiGetParams): Promise<string>
   /** Send a JSON POST, optionally authenticated. */
   post(params: ApiPostParams): Promise<string>
+}
+
+/**
+ * The message methods, which is all the channel runtime needs.
+ *
+ * Separate from {@link ApiTransport} so a caller that only polls and sends does
+ * not have to provide the raw QR transports it never calls.
+ */
+export interface MessageApi {
+  /** Long-poll for messages. */
+  getUpdates(params: GetUpdatesParams): Promise<GetUpdatesResult>
+  /** Send one text message to a conversation. */
+  sendText(params: SendTextParams): Promise<void>
+}
+
+/** The complete API surface. */
+export interface ApiClient extends ApiTransport, MessageApi {}
+
+/** One long poll. */
+export interface GetUpdatesParams {
+  /** API base URL. */
+  baseUrl: string
+  /** Bot token. */
+  token: string
+  /** Cursor from the previous response; empty on a fresh start. */
+  cursor?: string
+  /** How long the server may hold the request. */
+  timeoutMs?: number
+}
+
+/** What a long poll returned. */
+export interface GetUpdatesResult {
+  /** Messages received since the cursor. */
+  msgs: readonly unknown[]
+  /** Cursor for the next poll. */
+  get_updates_buf: string | undefined
+  /** Server-suggested poll timeout. */
+  longpolling_timeout_ms: number | undefined
+}
+
+/** One outbound text message. */
+export interface SendTextParams {
+  /** API base URL. */
+  baseUrl: string
+  /** Bot token. */
+  token: string
+  /** Destination user. */
+  to: string
+  /** The text to send. */
+  text: string
+  /** The conversation token the inbound message issued, when there was one. */
+  contextToken?: string | undefined
+  /** Request timeout. */
+  timeoutMs?: number
 }
 
 /** Classified transport failure, for diagnostics that survive a redacted log. */
@@ -134,6 +195,19 @@ export function classifyFetchError(error: unknown): FetchErrorClassification {
   return { type: 'unknown', description: 'network request failed' }
 }
 
+/** The protocol's own failure code, carried in a 200 response. */
+class BusinessError extends Error {
+  /**
+   * @param label - diagnostic label for the request.
+   * @param code - the `ret` or `errcode` value.
+   * @param message - the server's `errmsg`, when it sent one.
+   */
+  constructor(label: string, readonly code: number, message: string) {
+    super(`${label}: ${code === 0 ? '' : String(code)} ${message}`.trim())
+    this.name = 'BusinessError'
+  }
+}
+
 /** A response the server answered with a non-2xx status. */
 class HttpStatusError extends Error {
   /**
@@ -151,6 +225,11 @@ class HttpStatusError extends Error {
 function withTrailingSlash(url: string): string {
   return url.endsWith('/') ? url : `${url}/`
 }
+/** A fresh client id for one outbound message. */
+function generateClientId(): string {
+  return randomUUID()
+}
+
 /** A random uint32 rendered as its decimal string, then base64'd. */
 function randomWechatUin(): string {
   const uint32 = Math.floor(Math.random() * 0x1_0000_0000)
@@ -201,6 +280,69 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
   }
 
   return {
+    async getUpdates(params) {
+      const body = JSON.stringify({
+        // An absent cursor is sent as an empty string on a fresh start, which
+        // is what the protocol documents.
+        get_updates_buf: params.cursor ?? '',
+        base_info: buildBaseInfo({ channelVersion, ...(options.botAgent === undefined ? {} : { botAgent: options.botAgent }) }),
+      })
+      const raw = await this.post({
+        baseUrl: params.baseUrl,
+        endpoint: 'ilink/bot/getupdates',
+        body,
+        token: params.token,
+        ...(params.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
+        label: 'getupdates',
+      })
+      const parsed = JSON.parse(raw) as {
+        ret?: number
+        errcode?: number
+        errmsg?: string
+        msgs?: unknown[]
+        get_updates_buf?: string
+        longpolling_timeout_ms?: number
+      }
+      return {
+        msgs: parsed.msgs ?? [],
+        get_updates_buf: typeof parsed.get_updates_buf === 'string' ? parsed.get_updates_buf : undefined,
+        longpolling_timeout_ms: typeof parsed.longpolling_timeout_ms === 'number' ? parsed.longpolling_timeout_ms : undefined,
+      }
+    },
+    async sendText(params) {
+      const message: Record<string, unknown> = {
+        from_user_id: '',
+        to_user_id: params.to,
+        // Every send carries its own id, so the server can tell a retry from a
+        // new message.
+        client_id: generateClientId(),
+        message_type: 2,
+        message_state: 2,
+        item_list: [{ type: 1, text_item: { text: params.text } }],
+      }
+      // The protocol's client sends without a token and warns; inventing one
+      // would be worse than sending none.
+      if (params.contextToken !== undefined) message['context_token'] = params.contextToken
+
+      const raw = await this.post({
+        baseUrl: params.baseUrl,
+        endpoint: 'ilink/bot/sendmessage',
+        body: JSON.stringify({
+          msg: message,
+          base_info: buildBaseInfo({ channelVersion, ...(options.botAgent === undefined ? {} : { botAgent: options.botAgent }) }),
+        }),
+        token: params.token,
+        ...(params.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
+        label: 'sendmessage',
+      })
+      const parsed = JSON.parse(raw) as { ret?: number; errcode?: number; errmsg?: string }
+      // HTTP 200 carrying a failure is still a failure; `-14` in particular
+      // means the account's session is suspended.
+      const code = parsed.errcode ?? parsed.ret
+      if (typeof code === 'number' && code !== 0) {
+        throw new BusinessError('sendmessage', code, parsed.errmsg ?? '')
+      }
+    },
     async get(params) {
       const url = new URL(params.endpoint, withTrailingSlash(params.baseUrl)).toString()
       return send(url, { method: 'GET', headers: { ...common } }, params.label, params.timeoutMs)

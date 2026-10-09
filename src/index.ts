@@ -14,16 +14,18 @@ import { loadAccount, listAccounts, saveAccount, forgetAccount } from './credent
 import { runStartupAction } from './login-command.ts'
 import { WECHAT_STARTUP_SERVICE, type WechatStartupValues } from './startup.ts'
 import { createApiClient } from './wechat/api.ts'
+import { CursorStore } from './channel/cursor-store.ts'
+import { startChannelFromStore } from './channel/runtime.ts'
 
 /** Plugin name reported in boot audits and `pending (waiting for service: …)` lines. */
 export const name = 'channel-wechat'
 
 /**
- * Host services this plugin needs. `wechatStartup` is the parsed invocation and
- * `credentials` is where a login is persisted; the loader parks this row until
- * both exist.
+ * Host services this plugin needs. `wechatStartup` is the parsed invocation,
+ * `credentials` is where a login is persisted, and `agents` is what the channel
+ * creates its sessions through; the loader parks this row until all three exist.
  */
-export const inject = ['wechatStartup', 'credentials'] as const
+export const inject = ['wechatStartup', 'credentials', 'agents'] as const
 
 /**
  * Act on the invocation the startup row parsed.
@@ -33,10 +35,14 @@ export function apply(ctx: Context): void {
   const startup = ctx.get(WECHAT_STARTUP_SERVICE) as WechatStartupValues | undefined
   if (startup === undefined) return
 
-  // An ordinary start is not this row's business: M2 mounts the channel itself
-  // from here, and exiting now would kill the server the user asked for.
+  // An ordinary start begins polling as whatever account the login action
+  // stored; exiting here would kill the server the user asked for.
   if (startup.action === 'none') {
-    ctx.logger(name).info('dsh-channel-wechat loaded')
+    // Detached: the launcher owns process lifetime, and awaiting this would
+    // block the rest of boot on a loop that runs until shutdown.
+    void startChannel(ctx).catch((error: unknown) => {
+      ctx.logger(name).warn('channel failed to start: %s', String(error))
+    })
     return
   }
 
@@ -66,6 +72,39 @@ export function apply(ctx: Context): void {
   void run.catch((error: unknown) => {
     write(`连接失败：${error instanceof Error ? error.message : String(error)}`)
     exit(1)
+  })
+}
+
+/**
+ * Begin polling as the stored account, if there is one.
+ * @param ctx - the plugin's cordis context.
+ */
+async function startChannel(ctx: Context): Promise<void> {
+  const controller = new AbortController()
+  // The plugin's own fiber owns the run: unloading disposes it, which is what
+  // stops the poll instead of leaving it running against a dead context.
+  ctx.effect(() => () => controller.abort())
+
+  // One account in v1, so one cursor; the store is per-account for the
+  // multi-account release the data structures already allow.
+  const cursors = new CursorStore()
+  const accounts = await listAccounts(ctx)
+  const account = accounts[0]
+
+  void startChannelFromStore({
+    listAccounts: async () => (account === undefined ? [] : [account]),
+    api: createApiClient(),
+    createRegistry: () => ctx.agents as never,
+    // Resolved before the run so a restart resumes where the last one stopped
+    // rather than replaying the conversation it already answered.
+    ...(account === undefined ? {} : { initialCursor: await cursors.load(account.accountId) }),
+    saveCursor: cursor => account === undefined ? Promise.resolve() : cursors.save(account.accountId, cursor),
+    onStarted: accountId => { ctx.logger(name).info('polling as %s', accountId) },
+    onMessageError: (error, _message) => { ctx.logger(name).warn('inbound message failed: %s', String(error)) },
+    onReplyError: (error, peerId) => { ctx.logger(name).warn('reply to %s failed: %s', peerId, String(error)) },
+    signal: controller.signal,
+  }).catch((error: unknown) => {
+    ctx.logger(name).warn('channel stopped: %s', String(error))
   })
 }
 

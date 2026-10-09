@@ -13,11 +13,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import CredentialsLocal from '@deepseek-ai/dsh-credentials-local'
+import AgentRegistry from '@deepseek-ai/dsh-agent'
 import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { apply as applyChannel, inject as channelInject } from '../../src/index.ts'
 import { loadAccount } from '../../src/credentials.ts'
 import { apply as applyStartup } from '../../src/startup.ts'
+import { saveAccount } from '../../src/credentials.ts'
 
 /** One mounted profile plus its disposable state. */
 interface Booted {
@@ -123,14 +125,52 @@ describe('a profile boot with the login action', () => {
 
 describe('the row\'s declared dependencies', () => {
   it('waits for the parsed invocation and the credentials store', () => {
-    // Both are load-bearing: without `wechatStartup` the row cannot know what
-    // was asked, and without `credentials` it would activate before the store
-    // it writes through exists, failing only on the write.
-    expect(channelInject).toEqual(['wechatStartup', 'credentials'])
+    // All three are load-bearing: without `wechatStartup` the row cannot know
+    // what was asked, without `credentials` it would activate before the store
+    // it writes through exists, and without `agents` the channel would reach
+    // for an unmounted registry and start polling with nowhere to deliver.
+    expect(channelInject).toEqual(['wechatStartup', 'credentials', 'agents'])
   })
 })
 
 describe('a profile boot with no action', () => {
+  it('starts the channel when a login is already stored', async () => {
+    // The M2 acceptance path: an ordinary start finds the stored account and
+    // begins polling as it, with no app argument involved.
+    const previous = process.env['DSH_HOME']
+    const home = mkdtempSync(join(tmpdir(), 'dsh-wechat-start-'))
+    process.env['DSH_HOME'] = home
+
+    // Stub only the platform boundary: the poll and the send go through it.
+    const requested: string[] = []
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
+      requested.push(String(url))
+      if (String(url).includes('getupdates')) {
+        return new Response(JSON.stringify({ ret: 0, msgs: [], get_updates_buf: 'c1' }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ ret: 0 }), { status: 200 })
+    }) as unknown as typeof fetch)
+
+    const ctx = new Context()
+    provideCmdline(ctx, { args: [], exit: () => {}, ready: { commit() {}, await: async () => {} } } as never)
+    await ctx.plugin(CredentialsLocal as never, {} as never)
+    // The channel creates sessions through the agent registry, so a profile
+    // that starts it must have one mounted.
+    await ctx.plugin(AgentRegistry)
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
+    await ctx.plugin({ name: 'channel-wechat', inject: ['wechatStartup', 'credentials', 'agents'], apply: applyChannel })
+
+    // The loop runs detached, so give it a moment to issue its first poll.
+    await new Promise(resolve => setTimeout(resolve, 150))
+    await ctx.fiber.dispose()
+
+    expect(requested.some(url => url.includes('getupdates'))).toBe(true)
+    if (previous === undefined) delete process.env['DSH_HOME']
+    else process.env['DSH_HOME'] = previous
+    rmSync(home, { recursive: true, force: true })
+  }, 30_000)
+
   it('starts the server instead of performing a login', async () => {
     // An ordinary `dsh <profile>` must not log in or exit; the fetch stub
     // would throw if anything reached for the QR endpoint.

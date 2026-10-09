@@ -12,7 +12,7 @@
  * @module dsh-channel-wechat/wechat/login-runner
  */
 
-import type { ApiClient } from './api.ts'
+import type { ApiTransport } from './api.ts'
 import {
   reduceLogin,
   withRefreshedQr,
@@ -47,7 +47,7 @@ export type LoginResult =
 /** Collaborators the runner needs from its caller. */
 export interface LoginRunnerOptions {
   /** Wire client, already configured with the caller's metadata. */
-  api: ApiClient
+  api: ApiTransport
   /** Abandon the login after this long. */
   timeoutMs?: number
   /** `bot_type` to request; defaults to this build's. */
@@ -138,7 +138,7 @@ export async function runQrLogin(options: LoginRunnerOptions): Promise<LoginResu
 }
 
 /** Request an initial QR code and build the starting state. */
-async function startLogin(api: ApiClient, botType: string): Promise<LoginState & { qrcodeUrl: string }> {
+async function startLogin(api: ApiTransport, botType: string): Promise<LoginState & { qrcodeUrl: string }> {
   const qr = await fetchQr(api, botType)
   return {
     qrcode: qr.qrcode,
@@ -150,7 +150,7 @@ async function startLogin(api: ApiClient, botType: string): Promise<LoginState &
 }
 
 /** Fetch one QR code. */
-async function fetchQr(api: ApiClient, botType: string): Promise<{ qrcode: string; qrcodeUrl: string }> {
+async function fetchQr(api: ApiTransport, botType: string): Promise<{ qrcode: string; qrcodeUrl: string }> {
   const raw = await api.post({
     baseUrl: LOGIN_BASE_URL,
     endpoint: `ilink/bot/get_bot_qrcode?bot_type=${encodeURIComponent(botType)}`,
@@ -174,7 +174,7 @@ export function parseQrResponse(raw: string): { qrcode: string; qrcodeUrl: strin
 }
 
 /** Poll one status, carrying the pending verify code when there is one. */
-async function pollStatus(api: ApiClient, state: LoginState): Promise<QrStatusResponse> {
+async function pollStatus(api: ApiTransport, state: LoginState): Promise<QrStatusResponse> {
   let endpoint = `ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(state.qrcode)}`
   if (state.pendingVerifyCode !== undefined) {
     endpoint += `&verify_code=${encodeURIComponent(state.pendingVerifyCode)}`

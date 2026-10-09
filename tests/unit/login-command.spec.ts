@@ -9,11 +9,11 @@
 
 import { describe, expect, it } from 'vitest'
 import { runStartupAction } from '../../src/login-command.ts'
-import type { ApiClient } from '../../src/wechat/api.ts'
+import type { ApiTransport } from '../../src/wechat/api.ts'
 import type { WechatStartupValues } from '../../src/startup.ts'
 
 /** An API whose QR poll confirms immediately with the given account. */
-function confirmingApi(account: { botToken: string; accountId: string; baseUrl?: string }): ApiClient {
+function confirmingApi(account: { botToken: string; accountId: string; baseUrl?: string }): ApiTransport {
   return {
     async post() {
       return JSON.stringify({ qrcode: 'qr-1', qrcode_img_content: 'https://weixin.test/qr-1' })
@@ -30,7 +30,7 @@ function confirmingApi(account: { botToken: string; accountId: string; baseUrl?:
 }
 
 /** Everything one action run observed. */
-function bench(startup: WechatStartupValues, api: ApiClient, stored: unknown[] = []) {
+function bench(startup: WechatStartupValues, api: ApiTransport, stored: unknown[] = []) {
   const out: string[] = []
   const exits: number[] = []
   const saved: unknown[] = []
@@ -76,7 +76,7 @@ describe('the login action', () => {
   })
 
   it('reports a failure with a non-zero exit and stores nothing', async () => {
-    const failing: ApiClient = {
+    const failing: ApiTransport = {
       async post() {
         throw new Error('offline')
       },

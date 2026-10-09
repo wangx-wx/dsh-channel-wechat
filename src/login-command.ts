@@ -11,7 +11,7 @@
 
 import type { WechatAccount } from './credentials.ts'
 import type { WechatStartupValues } from './startup.ts'
-import type { ApiClient } from './wechat/api.ts'
+import type { ApiTransport } from './wechat/api.ts'
 import { runQrLogin } from './wechat/login-runner.ts'
 
 /** Everything one action run needs from its caller. */
@@ -19,7 +19,7 @@ export interface StartupActionOptions {
   /** What the invocation asked for. */
   startup: WechatStartupValues
   /** Wire client for the login. */
-  api: ApiClient
+  api: ApiTransport
   /** Sink for user-facing text. */
   write: (text: string) => void
   /** Request a bounded process exit. */

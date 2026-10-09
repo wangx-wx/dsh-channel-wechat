@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest'
-import type { ApiClient } from '../../src/wechat/api.ts'
+import type { ApiTransport } from '../../src/wechat/api.ts'
 import { runQrLogin } from '../../src/wechat/login-runner.ts'
 import type { QrStatusResponse } from '../../src/wechat/login-machine.ts'
 
@@ -17,7 +17,7 @@ function scriptedApi(statuses: QrStatusResponse[], qrCodes: string[] = ['qr-1'])
   const gets: string[] = []
   const posts: string[] = []
   let qrIndex = 0
-  const api: ApiClient = {
+  const api: ApiTransport = {
     async get(params) {
       gets.push(params.endpoint)
       const next = statuses.shift()
@@ -173,7 +173,7 @@ describe('login runner: network faults', () => {
     // A gateway timeout is normal against a 35s long poll; aborting the whole
     // login on one would make scanning unreliable.
     let calls = 0
-    const api: ApiClient = {
+    const api: ApiTransport = {
       async post() {
         return JSON.stringify({ qrcode: 'qr-1', qrcode_img_content: 'https://weixin.test/qr-1' })
       },
@@ -190,7 +190,7 @@ describe('login runner: network faults', () => {
   })
 
   it('reports a failure when the QR itself cannot be fetched', async () => {
-    const api: ApiClient = {
+    const api: ApiTransport = {
       async post() {
         throw new Error('offline')
       },
