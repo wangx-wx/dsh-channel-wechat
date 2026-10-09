@@ -199,7 +199,7 @@ ctx.on('approval/request', handler, { prepend: true })   // 必须 prepend + 不
 |---|---|---|
 | **M0 骨架** ✅ | 包结构 + 插件骨架 + 真组合测试跑通 | ~~日志有插件名~~ → **cordis fiber 达到 ACTIVE**（见下方修订） |
 | **M1 登录** ✅ | 协议移植改为全新写（见下方修订）+ `startup.ts` + 凭证进 `ctx.credentials` | `dsh <profile> login` 扫码成功，重启免登录 |
-| **M2 文本端到端** | 移植 `api` + monitor 长轮询 + queue + dispatcher + reply | 微信发「hi」→ DSH 回复到达 |
+| **M2 文本端到端** ✅ | `api` 消息方法 + monitor + peer-map + dispatcher + reply + runtime | 微信发「hi」→ DSH 回复到达 |
 | **M3 命令** | `ctx.commands` 透传 + 6 个自管命令 + `/stop` | `/plan off` 有原生回执；`/stop` 能中断正在跑的任务 |
 | **M4 媒体** | 移植 `cdn`/`media` + 图片/文件/语音/视频双向 + 引用 | 发图能理解；产出文件能收到 |
 | **M5 审批卡** | waterfall 监听 + 卡片渲染 + 竞速 + fork signal | 微信能批准/拒绝；GUI 卡同步消失 |
@@ -207,6 +207,30 @@ ctx.on('approval/request', handler, { prepend: true })   // 必须 prepend + 不
 | **M7 发布** | README 双语 + LICENSE + npm 发布 | `dsh plugin add dsh-channel-wechat` 一条命令装好 |
 
 **M2 是第一个真实闭环**，也是「集成契约是否正确」的验证点——协议层移植量最大，但风险最高的是全新写的集成层。
+
+### M2 完成记录（2026-10-09）
+
+拆成 7 次提交：S1 入站解析 → S2 会话映射 → S3 注入 → S4 出站队列 → S5 长轮询 →
+S6 真组合接线 → 收口（API 消息方法 + 运行时 + cursor 持久化）。
+
+**测试**：180 个（139 单元 + 41 集成），全部经变异验证。
+
+**真组合验证**：`channel-real-loop.spec.ts` 挂载**真实 agent loop** + 脚本化模型适配器，
+跑通「轮询 → 解析 → 会话 → 真实模型轮次 → committed `assistant/message` → 回复 → 微信发送」。
+这是「接线正确」与「接线到 registry 形状的东西」的区别。
+
+**四个被测试抓出的真实缺陷**（都是单元测试看不见的）：
+
+| 缺陷 | 表现 |
+|---|---|
+| 无人订阅 `session/event` | 组合测试直接调 handler 所以通过，生产路径**回复根本没有出口** |
+| 不等待轮次结束 | 回复读自 committed 事件，事件在轮次 settle 前不存在 → 消息「已处理」但无回复 |
+| 会话继承环境 provider/model | 通道会跑在用户碰巧配置的模型上，而非通道自己的 |
+| `ctx.agents` 未声明却使用 | 未挂载时静默拿到 undefined，轮询启动但无处投递 |
+
+**一处诚实记录的等价变异**：cursor 的临时文件 + rename 是原子写，但**没有测试能观察
+到它与直写的差别**（除非注入写中崩溃）。因此测试现在只声称覆盖「清理」，不再暗示
+覆盖原子性。
 
 ### M1 完成记录（2026-10-09）
 
