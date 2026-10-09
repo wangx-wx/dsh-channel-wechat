@@ -3,6 +3,11 @@ packages:
 
 nodeLinker: hoisted
 
+# pnpm 11 reads settings from this file, not from .npmrc's store-dir (which it
+# silently ignores, leaving the store wherever the first install's cwd was).
+# Keeping it project-local means the cache is disposable with the checkout.
+storeDir: .pnpm-store
+
 # tsdown and vitest both build on esbuild; leaving this undecided makes pnpm
 # refuse the install on a clean checkout.
 allowBuilds:
