@@ -224,7 +224,9 @@ ctx.on('approval/request', handler, { prepend: true })   // 必须 prepend + 不
 - `dsh <profile> <app>` 写法非法（`too many arguments`）；正确形式是 `dsh <profile> [app-args]`，
   app 由 profile 的 `dsh.profile.bundles` 决定；
 - `DSH_HOME` 可重定向 → 所有集成测试用隔离 home，不碰用户 profile；
-- 本机 npm/pnpm 默认 cache 不可写（EPERM）→ 用仓库内 `.npmrc` 的 `store-dir`。
+- 本机 npm/pnpm 默认 cache 不可写（EPERM）→ 用 `pnpm-workspace.yaml` 的 `storeDir: .pnpm-store`。
+  ⚠️ **不是** `.npmrc` 的 `store-dir`——pnpm 11 静默忽略后者（实测：改成绝对路径/任意值，
+  `pnpm store path` 均不变），早期记录此处有误，已更正。
 
 
 ## 7. 已知风险与技术债
