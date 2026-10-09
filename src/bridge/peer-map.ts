@@ -26,9 +26,9 @@ export const SESSION_ID_PREFIX = 'channel-wechat-'
 /** The slice of `ctx.agents` this map uses. */
 export interface AgentRegistryLike {
   /** Create and start a new agent for one session id. */
-  create(options: { sessionId: SessionId; signal?: AbortSignal }): Promise<AgentHandleLike>
+  create(options: { sessionId: SessionId; agentOptions?: { provider?: string; model?: string }; signal?: AbortSignal }): Promise<AgentHandleLike>
   /** Load a persisted session and start an agent on it. */
-  resume(options: { resumeSessionId: SessionId }): Promise<AgentHandleLike>
+  resume(options: { resumeSessionId: SessionId; agentOptions?: { provider?: string; model?: string } }): Promise<AgentHandleLike>
   /** The live agent for one session id, if any. */
   get(sessionId: SessionId): { readonly id: SessionId } | undefined
 }
@@ -47,6 +47,8 @@ export interface PeerMapOptions {
   registry: AgentRegistryLike
   /** Probe whether a persisted session already exists; defaults to "no". */
   sessionExists?: (sessionId: SessionId) => Promise<boolean>
+  /** Provider and model every session this map creates or resumes selects. */
+  sessionOptions?: { provider: string; model: string }
 }
 
 /**
@@ -71,6 +73,7 @@ interface Entry {
 export class PeerMap {
   private readonly registry: AgentRegistryLike
   private readonly sessionExists: (sessionId: SessionId) => Promise<boolean>
+  private readonly sessionOptions: { provider: string; model: string } | undefined
   private readonly entries = new Map<string, Entry>()
   /**
    * Per-peer turn queues, kept apart from the session entries: a peer has a
@@ -85,6 +88,7 @@ export class PeerMap {
   constructor(options: PeerMapOptions) {
     this.registry = options.registry
     this.sessionExists = options.sessionExists ?? (async () => false)
+    this.sessionOptions = options.sessionOptions
   }
 
   /**
@@ -99,9 +103,12 @@ export class PeerMap {
     if (current !== undefined && this.registry.get(current.handle.agent.id) !== undefined) return current.handle
 
     const sessionId = sessionIdFor(peerId)
+    const agentOptions = this.sessionOptions === undefined
+      ? {}
+      : { agentOptions: { provider: this.sessionOptions.provider, model: this.sessionOptions.model } }
     const handle = await this.sessionExists(sessionId)
-      ? await this.registry.resume({ resumeSessionId: sessionId })
-      : await this.registry.create({ sessionId })
+      ? await this.registry.resume({ resumeSessionId: sessionId, ...agentOptions })
+      : await this.registry.create({ sessionId, ...agentOptions })
     this.entries.set(peerId, { handle })
     return handle
   }
