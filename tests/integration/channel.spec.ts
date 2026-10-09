@@ -32,7 +32,24 @@ interface Booted {
 
 const boots: Booted[] = []
 
+/**
+ * Homes a test created, removed after it, pass or fail.
+ *
+ * Cleanup registered here rather than at the end of each test body: an in-body
+ * cleanup leaks the directory exactly when an assertion fails, which is when
+ * someone is about to run the suite repeatedly.
+ */
+const homes: string[] = []
+
+/** A temporary DSH_HOME for one test. */
+function tempHome(prefix: string): string {
+  const home = mkdtempSync(join(tmpdir(), prefix))
+  homes.push(home)
+  return home
+}
+
 afterEach(async () => {
+  for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true })
   while (boots.length > 0) await boots.pop()?.dispose()
   vi.unstubAllGlobals()
 })
@@ -58,7 +75,7 @@ function stubWeixin(status: Record<string, unknown>): void {
  * @returns the mounted context and the account id that ended up stored.
  */
 async function bootProfile(args: string[], status: Record<string, unknown>): Promise<Booted> {
-  const home = mkdtempSync(join(tmpdir(), 'dsh-wechat-e2e-'))
+  const home = tempHome('dsh-wechat-e2e-')
   const previousHome = process.env['DSH_HOME']
   process.env['DSH_HOME'] = home
   stubWeixin(status)
@@ -82,7 +99,6 @@ async function bootProfile(args: string[], status: Record<string, unknown>): Pro
       await ctx.fiber.dispose()
       if (previousHome === undefined) delete process.env['DSH_HOME']
       else process.env['DSH_HOME'] = previousHome
-      rmSync(home, { recursive: true, force: true })
     },
   }
   boots.push(booted)
@@ -141,7 +157,7 @@ describe('a profile boot with no action', () => {
     // The M2 acceptance path: an ordinary start finds the stored account and
     // begins polling as it, with no app argument involved.
     const previous = process.env['DSH_HOME']
-    const home = mkdtempSync(join(tmpdir(), 'dsh-wechat-start-'))
+    const home = tempHome('dsh-wechat-start-')
     process.env['DSH_HOME'] = home
 
     // Stub only the platform boundary: the poll and the send go through it.
@@ -172,7 +188,6 @@ describe('a profile boot with no action', () => {
     expect(requested.some(url => url.includes('getupdates'))).toBe(true)
     if (previous === undefined) delete process.env['DSH_HOME']
     else process.env['DSH_HOME'] = previous
-    rmSync(home, { recursive: true, force: true })
   }, 30_000)
 
   it('starts the server instead of performing a login', async () => {
