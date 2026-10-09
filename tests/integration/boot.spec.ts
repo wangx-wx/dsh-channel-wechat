@@ -41,9 +41,15 @@ describe('plugin mounts in a real cordis context', () => {
     ctx = undefined
   })
 
-  it('reaches ACTIVE rather than parking in PENDING', async () => {
+  it('reaches ACTIVE rather than parking in PENDING once its services exist', async () => {
     const module = await import(builtEntry())
     ctx = new Context()
+    // A profile supplies these before this row activates; providing them here
+    // is what makes the assertion about the export form rather than about the
+    // absence of a mount order.
+    provideCmdline(ctx, { args: [], exit: () => {}, ready: { commit() {}, await: async () => {} } } as never)
+    ctx.provide('credentials', {})
+    ctx.provide('wechatStartup', { action: 'none' })
     const fiber = ctx.plugin(module)
     await fiber
 
@@ -51,6 +57,18 @@ describe('plugin mounts in a real cordis context', () => {
     // silently absent while the profile still boots.
     expect(fiber.state).not.toBe(FIBER_STATE.PENDING)
     expect(fiber.state).toBe(FIBER_STATE.ACTIVE)
+  })
+
+  it('parks in PENDING when the services it injects are absent', async () => {
+    // The other half of that contract, and the reason it is worth asserting:
+    // a missing provider is a silent absence in a profile, so the states on
+    // both sides of the boundary are pinned rather than only the happy one.
+    const module = await import(builtEntry())
+    ctx = new Context()
+    const fiber = ctx.plugin(module)
+    await fiber
+
+    expect(fiber.state).toBe(FIBER_STATE.PENDING)
   })
 
   it('exports the function-plugin shape the loader dispatches on', async () => {

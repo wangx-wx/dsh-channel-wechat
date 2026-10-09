@@ -19,16 +19,22 @@ import type { Context } from '@deepseek-ai/cordis'
 /** The scope half of every key this plugin owns. */
 export const WECHAT_CREDENTIAL_SCOPE = 'channel-wechat'
 
-/** A stored WeChat login. */
+/**
+ * A stored WeChat login.
+ *
+ * The optional fields are explicitly `| undefined` rather than merely optional:
+ * a confirmation can arrive without a base URL, and `exactOptionalPropertyTypes`
+ * makes "absent" and "present but undefined" different types.
+ */
 export interface WechatAccount {
   /** Bot token for authenticated requests. */
   botToken: string | undefined
   /** Bot account id the server issued; also the record's addressing id. */
   accountId: string
   /** API base URL, when the server supplied one. */
-  baseUrl?: string
+  baseUrl?: string | undefined
   /** The user who scanned. */
-  userId?: string
+  userId?: string | undefined
 }
 
 /** The subset of the credentials service this module uses. */
