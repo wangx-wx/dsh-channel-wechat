@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 
 /** Repository root, resolved from this file's location under tests/support. */
 export const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url))
@@ -102,4 +102,61 @@ export function setProfileBundles(harness: TestHarness, bundles: readonly string
   const manifest = JSON.parse(readFileSync(path, 'utf8')) as { dsh: { profile: { bundles: string[] } } }
   manifest.dsh.profile.bundles = [...bundles]
   writeFileSync(path, JSON.stringify(manifest, undefined, 2))
+}
+
+/** A booted web app, still running. */
+export interface RunningProfile {
+  /** The port the app actually bound; `--port 0` asks the OS for a free one. */
+  readonly port: number
+  /** Kill the app and wait for it to exit. */
+  readonly stop: () => Promise<void>
+}
+
+/**
+ * Boot a profile's real web app and wait for it to serve.
+ *
+ * This is the only check that covers the whole boot: a plugin that rejects an
+ * argument belonging to another app in the profile makes `program.error()` exit
+ * the process before anything is published, which no in-process assertion can
+ * observe because the failure is the boot itself.
+ *
+ * @param harness - the isolated home to run against.
+ * @param args - app arguments after the profile name.
+ * @returns the bound port and a stop callback.
+ * @throws if the process exits before it serves, quoting its output.
+ */
+export async function startProfile(harness: Pick<TestHarness, 'home'>, args: readonly string[]): Promise<RunningProfile> {
+  const child = spawn(DSH_LAUNCHER, [PROFILE_NAME, ...args], {
+    env: { ...process.env, DSH_HOME: harness.home },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let output = ''
+  child.stdout.setEncoding('utf8')
+  child.stderr.setEncoding('utf8')
+  child.stdout.on('data', chunk => { output += String(chunk) })
+  child.stderr.on('data', chunk => { output += String(chunk) })
+
+  let exited: { code: number | null } | undefined
+  child.on('exit', code => { exited = { code } })
+
+  const stop = async (): Promise<void> => {
+    if (exited) return
+    child.kill('SIGTERM')
+    await new Promise<void>(resolve => {
+      child.on('exit', () => resolve())
+      setTimeout(() => { child.kill('SIGKILL'); resolve() }, 5_000).unref()
+    })
+  }
+
+  const deadline = Date.now() + 120_000
+  while (Date.now() < deadline) {
+    // The line the web app prints once it is listening, which carries the port
+    // it actually bound - `--port 0` makes the requested value useless.
+    const match = /^dsh web: http:\/\/127\.0\.0\.1:(\d+)\//mu.exec(output)
+    if (match) return { port: Number(match[1]), stop }
+    if (exited) throw new Error(`profile ${PROFILE_NAME} exited with ${String(exited.code)} before serving:\n${output.slice(-2000)}`)
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  await stop()
+  throw new Error(`profile ${PROFILE_NAME} never reported a listening port:\n${output.slice(-2000)}`)
 }

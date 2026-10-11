@@ -6,9 +6,11 @@
  * happens — so this module exists to claim it, and the rows that act on it read
  * the value published here.
  *
- * Following the launcher's contract, the command's action validates before it
- * publishes: `program.error()` writes its message and requests a process exit,
- * so anything published first would be a lie about a rejected invocation.
+ * Only a known action word is claimed, and nothing is ever rejected. Every app
+ * in a profile receives the same argument list, so arguments belonging to
+ * another app arrive here too; calling `program.error()` on one of those would
+ * request a process exit and abort the whole boot. That is not hypothetical —
+ * the desktop host's `--no-open --port 19387` crashed it.
  *
  * @module dsh-channel-wechat/startup
  */
