@@ -55,13 +55,45 @@ describe('command-line entry', () => {
     expect(values()).toEqual({ action: 'none' })
   })
 
-  it('exits on an unknown argument instead of ignoring it', async () => {
-    // Silence is the documented failure mode here, so an unrecognized action
-    // must request a process exit rather than look like a successful no-op.
+  it('treats an unrecognised word as an ordinary start, not an error', async () => {
+    // This is a deliberate trade. The command line is shared with every other
+    // app in the profile, so a bare word is at least as likely to be their flag
+    // value (`--port 19387`) as a typo here. Erroring exits the boot before any
+    // service is published, which fails the whole application - so the cost of
+    // a silently-ignored typo is accepted instead.
     const { values, exits } = await boot(['not-a-real-action'])
 
-    expect(exits).toEqual([1])
-    expect(values()).toBeUndefined()
+    expect(exits).toEqual([])
+    expect(values()).toEqual({ action: 'none' })
+  })
+})
+
+describe('launcher flags this channel does not own', () => {
+  it('ignores the desktop host’s own flags instead of rejecting them', async () => {
+    // The desktop host boots this profile with `--no-open --port 19387`, which
+    // belong to the web app it also mounts. Rejecting them exits the boot
+    // before any service is published, which fails the whole app rather than
+    // this plugin.
+    const { values, exits } = await boot(['--no-open', '--port', '19387'])
+
+    expect(exits).toEqual([])
+    expect(values()).toEqual({ action: 'none' })
+  })
+
+  it('still recognises its own action alongside foreign flags', async () => {
+    const { values, exits } = await boot(['--port', '19387', 'login'])
+
+    expect(exits).toEqual([])
+    expect(values()?.action).toBe('login')
+  })
+
+  it('does not treat another app\u2019s flag value as an action', async () => {
+    // The exact shape the desktop host sends: a flag whose value is a bare
+    // number. Mistaking it for an action is what crashed the host.
+    const { values, exits } = await boot(['--no-open', '--port', '19387'])
+
+    expect(exits).toEqual([])
+    expect(values()).toEqual({ action: 'none' })
   })
 })
 

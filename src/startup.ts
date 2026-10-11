@@ -48,6 +48,12 @@ function wechatCommand(): Command {
     .helpOption('-h, --help', 'show this help')
     .argument('[action]', 'login | logout | status; omit to start normally')
     .option('--json', 'machine-readable output')
+    // The launcher does not decide who owns the command line, so other apps in
+    // the same profile receive the same arguments. Rejecting theirs would abort
+    // the boot before this plugin published anything, failing the whole app -
+    // which is what the desktop host's `--no-open --port 19387` did.
+    .allowUnknownOption()
+    .allowExcessArguments()
     .addHelpText('after', `
 Examples:
   dsh web login      scan a QR code to connect WeChat
@@ -63,15 +69,20 @@ Examples:
 export function apply(ctx: Context): void {
   const program = wechatCommand()
   program.action(() => {
-    const action = program.args[0]
+    // The command line is shared: every app in the profile receives the same
+    // arguments and consumes its own. The desktop host boots this profile with
+    // `--no-open --port 19387`, which the web app owns - and a bare `19387` is
+    // indistinguishable from an action by shape.
+    //
+    // So only a known action word is claimed. Anything else means "ordinary
+    // start" rather than an error: reporting an error here would fire on
+    // another app's flag *value*, and `program.error` exits the boot before any
+    // service is published, which fails the whole application rather than this
+    // plugin. A mistyped action starts the server instead of being reported,
+    // which is the lesser cost.
+    const action = program.args.find(argument => (ACTIONS as readonly string[]).includes(argument))
     const json = program.opts<{ json?: boolean }>().json === true
 
-    // Validation precedes publication: `program.error` requests a process exit,
-    // and a service published before it would describe an invocation that was
-    // actually rejected.
-    if (action !== undefined && !(ACTIONS as readonly string[]).includes(action)) {
-      program.error(`error: unknown action ${JSON.stringify(action)}`)
-    }
     ctx.provide(WECHAT_STARTUP_SERVICE, {
       action: (action ?? 'none') as WechatStartupValues['action'],
       ...(json ? { json } : {}),
