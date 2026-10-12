@@ -63,14 +63,80 @@ function credentialsOf(ctx: Context): CredentialsService {
 }
 
 /**
+ * Encode an account id into a legal credential key segment.
+ *
+ * The key grammar is `/^[a-z][a-z0-9-]*$/`, and the ids the iLink server issues
+ * do not fit it: a live login returns `6f773c2222a6@im.bot`, which starts with a
+ * digit and contains `@` and `.`. Passing that to `credentialKey` throws, so a
+ * confirmed login stored nothing while the panel reported success.
+ *
+ * The encoding has to be reversible and collision-free, not a tidy-up. Replacing
+ * the illegal characters with `-` would be simpler and wrong: `6f77@im.bot` and
+ * `6f77-im-bot` are different bots that would become one key, and the second
+ * login would silently overwrite the first. So the id is percent-encoded as
+ * UTF-8 and prefixed to satisfy the leading-letter rule.
+ *
+ * @param accountId - the server-issued bot id.
+ * @returns a legal key segment that {@link decodeAccountKey} reverses.
+ */
+export function encodeAccountKey(accountId: string): string {
+  // The alphabet is `a-z0-9-`, so `-` is the only character available to
+  // introduce an escape; `_` would itself be illegal. A byte is written as
+  // `-` plus two hex digits, and a literal `-` is written doubled, which is what
+  // keeps the mapping reversible.
+  const bytes = new TextEncoder().encode(accountId)
+  let encoded = 'w'
+  for (const byte of bytes) {
+    const character = String.fromCharCode(byte)
+    if (character === '-') encoded += '--'
+    else if (/^[a-z0-9]$/u.test(character)) encoded += character
+    else encoded += `-${byte.toString(16).padStart(2, '0')}`
+  }
+  return encoded
+}
+
+/**
+ * Recover the account id from a key segment built by {@link encodeAccountKey}.
+ * @param segment - the second half of a key this plugin owns.
+ * @returns the original id, or `undefined` when the segment is not ours.
+ */
+export function decodeAccountKey(segment: string): string | undefined {
+  if (!segment.startsWith('w')) return undefined
+  const body = segment.slice(1)
+  const bytes: number[] = []
+  for (let index = 0; index < body.length; index += 1) {
+    const character = body[index]
+    if (character === '-') {
+      if (body[index + 1] === '-') {
+        bytes.push('-'.charCodeAt(0))
+        index += 1
+        continue
+      }
+      const hex = body.slice(index + 1, index + 3)
+      if (!/^[0-9a-f]{2}$/u.test(hex)) return undefined
+      bytes.push(Number.parseInt(hex, 16))
+      index += 2
+      continue
+    }
+    // Anything outside the unescaped alphabet means this is not our segment.
+    if (!/^[a-z0-9]$/u.test(character ?? '')) return undefined
+    bytes.push(character?.charCodeAt(0) ?? 0)
+  }
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(bytes))
+  } catch {
+    // Invalid UTF-8 means someone else wrote this, not an id we can name.
+    return undefined
+  }
+}
+
+/**
  * Build the record key for one account.
- * @param accountId - the server-issued bot id, used verbatim.
+ * @param accountId - the server-issued bot id.
  * @returns the branded key.
  */
 export function accountKey(accountId: string): CredentialKey {
-  // Kept verbatim: the id the server issues (`…-im-bot`) is already a legal key
-  // segment, while the derived `…@im.bot` form is not.
-  return credentialKey(WECHAT_CREDENTIAL_SCOPE, accountId)
+  return credentialKey(WECHAT_CREDENTIAL_SCOPE, encodeAccountKey(accountId))
 }
 
 /**
@@ -126,10 +192,15 @@ export async function listAccounts(ctx: Context): Promise<WechatAccount[]> {
     // The scope is the owner: another plugin's record is not ours to interpret,
     // even when its id happens to match one of ours.
     if (!record.key.startsWith(prefix)) continue
+    // The stored segment is an encoding, so the id has to be recovered rather
+    // than sliced off: a record whose segment does not decode to one of ours is
+    // not ours to report.
+    const accountId = decodeAccountKey(record.key.slice(prefix.length))
+    if (accountId === undefined) continue
     // Read the payload through this record's own key rather than re-deriving
     // one from the id, so the scope check above is what decides inclusion.
     const stored = await service.readRecord(record.key as CredentialKey)
-    const account = accountFromPayload(record.key.slice(prefix.length), stored)
+    const account = accountFromPayload(accountId, stored)
     if (account !== undefined) accounts.push(account)
   }
   return accounts

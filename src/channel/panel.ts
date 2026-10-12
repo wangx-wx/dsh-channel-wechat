@@ -55,19 +55,21 @@ export function createPanel(options: PanelOptions): Panel {
     ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
-    onConnected: credentials => {
-      // No single-flight guard here: the session allows one attempt at a time and
-      // only one completion per attempt, which is where that belongs.
-      void (async () => {
+    onConnected: async credentials => {
+      // The rejection propagates rather than being caught here: the session owns
+      // what a failed login means, and a `catch` at this level would hide it -
+      // which is exactly how a live scan reported "已连接" while the store
+      // received nothing. `onError` observes it for the log; the session reports
+      // it to the page.
+      try {
         // The write commits first: the channel reads the store as it starts, so a
         // start that beat the write would poll as the previous account or none.
         await options.saveAccount(credentials)
         await options.startChannel()
-      })().catch((error: unknown) => {
-        // A failed write or start must not pass for a connected login; the page
-        // would claim success for a channel that is not running.
+      } catch (error: unknown) {
         options.onError?.(error)
-      })
+        throw error
+      }
     },
   })
 

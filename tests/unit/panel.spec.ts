@@ -154,13 +154,54 @@ describe('finishing a scan', () => {
     expect(startChannel).toHaveBeenCalledOnce()
   })
 
-  it('reports a failed login without starting the channel', async () => {    // The attempt can fail after the page has drawn a QR. Starting the channel
+  it('reports a failed login without starting the channel', async () => {
+    // The attempt can fail after the page has drawn a QR. Starting the channel
     // then would poll with whatever account is stored, or with none, while the
     // page says the connection failed.
     const startChannel = vi.fn()
     const panel = createPanel({
       api: scriptedApi([{ status: 'confirmed' }]), // no ilink_bot_id: unusable
       saveAccount: async () => {},
+      startChannel,
+      sleep: yieldSleep,
+    })
+
+    panel.session.start()
+    await until(() => panel.session.snapshot().phase === 'failed')
+
+    expect(startChannel).not.toHaveBeenCalled()
+  })
+})
+
+describe('when storing the login fails', () => {
+  it('does not report the login as connected', async () => {
+    // The first live scan exposed this. The account id the server issued
+    // (`6f773c2222a6@im.bot`) is not a legal credential key segment, so the write
+    // threw - while the page reported "已连接". The user had scanned, succeeded,
+    // and stored nothing, with no reason to suspect it.
+    const panel = createPanel({
+      api: scriptedApi([{ status: 'confirmed', bot_token: 'tok-1', ilink_bot_id: 'bot-9' }]),
+      saveAccount: async () => { throw new Error('credential key segment is illegal') },
+      startChannel: () => {},
+      sleep: yieldSleep,
+    })
+
+    panel.session.start()
+    await until(() => panel.session.snapshot().phase === 'failed')
+
+    expect(panel.session.snapshot().phase).toBe('failed')
+    // The reason has to reach the page: "连接失败" alone leaves the user scanning
+    // the same code again.
+    expect(panel.session.snapshot().message).toContain('credential key segment')
+  })
+
+  it('does not start a channel for a login it could not store', async () => {
+    // Starting here would poll as whatever account was stored before, or as
+    // nobody, which looks like a working channel that ignores messages.
+    const startChannel = vi.fn()
+    const panel = createPanel({
+      api: scriptedApi([{ status: 'confirmed', bot_token: 'tok-1', ilink_bot_id: 'bot-9' }]),
+      saveAccount: async () => { throw new Error('nope') },
       startChannel,
       sleep: yieldSleep,
     })

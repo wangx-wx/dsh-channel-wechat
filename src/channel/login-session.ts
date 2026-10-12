@@ -42,7 +42,14 @@ export interface LoginSnapshot {
 export interface LoginSessionOptions {
   /** Wire client for the login. */
   api: ApiTransport
-  /** Receive the credentials a confirmed login produced. */
+  /**
+   * Receive the credentials a confirmed login produced.
+   *
+   * A rejection is treated as the login having failed: the attempt moves to
+   * `failed` carrying the reason. A scan the user completed and the plugin could
+   * not store is a login that did not happen, and reporting "connected" would
+   * leave them with nothing to act on.
+   */
   onConnected: (credentials: LoginCredentials) => void | Promise<void>
   /** Abandon the attempt after this long. */
   timeoutMs?: number
@@ -178,12 +185,28 @@ export function createLoginSession(options: LoginSessionOptions): LoginSession {
           // The run is over either way, so a later `start` may begin a fresh
           // attempt; the phase decides whether it should.
           started = false
-          if (result.kind === 'connected') {
-            // The owner stores the credentials; the phase already says connected
-            // because the page must not wait on a write to stop showing the QR.
-            void options.onConnected(result.credentials)
-          }
+          // `finish` runs first so the phase reflects the wire result, and the
+          // store's outcome is applied after it: the reverse order lets `finish`
+          // overwrite a reported failure with "connected", which is the bug this
+          // ordering exists to prevent.
           finish(result)
+          if (result.kind === 'connected') {
+            // The phase already says connected, because the page must not wait on
+            // a write to stop showing the QR. But the write is awaited, so a
+            // failure can still be reported: the first live scan reported
+            // "已连接" while the store received nothing, leaving the user with a
+            // login that did not exist and no reason to suspect it.
+            void Promise.resolve(options.onConnected(result.credentials)).then(
+              () => {},
+              (error: unknown) => {
+                state = {
+                  ...state,
+                  phase: 'failed',
+                  message: `已扫描，但保存登录失败：${error instanceof Error ? error.message : String(error)}`,
+                }
+              },
+            )
+          }
         })
         .catch(() => {
           // A stop unwinds the runner through its sleep; only a stop is expected
