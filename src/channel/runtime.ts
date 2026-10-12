@@ -23,6 +23,17 @@ export interface RuntimeOptions {
   api: MessageApi
   /** Build the agent registry bound to the plugin context. */
   createRegistry: () => AgentRegistryLike
+  /**
+   * Probe whether a persisted session already exists.
+   *
+   * Required, not optional: a peer's session id is derived from the peer, so a
+   * restart always finds the id already has state. Omitted, the default is
+   * "never exists", every restart calls `create` for an id that exists, and the
+   * registry rejects it - dropping every inbound message for the life of the
+   * process. Making it required is what stops that default from being reached by
+   * accident.
+   */
+  sessionExists: (sessionId: string) => Promise<boolean>
   /** Persist the poll cursor. */
   saveCursor: (cursor: string) => Promise<void> | void
   /** Cursor from the previous run, so a restart resumes instead of replaying. */
@@ -101,6 +112,7 @@ export async function startChannelFromStore(options: RuntimeOptions): Promise<vo
     ...(options.pollTimeoutMs === undefined ? {} : { pollTimeoutMs: options.pollTimeoutMs }),
     ...(options.maxRunMs === undefined ? {} : { maxRunMs: options.maxRunMs }),
     ...(options.sessionOptions === undefined ? {} : { sessionOptions: options.sessionOptions }),
+    sessionExists: options.sessionExists,
     // The channel needs these to tell the user which login is live and to reach
     // the harness's own commands from WeChat.
     accountId: account.accountId,

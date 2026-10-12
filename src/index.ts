@@ -187,6 +187,11 @@ async function runChannel(ctx: Context, signal: AbortSignal): Promise<void> {
     listAccounts: async () => (account === undefined ? [] : [account]),
     api: createApiClient(),
     createRegistry: () => ctx.agents as never,
+    // A peer's session id is a pure function of the peer, so after any restart it
+    // already has persisted state. Without this probe the map defaults to "never
+    // exists", calls `create` for an id that does, and the registry rejects it -
+    // dropping every inbound message for the life of the process.
+    sessionExists: sessionExistsOf(ctx),
     // Resolved before the run so a restart resumes where the last one stopped
     // rather than replaying the conversation it already answered.
     ...(account === undefined ? {} : { initialCursor: await cursors.load(account.accountId) }),
@@ -207,6 +212,38 @@ async function runChannel(ctx: Context, signal: AbortSignal): Promise<void> {
     onReplyError: (error, peerId) => { ctx.logger(name).warn('reply to %s failed: %s', peerId, String(error)) },
     signal,
   })
+}
+
+/**
+ * Probe whether a peer's session already has persisted state.
+ *
+ * Asked of `sessionPersistence`, which is the only service that knows about
+ * sessions on disk: `ctx.sessions` tracks live sessions only, so it reads as
+ * "absent" for exactly the case this needs to detect - a session a previous run
+ * left behind.
+ *
+ * A missing persistence service is treated as "absent" rather than thrown: a
+ * composition without durable sessions cannot have a persisted one either, so
+ * creating is the correct answer there.
+ *
+ * @param ctx - the plugin's cordis context.
+ * @returns the probe the peer map consults before creating a session.
+ */
+function sessionExistsOf(ctx: Context): (sessionId: string) => Promise<boolean> {
+  const persistence = ctx.get('sessionPersistence') as
+    | { stat: (id: string, options?: { signal?: AbortSignal }) => Promise<unknown> }
+    | undefined
+  if (persistence === undefined) return async () => false
+  return async sessionId => {
+    try {
+      // A non-undefined result is the durable header, so it exists.
+      return (await persistence.stat(sessionId)) !== undefined
+    } catch {
+      // An unreadable store is not a reason to attempt a create that would throw
+      // for a session that does exist; resuming reports its own failure.
+      return true
+    }
+  }
 }
 
 /** The harness's command runtime. */

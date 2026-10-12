@@ -73,6 +73,9 @@ function bench(accounts: WechatAccount[]) {
         get: () => undefined,
       }),
       saveCursor: async cursor => void saved.push(cursor),
+      // Defaults to "no persisted session", which is what these tests set up.
+      // A restart against an existing session has its own case below.
+      sessionExists: async () => false,
       executeNativeCommand: (line: string) => {
         const custom = b.executeNativeCommand
         if (custom !== undefined) return custom(line)
@@ -91,6 +94,61 @@ function bench(accounts: WechatAccount[]) {
 }
 
 describe('starting from a stored account', () => {
+  it('resumes a session that a previous run left on disk', async () => {
+    // The second live scan exposed this. A peer's session id is derived from the
+    // peer, so after any restart the id already has persisted state. The runtime
+    // never supplied `sessionExists`, so its default (`false`) made every restart
+    // call `create` for an id that already existed, and the registry rejected it:
+    //
+    //   SessionAlreadyExistsError: session "channel-wechat-…" already exists
+    //
+    // The message was then dropped and the cursor advanced past it, so every
+    // inbound message was lost for the life of the process - with the failure
+    // visible only through `ctx.logger`, which no profile exports.
+    const resumed: string[] = []
+    const created: string[] = []
+    let clock = 0
+    let rounds = 0
+
+    await startChannelFromStore({
+      listAccounts: async () => [account()],
+      api: {
+        async getUpdates() {
+          rounds += 1
+          return {
+            msgs: rounds === 1 ? [{ from_user_id: 'user-7', msgtype: 1, text_item: { text: 'hi' } }] : [],
+            get_updates_buf: `c${rounds}`,
+            longpolling_timeout_ms: undefined,
+          }
+        },
+        async sendText() {},
+      },
+      createRegistry: () => ({
+        async create({ sessionId }) {
+          created.push(sessionId)
+          // The registry rejects a create for an id that already has state, which
+          // is what the live run hit.
+          throw new Error(`SessionAlreadyExistsError: session "${sessionId}" already exists`)
+        },
+        async resume({ resumeSessionId }) {
+          resumed.push(resumeSessionId)
+          return { agent: { id: resumeSessionId, followup: () => {}, whenIdle: async () => {} }, dispose: async () => {} }
+        },
+        get: () => undefined,
+      }),
+      // The previous run left this peer's session on disk.
+      sessionExists: async () => true,
+      saveCursor: async () => {},
+      sleep: async (ms: number) => { clock += ms },
+      now: () => clock,
+      pollTimeoutMs: 1_000,
+      maxRunMs: 3_000,
+    })
+
+    expect(resumed).toEqual(['channel-wechat-user-7'])
+    expect(created).toEqual([])
+  })
+
   it('polls with the stored token and base URL', async () => {
     const b = bench([account()])
 

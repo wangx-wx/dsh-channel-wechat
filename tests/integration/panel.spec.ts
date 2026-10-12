@@ -59,6 +59,16 @@ function fakeConnection() {
   }
 }
 
+/**
+ * The bot id a live login actually returned.
+ *
+ * It starts with a digit and contains `@` and `.`, so it is not a legal
+ * credential key segment. Tests that used `bot-9` could not see the defect this
+ * pins: the id went into the key verbatim, `credentialKey` threw, and the scan
+ * stored nothing while the page reported success.
+ */
+const LIVE_ACCOUNT_ID = '6f773c2222a6@im.bot'
+
 /** A wire that reports `wait`, then `scaned`, then `confirmed`. */
 function stubWire() {
   let polls = 0
@@ -75,7 +85,7 @@ function stubWire() {
         return new Response(JSON.stringify({
           status: 'confirmed',
           bot_token: 'tok-1',
-          ilink_bot_id: 'bot-9',
+          ilink_bot_id: LIVE_ACCOUNT_ID,
           baseurl: 'https://api.test',
         }), { status: 200 })
       }
@@ -173,8 +183,8 @@ describe('the panel as the plugin wires it', () => {
     expect(qr.status).toBe(200)
     expect(qr.headers.get('content-type')).toContain('image/svg+xml')
 
-    await until(async () => (await loadAccount(ctx, 'bot-9')) !== undefined)
-    const stored = await loadAccount(ctx, 'bot-9')
+    await until(async () => (await loadAccount(ctx, LIVE_ACCOUNT_ID)) !== undefined)
+    const stored = await loadAccount(ctx, LIVE_ACCOUNT_ID)
     expect(stored?.botToken).toBe('tok-1')
     expect(stored?.baseUrl).toBe('https://api.test')
   })
