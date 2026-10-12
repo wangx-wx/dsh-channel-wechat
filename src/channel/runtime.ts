@@ -13,7 +13,7 @@ import type { WechatAccount } from '../credentials.ts'
 import type { AgentRegistryLike } from '../bridge/peer-map.ts'
 import type { MessageApi } from '../wechat/api.ts'
 import { LOGIN_BASE_URL } from '../wechat/login-runner.ts'
-import { Channel } from './channel.ts'
+import { Channel, type SessionEventsLike } from './channel.ts'
 
 /** Collaborators for one channel run. */
 export interface RuntimeOptions {
@@ -34,6 +34,17 @@ export interface RuntimeOptions {
    * accident.
    */
   sessionExists: (sessionId: string) => Promise<boolean>
+  /**
+   * The event surface the reply path subscribes to.
+   *
+   * Required, not optional: the model's answer is read from the durable
+   * `assistant/message` event, so a run without this subscription polls,
+   * receives, runs a turn, and sends nothing back. That failure is silent - the
+   * channel looks healthy while the user waits for an answer that has nowhere
+   * to go - which is exactly why it is a required parameter rather than a
+   * default.
+   */
+  sessionEvents: SessionEventsLike
   /** Persist the poll cursor. */
   saveCursor: (cursor: string) => Promise<void> | void
   /** Cursor from the previous run, so a restart resumes instead of replaying. */
@@ -121,9 +132,17 @@ export async function startChannelFromStore(options: RuntimeOptions): Promise<vo
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   })
 
+  // Subscribed before the loop starts: a poll that answered before the
+  // subscription existed would deliver into a run nothing is listening to.
+  const unsubscribe = channel.attach(options.sessionEvents)
+
   try {
     await channel.run()
   } finally {
+    // Released with the run that owns it. The context outlives the run, so
+    // leaving this to the context's own disposal would accumulate one listener
+    // per restart, each holding an already-stopped channel.
+    unsubscribe()
     // Sessions hold a registry slot and a write lease; leaving them behind
     // would make the next start fail on the same peer id.
     await channel.stop()

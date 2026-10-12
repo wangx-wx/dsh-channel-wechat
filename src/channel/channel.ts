@@ -23,6 +23,12 @@ import { runLocalCommand, type LocalCommandContext } from '../bridge/local-comma
 import { parseInboundMessage } from '../wechat/inbound.ts'
 import { monitorLoop, type MonitorResponse } from './monitor.ts'
 
+/** The event surface the reply path subscribes to. */
+export interface SessionEventsLike {
+  /** Subscribe to one committed session event. Returns the disposer. */
+  on: (event: 'session/event', listener: (session: { id: unknown }, event: unknown) => void) => () => void
+}
+
 /** Collaborators the channel needs. */
 export interface ChannelOptions {
   /** The agent registry. */
@@ -193,16 +199,22 @@ export class Channel {
   }
 
   /**
-   * Subscribe to committed session events on a context.
+   * Subscribe to committed session events.
    *
    * This is the production wiring: the reply path reads the durable
    * `assistant/message` event, so without this subscription the model's answer
-   * has no route back to WeChat. The subscription is released when the
-   * context's fiber disposes.
-   * @param ctx - the plugin context carrying the session service.
+   * has no route back to WeChat.
+   *
+   * Returns a disposer rather than relying on the context's own lifetime,
+   * because the two differ: a `Channel` is built per run, while the context it
+   * subscribes on outlives every run. Relying on the context would leave one
+   * listener behind per restart, each holding a channel that has already been
+   * stopped.
+   * @param events - the event surface to subscribe on.
+   * @returns a disposer that unsubscribes.
    */
-  attach(ctx: { on: (event: 'session/event', listener: (session: { id: unknown }, event: unknown) => void) => unknown }): void {
-    ctx.on('session/event', (session, event) => { this.onSessionEvent(String(session.id), event) })
+  attach(events: SessionEventsLike): () => void {
+    return events.on('session/event', (session, event) => { this.onSessionEvent(String(session.id), event) })
   }
 
   /**

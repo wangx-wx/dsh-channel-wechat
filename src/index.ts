@@ -194,6 +194,11 @@ async function runChannel(ctx: Context, signal: AbortSignal): Promise<void> {
     // exists", calls `create` for an id that does, and the registry rejects it -
     // dropping every inbound message for the life of the process.
     sessionExists: sessionExistsOf(ctx),
+    // The model's answer is read from the durable `assistant/message` event, so
+    // a run that does not subscribe here answers into nothing. No test that
+    // calls `Channel.attach` itself can see that - only the production wiring
+    // subscribing is the thing being asserted.
+    sessionEvents: ctx,
     // Resolved before the run so a restart resumes where the last one stopped
     // rather than replaying the conversation it already answered.
     ...(account === undefined ? {} : { initialCursor: await cursors.load(account.accountId) }),

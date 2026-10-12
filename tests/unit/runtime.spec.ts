@@ -9,6 +9,7 @@
  * The poll and the send are injected, so this is verified without a network.
  */
 
+import type { SessionId } from '@deepseek-ai/dsh-session'
 import { describe, expect, it } from 'vitest'
 import { startChannelFromStore } from '../../src/channel/runtime.ts'
 import type { WechatAccount } from '../../src/credentials.ts'
@@ -18,6 +19,9 @@ function account(overrides: Partial<WechatAccount> = {}): WechatAccount {
   return { botToken: 'tok-1', accountId: 'bot-9', baseUrl: 'https://api.test', ...overrides }
 }
 
+/** The text the scripted model answers with. */
+const MODEL_ANSWER = 'hello from the model'
+
 /** What one start observed. */
 function bench(accounts: WechatAccount[]) {
   const polls: { baseUrl: string; token: string; cursor: string | undefined }[] = []
@@ -25,6 +29,16 @@ function bench(accounts: WechatAccount[]) {
   const saved: string[] = []
   let clock = 0
   let pollsDone = 0
+  /**
+   * The listener the runtime subscribed with, when it subscribed at all.
+   *
+   * Left `undefined` by a runtime that never subscribes, which is the defect
+   * this bench exists to see: the model answers, and nothing carries the answer
+   * back out.
+   */
+  let sessionEvents: ((session: { id: unknown }, event: unknown) => void) | undefined
+  /** Sessions the fake registry currently holds, as the real one does. */
+  const live = new Map<string, { readonly id: SessionId }>()
   const messages: unknown[] = []
   const disposed: string[] = []
 
@@ -60,18 +74,40 @@ function bench(accounts: WechatAccount[]) {
       },
       createRegistry: () => ({
         async create({ sessionId }) {
-          return {
+          const handle = {
             agent: {
               id: sessionId,
               followup: () => {},
-              whenIdle: async () => {},
+              // The answer is committed while the turn is still in flight,
+              // which is when the reply path reads it.
+              whenIdle: async () => {
+                sessionEvents?.(
+                  { id: sessionId },
+                  { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: MODEL_ANSWER }] } } },
+                )
+              },
             },
             dispose: async () => void disposed.push(sessionId),
           }
+          // Reported live, as the real registry does after `create` resolves.
+          // `require` refuses to deliver to a session the registry does not
+          // know, so a `get` that always answered `undefined` would make every
+          // delivery throw before the agent ever saw the message.
+          live.set(sessionId, handle.agent)
+          return handle
         },
         async resume() { throw new Error('no persisted session') },
-        get: () => undefined,
+        get: (id: string) => live.get(id),
       }),
+      // Where the plugin hands over its session-event subscription. The reply
+      // path reads the durable `assistant/message` event, so a run that never
+      // subscribes sends nothing back.
+      sessionEvents: {
+        on: (_event: 'session/event', listener: (session: { id: unknown }, event: unknown) => void) => {
+          sessionEvents = listener
+          return () => { sessionEvents = undefined }
+        },
+      },
       saveCursor: async cursor => void saved.push(cursor),
       // Defaults to "no persisted session", which is what these tests set up.
       // A restart against an existing session has its own case below.
@@ -136,6 +172,8 @@ describe('starting from a stored account', () => {
         },
         get: () => undefined,
       }),
+      // No turn runs in this case, so nothing needs to answer.
+      sessionEvents: { on: () => () => {} },
       // The previous run left this peer's session on disk.
       sessionExists: async () => true,
       saveCursor: async () => {},
@@ -198,6 +236,24 @@ describe('starting from a stored account', () => {
     await b.run()
 
     expect(b.polls).toEqual([])
+  })
+})
+
+describe('the reply path', () => {
+  it('sends the model\'s answer back to WeChat', async () => {
+    // The whole point of the channel: an answer the user never receives is the
+    // same as no answer. The production run has to take the subscription the
+    // reply is read from - `attach` existing is not the same as `attach` being
+    // called, and a test that calls it itself cannot tell the difference.
+    const b = bench([account()])
+    b.messages.push({
+      message_id: 1, from_user_id: 'user-7', message_type: 1,
+      item_list: [{ type: 1, text_item: { text: 'hi' } }],
+    })
+
+    await b.run()
+
+    expect(b.sent.map(entry => entry.text)).toContain(MODEL_ANSWER)
   })
 })
 
