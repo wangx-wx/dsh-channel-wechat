@@ -70,6 +70,14 @@ function sessionFor(...args: Parameters<typeof createLoginSession>) {
   return session
 }
 
+/**
+ * A sleep that yields to the event loop without waiting in real time.
+ *
+ * A bare `async () => {}` lets the runner spin without yielding, so a mutant that
+ * loops forever starves the test and hangs the suite instead of failing it.
+ */
+const yieldSleep = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0))
+
 /** Poll until a condition holds, for work that happens before the first sleep. */
 async function until(check: () => boolean, timeoutMs = 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
@@ -135,6 +143,49 @@ describe('a login attempt the panel watches', () => {
     // the protocol accepts it.
     expect(gets.some(endpoint => endpoint.includes('verify_code=1234'))).toBe(true)
     expect(session.snapshot().phase).toBe('connected')
+  })
+
+  it('never polls again once the attempt is stopped', async () => {
+    // `stop` runs from the fiber's disposer while the runner may be parked on
+    // the verify-code handoff, which has no timer of its own: released with
+    // whatever is at hand, the runner would carry on and poll as if the user had
+    // answered. An empty code is worse than none, because the server counts it
+    // as a wrong one and spends the retry budget.
+    const { api, gets } = scriptedApi([{ status: 'need_verifycode' }, { status: 'wait' }])
+    // A sleep that resolves, so a runner that continues really does poll again.
+    const session = sessionFor({ api, onConnected: () => {}, sleep: yieldSleep })
+
+    session.start()
+    await until(() => session.snapshot().phase === 'need-verifycode')
+    const pollsBeforeStop = gets.length
+
+    session.stop()
+    // Let a runner that was released run: it polls once per iteration, so a few
+    // turns are enough for a leak to show up.
+    for (let turn = 0; turn < 10; turn += 1) await yieldSleep()
+
+    expect(gets).toHaveLength(pollsBeforeStop)
+    expect(gets.some(endpoint => /[?&]verify_code=/u.test(endpoint))).toBe(false)
+  })
+
+  it('can start a new attempt after one was stopped mid-challenge', async () => {
+    // The reason the handoff has to be settled rather than merely abandoned. A
+    // runner left parked on it never reaches its own end, so `started` stays
+    // true, every later `begin` is a no-op, and the panel is dead until DSH
+    // restarts - which is the thing this panel exists to avoid.
+    const { api } = scriptedApi([{ status: 'need_verifycode' }])
+    const session = sessionFor({ api, onConnected: () => {}, sleep: yieldSleep })
+
+    session.start()
+    await until(() => session.snapshot().phase === 'need-verifycode')
+    session.stop()
+    // Let the stopped runner settle whatever it was parked on and reach its end.
+    for (let turn = 0; turn < 10; turn += 1) await yieldSleep()
+
+    session.start()
+    await until(() => session.snapshot().phase !== 'idle')
+
+    expect(session.snapshot().phase).toBe('waiting')
   })
 
   it('passes the confirmed credentials to its owner', async () => {

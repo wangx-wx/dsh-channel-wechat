@@ -78,7 +78,7 @@ export function createLoginSession(options: LoginSessionOptions): LoginSession {
   let stopped = false
   /** Resolves the pending verify-code await; buffered when none is parked. */
   let pendingCode: string | undefined
-  let releaseVerifyCode: ((code: string) => void) | undefined
+  let releaseVerifyCode: { resolve: (code: string) => void; reject: (error: unknown) => void } | undefined
 
   /** Reject the runner's sleep so a stopped attempt unwinds. */
   const stoppedError = new Error('login stopped')
@@ -116,7 +116,7 @@ export function createLoginSession(options: LoginSessionOptions): LoginSession {
       pendingCode = undefined
       return Promise.resolve(code)
     }
-    return new Promise<string>(resolve => { releaseVerifyCode = resolve })
+    return new Promise<string>((resolve, reject) => { releaseVerifyCode = { resolve, reject } })
   }
 
   /**
@@ -143,7 +143,17 @@ export function createLoginSession(options: LoginSessionOptions): LoginSession {
   return {
     start(): void {
       if (started) return
+      // A second attempt is allowed only after one has ended. A QR expires once
+      // its refresh budget is spent, and restarting DSH to retry is exactly what
+      // this panel exists to avoid; but a retry after success would replace a
+      // working login, so `connected` is terminal.
+      if (state.phase === 'connected' || state.phase === 'already-connected') return
       started = true
+      // Reset the per-attempt parkings: a previous attempt ended while holding
+      // one of them, and reusing it would hand the new run the old answer.
+      pendingCode = undefined
+      releaseVerifyCode = undefined
+      state = { phase: 'idle' }
 
       // Detached: an attempt runs for minutes while its requests come and go, so
       // awaiting it here would park the caller that merely began it.
@@ -165,6 +175,9 @@ export function createLoginSession(options: LoginSessionOptions): LoginSession {
         promptForVerifyCode: () => waitForVerifyCode(),
       })
         .then(result => {
+          // The run is over either way, so a later `start` may begin a fresh
+          // attempt; the phase decides whether it should.
+          started = false
           if (result.kind === 'connected') {
             // The owner stores the credentials; the phase already says connected
             // because the page must not wait on a write to stop showing the QR.
@@ -175,6 +188,7 @@ export function createLoginSession(options: LoginSessionOptions): LoginSession {
         .catch(() => {
           // A stop unwinds the runner through its sleep; only a stop is expected
           // here, so it must not be reported as a failed login.
+          started = false
           if (!stopped) state = { ...state, phase: 'failed', message: '登录流程意外中断。' }
         })
     },
@@ -192,13 +206,18 @@ export function createLoginSession(options: LoginSessionOptions): LoginSession {
         pendingCode = code
         return
       }
-      release(code)
+      release.resolve(code)
     },
 
     stop(): void {
       stopped = true
-      // Release both parkings: the sleep between polls, and a verify-code await.
-      releaseVerifyCode?.('')
+      // Settle the verify-code handoff by rejecting it. `stop` runs from the
+      // fiber's disposer while the runner may be parked here with no timer of
+      // its own, so leaving it pending would leak the attempt past the plugin
+      // that owns it. Rejecting rather than resolving with an empty string keeps
+      // an empty code out of the state: the server counts one as a wrong code,
+      // and it would spend the retry budget.
+      releaseVerifyCode?.reject(stoppedError)
       releaseVerifyCode = undefined
     },
   }
