@@ -198,12 +198,12 @@ ctx.on('approval/request', handler, { prepend: true })   // 必须 prepend + 不
 | 阶段 | 交付 | 验收 |
 |---|---|---|
 | **M0 骨架** ✅ | 包结构 + 插件骨架 + 真组合测试跑通 | ~~日志有插件名~~ → **cordis fiber 达到 ACTIVE**（见下方修订） |
-| **M1 登录** ✅ | 协议移植改为全新写（见下方修订）+ `startup.ts` + 凭证进 `ctx.credentials` | `dsh <profile> login` 扫码成功，重启免登录 |
+| **M1 登录** ⚠️ | 协议移植改为全新写（见下方修订）+ `startup.ts` + 凭证进 `ctx.credentials` | ~~`dsh <profile> login` 扫码成功~~ → **改为 M6 面板登录**（见下方修订），CLI 仅在不挂 web app 的 profile 可用 |
 | **M2 文本端到端** ✅ | `api` 消息方法 + monitor + peer-map + dispatcher + reply + runtime | 微信发「hi」→ DSH 回复到达 |
 | **M3 命令** ✅ | `ctx.commands` 透传 + 6 个自管命令 + `/stop` | `/goal off` 有原生回执；`/stop` 能中断正在跑的任务 |
 | **M4 媒体** | 移植 `cdn`/`media` + 图片/文件/语音/视频双向 + 引用 | 发图能理解；产出文件能收到 |
 | **M5 审批卡** | waterfall 监听 + 卡片渲染 + 竞速 + fork signal | 微信能批准/拒绝；GUI 卡同步消失 |
-| **M6 面板** | 客户端插件 + 构建管线 + 设置页卡片 | web 与桌面端都看到卡片；登录态/映射/日志正确 |
+| **M6 面板** 🔶 | S1 二维码 ✅ S2 登录会话 ✅ S3 页面与 API ✅ S4 扫码即启动 ✅ S5 接线 ✅；设置页卡片待做 | web 端登录页可用（已实测）；设置页卡片待做 |
 | **M7 发布** | README 双语 + LICENSE + npm 发布 | `dsh plugin add dsh-channel-wechat` 一条命令装好 |
 
 **M2 是第一个真实闭环**，也是「集成契约是否正确」的验证点——协议层移植量最大，但风险最高的是全新写的集成层。
@@ -302,6 +302,69 @@ S6 真组合接线 → 收口（API 消息方法 + 运行时 + cursor 持久化�
 - 本机 npm/pnpm 默认 cache 不可写（EPERM）→ 用 `pnpm-workspace.yaml` 的 `storeDir: .pnpm-store`。
   ⚠️ **不是** `.npmrc` 的 `store-dir`——pnpm 11 静默忽略后者（实测：改成绝对路径/任意值，
   `pnpm store path` 均不变），早期记录此处有误，已更正。
+
+### ★ M1 验收标准修订（2026-10-11）
+
+**原验收「`dsh <profile> login` 扫码成功」在挂了 web app 的 profile 上不可能成立。**
+
+机制（`app.asar` 内源码 + 真实 launcher 实测）：`dsh-cmdline` 把**同一份完整参数列表**
+交给 profile 里**每个** app，各自解析。`dsh-web-app/lib/startup.js` 的 program **只声明
+flag、没有 positional**，commander 因此报 `too many arguments`，`parseCmdline` 捕获后
+`exit(1)`——**boot 在到达本插件前结束**。
+
+穷举实测（均失败）：`login`、`-- login`、`--json`（本插件自己的 flag）、`--wechat-login`、
+`wechat-login`；**把本插件的 bundle 排到 web-app 之前也无用**（不是顺序问题）。
+官方 5 个解析 cmdline 的 app 中**没有一个**开 `allowUnknownOption`，只有 `dsh-headless`
+声明 positional——即 DSH **刻意**如此设计。
+
+两个同类插件都不走这条路：`dsh-wechat` **无 CLI**（只做 `webServer` HTTP 页面 + 设置页）；
+`dsh-weixin` 的 CLI 是**独立 bin**（`dsh-weixin-login`），README 标注「可选」，面板才是首选。
+
+→ **修订**：登录入口改为 **M6 面板**；CLI 保留但在挂 web app 的 profile 上不可用，
+README 需写明原因。`startup.ts` 仍保留 `allowUnknownOption()`/`allowExcessArguments()`：
+不修则**桌面端整个 app 起不来**（宿主 `ctx.effect` 落在已失效 context →
+`DesktopHostFatalError: cannot create effect on inactive context`）。
+
+### ★ 面板安全边界（实测，2026-10-11）
+
+`ctx.webServer.register()` 注册的路由**不受 token 保护**：
+
+| 路由 | 无 cookie |
+|---|---|
+| `/`（GUI 自身） | **401** |
+| 插件注册的裸路由 | **200，直出内容** |
+
+这正是 recon/07 记录 `dsh-weixin`「没有鉴权」的机制根源——**不是作者疏忽，是该 seam
+本身不带鉴权**；`dsh-wechat` 的 `/wechat/qr`、`/wechat/status` 同样裸奔。
+
+**带鉴权的替代 seam**：`ctx.connection.fetch.register({ path: '/api/...', methods: [...],
+requestBody: 'buffered', fetch })`——必须挂在 `/api/*` 下。实测无 cookie **401**、
+带 cookie **200**（复用 GUI 已有的 token+cookie 墙，无需自写鉴权）。
+故本插件全部面板路由走 `/api/channel-wechat/*`。
+
+### M6 完成记录（2026-10-11）
+
+`start` 分 5 次提交：S1 二维码 → S2 登录会话 → S3 页面与 API → S4 扫码即启动 → S5 接线。
+
+**测试**：273 个，全部经变异验证（4 个变异记录为等价变异，见提交信息）。
+
+**在真实隔离 web profile 上实测发现并修复 2 个单测看不见的缺陷**：
+
+| 缺陷 | 表现 |
+|---|---|
+| **`connection` 在 `apply` 时不存在** | 路由注册到 `undefined`，页面全部 404；而无 cookie 仍正确返回 401，所以**看起来是好的** |
+| **URL 只打印相对路径** | 无 scheme/host/port，用户无法粘贴；`--port 0` 时端口只有服务知道 |
+
+第一个缺陷与 `dsh-wechat` 源码注释里记录的是同一个问题。修复用**条件注入**
+（`ctx.inject(['connection'], ...)`）而非写进 `inject`——后者会在 headless profile 上
+把整个插件**挂起**（静默失效）。
+
+**第二个缺陷的测试教训**：集成测试最初**先提供 `connection` 再挂载插件**，
+因此该变异「全部通过」；改成**后提供**（真实 profile 的顺序）后，同一变异
+**3 个测试全失败**——测试的时序与真实环境不一致时，它会替缺陷打掩护。
+
+**同时记录的技术债**：`await ctx.inject(...)` 的 `await` **无测试覆盖**
+（去掉后测试仍全过），保留是为显式表达顺序，而非有可观测差异。
 
 
 ## 7. 已知风险与技术债
