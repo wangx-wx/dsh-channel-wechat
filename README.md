@@ -95,6 +95,15 @@ pnpm build
 
 集成测试会在临时目录建一个隔离的 `DSH_HOME`，**不会触碰你正在使用的 dsh profile**。
 
+它们需要一个真实的 launcher 来启动，默认用**本地 DSH 仓库**（走
+`node apps/cli/lib/bin.js`，不需要 Electron，可指向任意版本）：
+
+```bash
+DSH_CHECKOUT=/path/to/deepseek-harness pnpm test:integration  # 覆盖仓库位置
+```
+
+若该仓库不存在，则回退到 `DeepSeek Harness.app` 内的 `dsh` shim。
+
 ## 不做的事
 
 群聊（协议无依据）、多账号运行期、消息去重/节流（对齐官方）、提问卡（v2）、主动推送（v2）、自建权限体系。
