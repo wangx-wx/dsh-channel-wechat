@@ -19,6 +19,7 @@ import { createNativeCommandExecutor, createNativeCommandLister, type CommandRun
 import { CursorStore } from './channel/cursor-store.ts'
 import { createSingleRun, type SingleRun } from './channel/single-run.ts'
 import { mountPanelRoutes, panelUrl } from './channel/mount.ts'
+import { createReporter } from './channel/report.ts'
 import { createPanel } from './channel/panel.ts'
 import { startChannelFromStore } from './channel/runtime.ts'
 
@@ -177,6 +178,7 @@ const runs = new WeakMap<Context, SingleRun>()
  * @param signal - aborted when this run is replaced or the plugin unloads.
  */
 async function runChannel(ctx: Context, signal: AbortSignal): Promise<void> {
+  const report = createReporter({ logger: ctx.logger(name) })
   // One account in v1, so one cursor; the store is per-account for the
   // multi-account release the data structures already allow.
   const cursors = new CursorStore()
@@ -207,9 +209,11 @@ async function runChannel(ctx: Context, signal: AbortSignal): Promise<void> {
       commands: commandsOf(ctx),
       agentFor: peerId => agentFor(ctx, peerId),
     }),
-    onStarted: accountId => { ctx.logger(name).info('polling as %s', accountId) },
-    onMessageError: (error, _message) => { ctx.logger(name).warn('inbound message failed: %s', String(error)) },
-    onReplyError: (error, peerId) => { ctx.logger(name).warn('reply to %s failed: %s', peerId, String(error)) },
+    onStarted: accountId => { report('polling as', accountId) },
+    // These two are the ones that hid a live defect: every restart rejected the
+    // session create and reported it here, where nothing could read it.
+    onMessageError: (error, _message) => { report('inbound message failed', error) },
+    onReplyError: (error, peerId) => { report(`reply to ${peerId} failed`, error) },
     signal,
   })
 }
