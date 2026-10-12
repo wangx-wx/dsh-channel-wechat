@@ -10,3 +10,15 @@
       name: dsh-channel-wechat/startup
     - id: channel-wechat
       name: dsh-channel-wechat
+      config:
+        # The working directory every session this channel creates records.
+        #
+        # Required, and deliberately not defaulted in code: a session's `cwd` is
+        # immutable once written, so a silent default would be recorded into
+        # sessions that can never be moved. The system prompt's `{{cwd}}` reads
+        # it, and a prompt variable with no value fails the turn before the
+        # provider is called - a user-visible "message sent, no reply".
+        #
+        # `process.cwd()` is the launcher's own directory, which is what the
+        # shipped headless runner resolves by default.
+        cwd: !!js process.cwd()

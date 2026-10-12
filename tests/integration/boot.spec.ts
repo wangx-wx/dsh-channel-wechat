@@ -57,7 +57,7 @@ describe('plugin mounts in a real cordis context', () => {
     ctx.provide('agentDefaultModel', {
       currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
     })
-    const fiber = ctx.plugin(module)
+    const fiber = ctx.plugin(module, { cwd: '/work' })
     await fiber
 
     // PENDING here would mean an `inject` entry has no provider: the plugin is
@@ -72,7 +72,7 @@ describe('plugin mounts in a real cordis context', () => {
     // both sides of the boundary are pinned rather than only the happy one.
     const module = await import(builtEntry())
     ctx = new Context()
-    const fiber = ctx.plugin(module)
+    const fiber = ctx.plugin(module, { cwd: '/work' })
     await fiber
 
     expect(fiber.state).toBe(FIBER_STATE.PENDING)

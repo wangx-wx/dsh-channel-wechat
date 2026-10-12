@@ -9,7 +9,9 @@
  * @module dsh-channel-wechat
  */
 
+import { isAbsolute } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
+import z from '@deepseek-ai/schemastery'
 // Type-only, for the `ctx.agentDefaultModel` declaration it merges into
 // `Context`. The service is provided by the profile, not by this plugin, so
 // nothing is imported at runtime.
@@ -29,6 +31,28 @@ import { startChannelFromStore } from './channel/runtime.ts'
 
 /** Plugin name reported in boot audits and `pending (waiting for service: …)` lines. */
 export const name = 'channel-wechat'
+
+/**
+ * Plugin configuration.
+ *
+ * `cwd` is required and has no default on purpose. A session's working
+ * directory is immutable once recorded, and the web app's system prompt reads
+ * it through `{{cwd}}`; a prompt variable with no value fails the turn before
+ * the provider is called. Defaulting it would hide a deployment mistake behind
+ * a directory the operator never chose, and (worse) silently record that
+ * directory into sessions that cannot be moved afterwards.
+ */
+export interface Config {
+  /** Absolute working directory every session this plugin creates records. */
+  cwd: string
+}
+
+/** Runtime schema for {@link Config}; `cwd` must be an absolute path. */
+export const Config: z<Config> = z.object({
+  // Absolute on purpose: the session boundary rejects a relative `cwd`, and
+  // failing at the profile boundary names the offending value.
+  cwd: z.string().required(),
+})
 
 /**
  * Host services this plugin needs. `wechatStartup` is the parsed invocation,
@@ -53,19 +77,26 @@ export const inject = ['wechatStartup', 'credentials', 'agents', 'commands', 'ag
  * Act on the invocation the startup row parsed.
  * @param ctx - the plugin's cordis context.
  */
-export function apply(ctx: Context): void {
+export function apply(ctx: Context, config: Config): void {
   const startup = ctx.get(WECHAT_STARTUP_SERVICE) as WechatStartupValues | undefined
   if (startup === undefined) return
+
+  // Validated here rather than trusted from the schema, because a profile can
+  // supply an absolute-looking value that the session boundary would still
+  // reject later, once the failure is far from its cause.
+  if (!isAbsolute(config.cwd)) {
+    throw new Error(`channel-wechat: cwd must be an absolute path, got ${JSON.stringify(config.cwd)}`)
+  }
 
   // An ordinary start begins polling as whatever account the login action
   // stored; exiting here would kill the server the user asked for.
   if (startup.action === 'none') {
     // Synchronous: the run is launched detached inside, because awaiting a loop
     // that runs until shutdown would block the rest of boot.
-    startChannel(ctx)
+    startChannel(ctx, config)
     // Detached for the same reason: it waits for a service that arrives later in
     // the boot, and the tree must not be held open on that.
-    void mountLoginPanel(ctx)
+    void mountLoginPanel(ctx, config)
     return
   }
 
@@ -110,14 +141,14 @@ export function apply(ctx: Context): void {
  *
  * @param ctx - the plugin's cordis context.
  */
-async function mountLoginPanel(ctx: Context): Promise<void> {
+async function mountLoginPanel(ctx: Context, config: Config): Promise<void> {
   await mountPanelRoutes(ctx, () => createPanel({
     api: createApiClient(),
     saveAccount: account => saveAccount(ctx, account),
     // The channel reads the store as it starts, so this runs after the write;
     // the panel owns that ordering. A start that beat the write would poll as
     // the previous account or as none.
-    startChannel: () => startChannel(ctx, { force: true }),
+    startChannel: () => startChannel(ctx, config, { force: true }),
     onError: (error: unknown) => { ctx.logger(name).warn('login panel failed to connect: %s', String(error)) },
   }))
 
@@ -145,8 +176,8 @@ async function mountLoginPanel(ctx: Context): Promise<void> {
  * @param options - `force` ends a live run and replaces it, which is what the
  *   panel needs when it connects an account the boot never saw.
  */
-function startChannel(ctx: Context, options: { force?: boolean } = {}): void {
-  const run = channelRun(ctx)
+function startChannel(ctx: Context, config: Config, options: { force?: boolean } = {}): void {
+  const run = channelRun(ctx, config)
   run.start(options.force === true ? { force: true } : {})
 }
 
@@ -158,7 +189,7 @@ function startChannel(ctx: Context, options: { force?: boolean } = {}): void {
  * @param ctx - the plugin's cordis context.
  * @returns the run owner for this context.
  */
-function channelRun(ctx: Context): SingleRun {
+function channelRun(ctx: Context, config: Config): SingleRun {
   const existing = runs.get(ctx)
   if (existing !== undefined) return existing
 
@@ -167,7 +198,7 @@ function channelRun(ctx: Context): SingleRun {
     // is detached because the loop runs until shutdown, so an unhandled
     // rejection would surface as a process-level warning instead of a log line.
     launch: signal => {
-      void runChannel(ctx, signal).catch((error: unknown) => {
+      void runChannel(ctx, config, signal).catch((error: unknown) => {
         ctx.logger(name).warn('channel stopped: %s', String(error))
       })
     },
@@ -191,7 +222,7 @@ const runs = new WeakMap<Context, SingleRun>()
  * @param ctx - the plugin's cordis context.
  * @param signal - aborted when this run is replaced or the plugin unloads.
  */
-async function runChannel(ctx: Context, signal: AbortSignal): Promise<void> {
+async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Promise<void> {
   const report = createReporter({ logger: ctx.logger(name) })
   // One account in v1, so one cursor; the store is per-account for the
   // multi-account release the data structures already allow.
@@ -217,6 +248,10 @@ async function runChannel(ctx: Context, signal: AbortSignal): Promise<void> {
     // default of its own, so a session created without this has no model at all
     // and the first turn fails on the system prompt's `{{model}}` reference.
     sessionOptions: modelSelectionOf(ctx),
+    // Recorded on every session this run creates. The web app's system prompt
+    // reads it through `{{cwd}}`, and a session header cannot be edited later, so
+    // a session created without one fails every turn for its whole life.
+    cwd: config.cwd,
     // Resolved before the run so a restart resumes where the last one stopped
     // rather than replaying the conversation it already answered.
     ...(account === undefined ? {} : { initialCursor: await cursors.load(account.accountId) }),

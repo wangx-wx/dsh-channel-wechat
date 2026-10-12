@@ -112,6 +112,7 @@ function bench(accounts: WechatAccount[]) {
       // Defaults to "no persisted session", which is what these tests set up.
       // A restart against an existing session has its own case below.
       sessionExists: async () => false,
+      cwd: '/work',
       executeNativeCommand: (line: string) => {
         const custom = b.executeNativeCommand
         if (custom !== undefined) return custom(line)
@@ -176,6 +177,7 @@ describe('starting from a stored account', () => {
       sessionEvents: { on: () => () => {} },
       // The previous run left this peer's session on disk.
       sessionExists: async () => true,
+      cwd: '/work',
       saveCursor: async () => {},
       sleep: async (ms: number) => { clock += ms },
       now: () => clock,

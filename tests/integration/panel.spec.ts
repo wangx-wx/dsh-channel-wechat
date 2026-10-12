@@ -136,7 +136,7 @@ async function bootWithPanel() {
   ctx.provide('agentDefaultModel', {
     currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
   })
-  await ctx.plugin({ name: 'channel-wechat', inject: [...channelInject], apply: applyChannel })
+  await ctx.plugin({ name: 'channel-wechat', inject: [...channelInject], apply: applyChannel }, { cwd: '/work' })
 
   // The host's own rows publish here, after this plugin is already active.
   ctx.provide('connection', service)

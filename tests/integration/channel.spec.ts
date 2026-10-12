@@ -89,7 +89,7 @@ async function bootProfile(args: string[], status: Record<string, unknown>): Pro
   } as never)
   await ctx.plugin(CredentialsLocal as never, {} as never)
   await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
-  await ctx.plugin({ name: 'channel-wechat', inject: ['wechatStartup', 'credentials'], apply: applyChannel })
+  await ctx.plugin({ name: 'channel-wechat', inject: ['wechatStartup', 'credentials'], apply: applyChannel }, { cwd: '/work' })
 
   const accountId = typeof status['ilink_bot_id'] === 'string' ? status['ilink_bot_id'] : undefined
   const booted: Booted = {
@@ -231,7 +231,7 @@ describe('a profile boot with the login action', () => {
       name: 'channel-wechat',
       inject: ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'],
       apply: applyChannel,
-    })
+    }, { cwd: '/work' })
 
     try {
       await until(async () => sentTexts.length > 0, 3_000)
@@ -309,7 +309,7 @@ describe('a profile boot with the login action', () => {
       name: 'channel-wechat',
       inject: ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'],
       apply: applyChannel,
-    })
+    }, { cwd: '/work' })
 
     try {
       await until(async () => asked.length > 0, 3_000)
@@ -320,6 +320,77 @@ describe('a profile boot with the login action', () => {
     }
 
     expect(asked[0]).toEqual({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' })
+  }, 30_000)
+
+  it('records the configured working directory on a new session', async () => {
+    // The system prompt's `{{cwd}}` reads the session header, and a header
+    // cannot be edited after creation - so a session created without one fails
+    // every turn for its whole life, with the failure surfacing as "the user
+    // sent a message and got nothing".
+    //
+    // Asserted through the real `apply`, because the real-loop suite builds its
+    // own `Channel` and passes `cwd` itself: it proves the plumbing works while
+    // saying nothing about whether `index.ts` supplies the profile's value.
+    const previous = process.env['DSH_HOME']
+    const home = tempHome('dsh-wechat-cwd-')
+    process.env['DSH_HOME'] = home
+
+    const asked: { cwd?: string }[] = []
+    const live = new Map<string, unknown>()
+    let polls = 0
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes('getupdates')) {
+        polls += 1
+        return new Response(JSON.stringify({
+          ret: 0,
+          msgs: polls === 1
+            ? [{
+              message_id: 1, from_user_id: 'user-7', message_type: 1,
+              item_list: [{ type: 1, text_item: { text: 'hi' } }],
+            }]
+            : [],
+          get_updates_buf: `c${polls}`,
+        }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ ret: 0 }), { status: 200 })
+    }) as unknown as typeof fetch)
+
+    const ctx = new Context()
+    provideCmdline(ctx, { args: [], exit: () => {}, ready: { commit() {}, await: async () => {} } } as never)
+    await ctx.plugin(CredentialsLocal as never, {} as never)
+    await ctx.plugin(CommandRuntime)
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
+    })
+    ctx.provide('agents', {
+      async create({ sessionId, meta }: { sessionId: string; meta?: { cwd?: string } }) {
+        asked.push(meta ?? {})
+        const agent = { id: sessionId, followup: () => {}, whenIdle: async () => {} }
+        live.set(sessionId, agent)
+        return { agent, dispose: async () => void live.delete(sessionId) }
+      },
+      async resume() { throw new Error('no persisted session') },
+      get: (id: string) => live.get(id),
+    })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
+    // The profile supplies the directory; the plugin must record it.
+    await ctx.plugin({
+      name: 'channel-wechat',
+      inject: ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'],
+      apply: applyChannel,
+    }, { cwd: '/work' })
+
+    try {
+      await until(async () => asked.length > 0, 3_000)
+    } finally {
+      await ctx.fiber.dispose()
+      if (previous === undefined) delete process.env['DSH_HOME']
+      else process.env['DSH_HOME'] = previous
+    }
+
+    expect(asked[0]).toEqual({ cwd: '/work' })
   }, 30_000)
 
   it('resumes a session a previous run left behind instead of recreating it', async () => {
@@ -394,7 +465,7 @@ describe('a profile boot with the login action', () => {
       name: 'channel-wechat',
       inject: ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'],
       apply: applyChannel,
-    })
+    }, { cwd: '/work' })
 
     try {
       // The resumed handle appears once the message is delivered, which is the
@@ -459,7 +530,7 @@ describe('a profile boot with no action', () => {
     })
     await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
     await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
-    await ctx.plugin({ name: 'channel-wechat', inject: ['wechatStartup', 'credentials', 'agents'], apply: applyChannel })
+    await ctx.plugin({ name: 'channel-wechat', inject: ['wechatStartup', 'credentials', 'agents'], apply: applyChannel }, { cwd: '/work' })
 
     // The loop runs detached, so give it a moment to issue its first poll.
     await new Promise(resolve => setTimeout(resolve, 150))

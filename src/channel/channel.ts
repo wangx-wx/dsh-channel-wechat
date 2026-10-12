@@ -77,6 +77,14 @@ export interface ChannelOptions {
    * channel plugin cannot assume is set up for it.
    */
   sessionOptions?: { provider: string; model: string }
+  /**
+   * Working directory every session this channel creates records.
+   *
+   * Creation-only, because the value is immutable once written into a session
+   * header. The system prompt's `{{cwd}}` reads it, so a session created without
+   * one fails its first turn.
+   */
+  cwd?: string
 }
 
 /**
@@ -118,6 +126,7 @@ export class Channel {
       ...(options.sessionExists === undefined ? {} : {
         sessionExists: async sessionId => options.sessionExists?.(String(sessionId)) ?? false,
       }),
+      ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
     })
     this.replies = new ReplyQueue({
       send: options.send,

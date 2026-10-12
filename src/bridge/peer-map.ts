@@ -26,7 +26,20 @@ export const SESSION_ID_PREFIX = 'channel-wechat-'
 /** The slice of `ctx.agents` this map uses. */
 export interface AgentRegistryLike {
   /** Create and start a new agent for one session id. */
-  create(options: { sessionId: SessionId; agentOptions?: { provider?: string; model?: string }; signal?: AbortSignal }): Promise<AgentHandleLike>
+  create(options: {
+    sessionId: SessionId
+    agentOptions?: { provider?: string; model?: string }
+    /**
+     * Durable session metadata.
+     *
+     * `cwd` is not decorative: the system prompt's `{{cwd}}` variable reads it,
+     * and a prompt variable with no value fails the turn before the provider is
+     * called. It is also immutable once written, so a session created without
+     * one can never gain it - only a new session can.
+     */
+    meta?: { cwd?: string }
+    signal?: AbortSignal
+  }): Promise<AgentHandleLike>
   /** Load a persisted session and start an agent on it. */
   resume(options: { resumeSessionId: SessionId; agentOptions?: { provider?: string; model?: string } }): Promise<AgentHandleLike>
   /** The live agent for one session id, if any. */
@@ -49,6 +62,14 @@ export interface PeerMapOptions {
   sessionExists?: (sessionId: SessionId) => Promise<boolean>
   /** Provider and model every session this map creates or resumes selects. */
   sessionOptions?: { provider: string; model: string }
+  /**
+   * Working directory every session this map creates records.
+   *
+   * Applied at creation only. `resume` takes no metadata - it reads the header
+   * the session was created with - so a session that already exists keeps
+   * whatever it recorded, including nothing.
+   */
+  cwd?: string
 }
 
 /**
@@ -74,6 +95,7 @@ export class PeerMap {
   private readonly registry: AgentRegistryLike
   private readonly sessionExists: (sessionId: SessionId) => Promise<boolean>
   private readonly sessionOptions: { provider: string; model: string } | undefined
+  private readonly cwd: string | undefined
   private readonly entries = new Map<string, Entry>()
   /**
    * Session creations still in flight, per peer.
@@ -98,6 +120,7 @@ export class PeerMap {
     this.registry = options.registry
     this.sessionExists = options.sessionExists ?? (async () => false)
     this.sessionOptions = options.sessionOptions
+    this.cwd = options.cwd
   }
 
   /**
@@ -127,9 +150,13 @@ export class PeerMap {
     const agentOptions = this.sessionOptions === undefined
       ? {}
       : { agentOptions: { provider: this.sessionOptions.provider, model: this.sessionOptions.model } }
+    // Only `create` takes metadata. A resume reads the header the session already
+    // recorded, so passing a cwd there would be silently ignored - and a session
+    // created before this was configured keeps no cwd for its whole life.
+    const meta = this.cwd === undefined ? {} : { meta: { cwd: this.cwd } }
     const handle = await this.sessionExists(sessionId)
       ? await this.registry.resume({ resumeSessionId: sessionId, ...agentOptions })
-      : await this.registry.create({ sessionId, ...agentOptions })
+      : await this.registry.create({ sessionId, ...agentOptions, ...meta })
     this.entries.set(peerId, { handle })
     return handle
   }

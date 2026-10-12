@@ -49,10 +49,29 @@ afterEach(async () => {
  * @param reply - what the scripted model answers.
  * @param messages - the messages the first poll returns.
  */
+/**
+ * The persona text the web app bundle configures.
+ *
+ * Copied from `packages/bundle/web-app/cordis.patch.yml`. It matters because
+ * the prompts reference `{{model}}` and `{{cwd}}`, and a prompt variable with no
+ * value fails the whole turn before the provider is called. The testkit mounts
+ * `SystemPrompt` with its defaults, where both persona strings are empty, so
+ * with a bare `mountAgentLoopTestDependencies` these references never appear and
+ * the failure is invisible.
+ *
+ * That is exactly how two live defects escaped this file: a session created
+ * without a model, and one created without a `cwd`. Both arrived as "the user
+ * sent a message and got nothing".
+ */
+const WEB_APP_SYSTEM_PROMPT = {
+  personaPrefix: 'You are a coding agent powered by the {{model}} model.',
+  personaSuffix: 'Your working directory is {{cwd}}.',
+}
+
 async function boot(reply: string, messages: unknown[]) {
   const ctx = new Context()
   contexts.push(ctx)
-  await mountAgentLoopTestDependencies(ctx)
+  await mountAgentLoopTestDependencies(ctx, { systemPrompt: WEB_APP_SYSTEM_PROMPT })
   const harness = await mountAgentLoopTestHarness(ctx)
   // Registered before any work starts; the loop resolves its adapter per call.
   ctx.llm.registerAdapter(['wechat-scripted'], new ScriptedAdapter(reply))
@@ -76,6 +95,7 @@ async function boot(reply: string, messages: unknown[]) {
     // The session must select the scripted provider; otherwise the loop asks
     // the environment's model configuration and no adapter matches.
     sessionOptions: { provider: 'wechat-scripted', model: 'scripted' },
+    cwd: '/work',
   })
   // The production wiring: the channel listens to committed session events, so
   // the model's answer has a route back out.
@@ -135,7 +155,7 @@ describe('/stop over a real agent loop', () => {
     // while that turn is in flight.
     const ctx = new Context()
     contexts.push(ctx)
-    await mountAgentLoopTestDependencies(ctx)
+    await mountAgentLoopTestDependencies(ctx, { systemPrompt: WEB_APP_SYSTEM_PROMPT })
     await mountAgentLoopTestHarness(ctx)
 
     // A model that honors cancellation the way a real adapter must.
@@ -214,7 +234,7 @@ describe('the harness\'s own commands over WeChat', () => {
     // reaches the surface the harness actually serves rather than a stub.
     const ctx = new Context()
     contexts.push(ctx)
-    await mountAgentLoopTestDependencies(ctx)
+    await mountAgentLoopTestDependencies(ctx, { systemPrompt: WEB_APP_SYSTEM_PROMPT })
     await ctx.plugin(CommandRuntime)
     await mountAgentLoopTestHarness(ctx)
 
@@ -252,6 +272,7 @@ describe('the harness\'s own commands over WeChat', () => {
       pollTimeoutMs: 1_000,
       maxRunMs: 3_000,
       sessionOptions: { provider: 'wechat-scripted', model: 'scripted' },
+      cwd: '/work',
       executeNativeCommand: createNativeCommandExecutor({
         commands: commands as never,
         agentFor: peerId => ctx.agents.get(SessionId(`channel-wechat-${peerId}`)),

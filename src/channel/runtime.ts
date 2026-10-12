@@ -65,6 +65,14 @@ export interface RuntimeOptions {
   signal?: AbortSignal
   /** Provider and model each session selects. */
   sessionOptions?: { provider: string; model: string }
+  /**
+   * Working directory each created session records.
+   *
+   * Required, not optional, because omitting it does not mean "no preference" -
+   * it means the session records no `cwd`, and the web app's system prompt then
+   * fails its first turn on `{{cwd}}`.
+   */
+  cwd: string
   /** Called once the channel is polling, for a start-up log line. */
   onStarted?: (accountId: string) => void
   /**
@@ -123,6 +131,7 @@ export async function startChannelFromStore(options: RuntimeOptions): Promise<vo
     ...(options.pollTimeoutMs === undefined ? {} : { pollTimeoutMs: options.pollTimeoutMs }),
     ...(options.maxRunMs === undefined ? {} : { maxRunMs: options.maxRunMs }),
     ...(options.sessionOptions === undefined ? {} : { sessionOptions: options.sessionOptions }),
+    cwd: options.cwd,
     sessionExists: options.sessionExists,
     // The channel needs these to tell the user which login is live and to reach
     // the harness's own commands from WeChat.
