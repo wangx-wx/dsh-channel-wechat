@@ -109,7 +109,14 @@ async function mountLoginPanel(ctx: Context): Promise<void> {
   // `console.log`, not `ctx.logger`: no profile mounts a console exporter for
   // the named logger, so a URL written through it is never seen. The shipped web
   // app prints its own URL the same way.
-  console.log(`[channel-wechat] 微信登录：用手机微信打开 ${panelUrl(ctx)} 扫码连接`)
+  //
+  // The wording matters and is not decorative. The page is a browser page that
+  // shows a QR for the *phone* to scan, so "open it with WeChat" would send the
+  // user to the wrong device. And the fence only accepts the launch token at `/`,
+  // so the panel URL works in a browser that has already opened the Harness UI -
+  // which the desktop app always has, and which the user's browser has by the
+  // time they are reading this, because that is where the UI is.
+  console.log(`[channel-wechat] 微信登录：在已打开 Harness 界面的浏览器中打开 ${panelUrl(ctx)}，用手机微信扫码`)
 }
 
 /**
