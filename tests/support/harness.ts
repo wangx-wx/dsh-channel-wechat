@@ -8,7 +8,7 @@
  * under test is the shipped one, not a reimplementation of its composition.
  */
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -17,8 +17,31 @@ import { spawn, spawnSync } from 'node:child_process'
 /** Repository root, resolved from this file's location under tests/support. */
 export const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url))
 
-/** The launcher shipped inside the DeepSeek Harness application bundle. */
-export const DSH_LAUNCHER = '/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh'
+/**
+ * A DSH checkout to launch the integration suites against.
+ *
+ * The suites drive the real launcher rather than a reimplementation, so they need
+ * one. A local checkout is preferred over the packaged application: it is the
+ * build under development, it needs no Electron, and it can be pointed at any
+ * revision. `DSH_CHECKOUT` overrides it.
+ */
+const DEFAULT_CHECKOUT = '/Users/wangx/workspace/aaa/github/deepseek-harness'
+
+/** The checkout the suites launch, or the packaged app when none is configured. */
+export const DSH_CHECKOUT = process.env['DSH_CHECKOUT'] ?? DEFAULT_CHECKOUT
+
+/**
+ * The launcher command, as `[executable, ...leading arguments]`.
+ *
+ * A checkout is run through `node apps/cli/lib/bin.js`; the packaged application
+ * ships a `dsh` shim that boots Electron as Node instead. Kept as a command plus
+ * arguments so both can be spawned the same way.
+ */
+export const DSH_COMMAND: readonly string[] = (() => {
+  const launcher = join(DSH_CHECKOUT, 'apps', 'cli', 'lib', 'bin.js')
+  if (existsSync(launcher)) return [process.execPath, launcher]
+  return ['/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh']
+})()
 
 /** The profile name every isolated home uses. */
 export const PROFILE_NAME = 'channel-test'
@@ -39,7 +62,7 @@ export interface TestHarness {
  * @returns the finished process, with stdout/stderr captured as text.
  */
 export function runDsh(harness: Pick<TestHarness, 'home'>, args: readonly string[], profile = PROFILE_NAME) {
-  return spawnSync(DSH_LAUNCHER, [profile, ...args], {
+  return spawnSync(DSH_COMMAND[0]!, [...DSH_COMMAND.slice(1), profile, ...args], {
     env: { ...process.env, DSH_HOME: harness.home },
     encoding: 'utf8',
     timeout: 180_000,
@@ -126,7 +149,7 @@ export interface RunningProfile {
  * @throws if the process exits before it serves, quoting its output.
  */
 export async function startProfile(harness: Pick<TestHarness, 'home'>, args: readonly string[]): Promise<RunningProfile> {
-  const child = spawn(DSH_LAUNCHER, [PROFILE_NAME, ...args], {
+  const child = spawn(DSH_COMMAND[0]!, [...DSH_COMMAND.slice(1), PROFILE_NAME, ...args], {
     env: { ...process.env, DSH_HOME: harness.home },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
