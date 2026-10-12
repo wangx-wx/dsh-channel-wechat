@@ -1,0 +1,94 @@
+/**
+ * One polling run at a time.
+ *
+ * Two independent paths start the channel: the boot, which reads whatever login
+ * is stored, and the login panel, which connects an account that was not there
+ * when the boot ran. Left alone they overlap, and two loops polling the same
+ * account deliver every message twice - a failure that shows up as duplicated
+ * replies in WeChat, with nothing in the logs to connect it to the second start.
+ */
+
+import { describe, expect, it, vi } from 'vitest'
+import { createSingleRun } from '../../src/channel/single-run.ts'
+
+describe('one polling run at a time', () => {
+  it('launches a run and reports it live', () => {
+    const launch = vi.fn()
+    const run = createSingleRun({ launch })
+
+    run.start()
+
+    expect(launch).toHaveBeenCalledOnce()
+    expect(run.live()).toBe(true)
+  })
+
+  it('refuses a second run while one is live', () => {
+    // The boot starts the channel from the stored login; the panel starts it
+    // again when a *new* account connects. Refusing by default is what keeps two
+    // loops off one account.
+    const launch = vi.fn()
+    const run = createSingleRun({ launch })
+
+    run.start()
+    run.start()
+
+    expect(launch).toHaveBeenCalledOnce()
+  })
+
+  it('ends the live run before replacing it when forced', () => {
+    // The panel's case: the account it just connected is not the one the boot
+    // started with, so the old loop has to stop rather than keep polling an
+    // account that was replaced.
+    const signals: AbortSignal[] = []
+    const run = createSingleRun({ launch: signal => signals.push(signal) })
+
+    run.start()
+    const first = signals[0]
+    run.start({ force: true })
+
+    expect(signals).toHaveLength(2)
+    expect(first?.aborted).toBe(true)
+    expect(signals[1]?.aborted).toBe(false)
+  })
+
+  it('allows a new run after the previous one was stopped', () => {
+    const launch = vi.fn()
+    const run = createSingleRun({ launch })
+
+    run.start()
+    run.stop()
+    run.start()
+
+    expect(launch).toHaveBeenCalledTimes(2)
+    expect(run.live()).toBe(true)
+  })
+
+  it('aborts the live signal when stopped', () => {
+    // The run's own loop watches this signal; a stop that only forgot the
+    // controller would leave the poll running against a dead plugin.
+    let signal: AbortSignal | undefined
+    const run = createSingleRun({ launch: value => { signal = value } })
+
+    run.start()
+    run.stop()
+
+    expect(signal?.aborted).toBe(true)
+    expect(run.live()).toBe(false)
+  })
+
+  it('is not left live when the launch throws', () => {
+    // A launch failure the caller swallows must not wedge the channel: a run
+    // marked live that never started would refuse every later start, so the
+    // plugin would be dead until DSH restarted.
+    const onError = vi.fn()
+    const run = createSingleRun({
+      launch: () => { throw new Error('nope') },
+      onError,
+    })
+
+    run.start()
+
+    expect(onError).toHaveBeenCalledOnce()
+    expect(run.live()).toBe(false)
+  })
+})
