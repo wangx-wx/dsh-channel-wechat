@@ -52,6 +52,11 @@ describe('plugin mounts in a real cordis context', () => {
     ctx.provide('wechatStartup', { action: 'none' })
     ctx.provide('agents', {})
     ctx.provide('commands', {})
+    // The row also waits on the profile's model selection, because a session
+    // created without one has no model and fails its first turn.
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
+    })
     const fiber = ctx.plugin(module)
     await fiber
 

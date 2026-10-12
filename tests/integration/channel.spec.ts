@@ -189,6 +189,10 @@ describe('a profile boot with the login action', () => {
     provideCmdline(ctx, { args: [], exit: () => {}, ready: { commit() {}, await: async () => {} } } as never)
     await ctx.plugin(CredentialsLocal as never, {} as never)
     await ctx.plugin(CommandRuntime)
+    // The row waits on this service, so a mount without it never activates.
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
+    })
     // A stand-in for the agent registry, in place of the whole agent loop: what
     // is under test is the subscription `index.ts` takes, not the loop. It
     // reports its session live, because `require` refuses to deliver to a
@@ -225,7 +229,7 @@ describe('a profile boot with the login action', () => {
     await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
     await ctx.plugin({
       name: 'channel-wechat',
-      inject: ['wechatStartup', 'credentials', 'agents', 'commands'],
+      inject: ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'],
       apply: applyChannel,
     })
 
@@ -241,6 +245,81 @@ describe('a profile boot with the login action', () => {
     }
 
     expect(sentTexts).toContain('hello from the model')
+  }, 30_000)
+
+  it('gives a new session the model the profile selected', async () => {
+    // `ctx.agents` does not apply a default model itself; every caller reads
+    // `agentDefaultModel` and passes the selection in. A caller that skips it
+    // creates a session with no model, and the system prompt's `{{model}}`
+    // variable then has no value, so the turn fails before the model is called:
+    //
+    //   prompt variable "{{model}}" has no value for this assembly
+    //     (section "deployment:persona-prefix")
+    //
+    // The user sees a message arrive and no reply, which is what a real instance
+    // did. Asserted through the real `apply`, because `runtime.spec.ts` supplies
+    // `sessionOptions` itself and so cannot see whether production does.
+    const previous = process.env['DSH_HOME']
+    const home = tempHome('dsh-wechat-model-')
+    process.env['DSH_HOME'] = home
+
+    /** What the channel asked the registry to create. */
+    const asked: { provider?: string; model?: string }[] = []
+    const live = new Map<string, unknown>()
+    let polls = 0
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes('getupdates')) {
+        polls += 1
+        return new Response(JSON.stringify({
+          ret: 0,
+          msgs: polls === 1
+            ? [{
+              message_id: 1, from_user_id: 'user-7', message_type: 1,
+              item_list: [{ type: 1, text_item: { text: 'hi' } }],
+            }]
+            : [],
+          get_updates_buf: `c${polls}`,
+        }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ ret: 0 }), { status: 200 })
+    }) as unknown as typeof fetch)
+
+    const ctx = new Context()
+    provideCmdline(ctx, { args: [], exit: () => {}, ready: { commit() {}, await: async () => {} } } as never)
+    await ctx.plugin(CredentialsLocal as never, {} as never)
+    await ctx.plugin(CommandRuntime)
+    // The profile's selection, which the channel has to read and pass on.
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
+    })
+    ctx.provide('agents', {
+      async create({ sessionId, agentOptions }: { sessionId: string; agentOptions?: { provider?: string; model?: string } }) {
+        asked.push(agentOptions ?? {})
+        const agent = { id: sessionId, followup: () => {}, whenIdle: async () => {} }
+        live.set(sessionId, agent)
+        return { agent, dispose: async () => void live.delete(sessionId) }
+      },
+      async resume() { throw new Error('no persisted session') },
+      get: (id: string) => live.get(id),
+    })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
+    await ctx.plugin({
+      name: 'channel-wechat',
+      inject: ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'],
+      apply: applyChannel,
+    })
+
+    try {
+      await until(async () => asked.length > 0, 3_000)
+    } finally {
+      await ctx.fiber.dispose()
+      if (previous === undefined) delete process.env['DSH_HOME']
+      else process.env['DSH_HOME'] = previous
+    }
+
+    expect(asked[0]).toEqual({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' })
   }, 30_000)
 
   it('resumes a session a previous run left behind instead of recreating it', async () => {
@@ -299,6 +378,10 @@ describe('a profile boot with the login action', () => {
       },
       get: (id: string) => live.get(id),
     })
+    // Required by the row, and the selection every session is created with.
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
+    })
     // The durable store reports the peer's session as already present, which is
     // what a restart finds. This is the service `sessionExistsOf` asks.
     ctx.provide('sessionPersistence', {
@@ -309,7 +392,7 @@ describe('a profile boot with the login action', () => {
     await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
     await ctx.plugin({
       name: 'channel-wechat',
-      inject: ['wechatStartup', 'credentials', 'agents', 'commands'],
+      inject: ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'],
       apply: applyChannel,
     })
 
@@ -342,7 +425,7 @@ describe('the row\'s declared dependencies', () => {
     // unmounted registry and start polling with nowhere to deliver, and without
     // `commands` the harness's own command surface would be unreachable over
     // WeChat.
-    expect(channelInject).toEqual(['wechatStartup', 'credentials', 'agents', 'commands'])
+    expect(channelInject).toEqual(['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'])
   })
 })
 
@@ -371,6 +454,9 @@ describe('a profile boot with no action', () => {
     // that starts it must have one mounted.
     await ctx.plugin(AgentRegistry)
     await ctx.plugin(CommandRuntime)
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
+    })
     await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
     await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
     await ctx.plugin({ name: 'channel-wechat', inject: ['wechatStartup', 'credentials', 'agents'], apply: applyChannel })

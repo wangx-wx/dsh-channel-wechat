@@ -131,6 +131,11 @@ async function bootWithPanel() {
   await ctx.plugin(CommandRuntime)
 
   await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
+  // The row waits on the profile's model selection as well as the rest; a
+  // mount without it never activates, so nothing below would observe anything.
+  ctx.provide('agentDefaultModel', {
+    currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
+  })
   await ctx.plugin({ name: 'channel-wechat', inject: [...channelInject], apply: applyChannel })
 
   // The host's own rows publish here, after this plugin is already active.

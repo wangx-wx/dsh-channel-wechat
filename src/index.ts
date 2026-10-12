@@ -10,6 +10,10 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+// Type-only, for the `ctx.agentDefaultModel` declaration it merges into
+// `Context`. The service is provided by the profile, not by this plugin, so
+// nothing is imported at runtime.
+import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { loadAccount, listAccounts, saveAccount, forgetAccount } from './credentials.ts'
 import { runStartupAction } from './login-command.ts'
 import { WECHAT_STARTUP_SERVICE, type WechatStartupValues } from './startup.ts'
@@ -29,11 +33,21 @@ export const name = 'channel-wechat'
 /**
  * Host services this plugin needs. `wechatStartup` is the parsed invocation,
  * `credentials` is where a login is persisted, and `agents` is what the channel
- * creates its sessions through; the loader parks this row until all four exist.
+ * creates its sessions through; the loader parks this row until all five exist.
  * `commands` is the harness's own command surface, which WeChat forwards to
  * rather than maintaining a list of its own.
+ *
+ * `agentDefaultModel` is required rather than looked up on demand because
+ * `ctx.agents` does not apply a default selection itself - every caller reads
+ * this service and passes the result in. A session created without one has no
+ * model, and the turn fails before reaching the provider:
+ *
+ *   prompt variable "{{model}}" has no value for this assembly
+ *
+ * The user sees their message arrive and no reply, so the row waits for the
+ * service instead of coming up able to lose every turn.
  */
-export const inject = ['wechatStartup', 'credentials', 'agents', 'commands'] as const
+export const inject = ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'] as const
 
 /**
  * Act on the invocation the startup row parsed.
@@ -199,6 +213,10 @@ async function runChannel(ctx: Context, signal: AbortSignal): Promise<void> {
     // calls `Channel.attach` itself can see that - only the production wiring
     // subscribing is the thing being asserted.
     sessionEvents: ctx,
+    // Every session gets the profile's selected model. `ctx.agents` applies no
+    // default of its own, so a session created without this has no model at all
+    // and the first turn fails on the system prompt's `{{model}}` reference.
+    sessionOptions: modelSelectionOf(ctx),
     // Resolved before the run so a restart resumes where the last one stopped
     // rather than replaying the conversation it already answered.
     ...(account === undefined ? {} : { initialCursor: await cursors.load(account.accountId) }),
@@ -253,6 +271,20 @@ function sessionExistsOf(ctx: Context): (sessionId: string) => Promise<boolean> 
       return true
     }
   }
+}
+
+/**
+ * The provider and model the profile selected.
+ *
+ * Read per run rather than captured once, so a selection changed in the GUI
+ * applies to the sessions started after it. `currentSelection` is the same
+ * accessor the shipped headless runner and the web session controller use.
+ * @param ctx - the plugin's cordis context.
+ * @returns the selection to pass to every create and resume.
+ */
+function modelSelectionOf(ctx: Context): { provider: string; model: string } {
+  const selection = ctx.agentDefaultModel.currentSelection()
+  return { provider: selection.provider, model: selection.model }
 }
 
 /** The harness's command runtime. */
