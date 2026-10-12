@@ -10,7 +10,7 @@
  */
 
 import type { WechatAccount } from '../credentials.ts'
-import type { AgentRegistryLike } from '../bridge/peer-map.ts'
+import type { AgentPresetsLike, AgentRegistryLike } from '../bridge/peer-map.ts'
 import type { MessageApi } from '../wechat/api.ts'
 import { LOGIN_BASE_URL } from '../wechat/login-runner.ts'
 import { Channel, type SessionEventsLike } from './channel.ts'
@@ -73,6 +73,14 @@ export interface RuntimeOptions {
    * fails its first turn on `{{cwd}}`.
    */
   cwd: string
+  /**
+   * The profile's agent-preset registry, when this deployment has one.
+   *
+   * A surface that keeps its model-facing tools behind presets (the web app)
+   * leaves a session with no tools at all unless it joins one, and the model
+   * then emits raw tool-call syntax that the user reads as garbled text.
+   */
+  presets?: AgentPresetsLike
   /** Called once the channel is polling, for a start-up log line. */
   onStarted?: (accountId: string) => void
   /**
@@ -132,6 +140,7 @@ export async function startChannelFromStore(options: RuntimeOptions): Promise<vo
     ...(options.maxRunMs === undefined ? {} : { maxRunMs: options.maxRunMs }),
     ...(options.sessionOptions === undefined ? {} : { sessionOptions: options.sessionOptions }),
     cwd: options.cwd,
+    ...(options.presets === undefined ? {} : { presets: options.presets }),
     sessionExists: options.sessionExists,
     // The channel needs these to tell the user which login is live and to reach
     // the harness's own commands from WeChat.

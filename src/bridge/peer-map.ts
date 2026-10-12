@@ -23,6 +23,41 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 /** The session id prefix this channel owns, kept distinct from other plugins'. */
 export const SESSION_ID_PREFIX = 'channel-wechat-'
 
+/**
+ * The slice of the profile's agent-preset registry this map uses.
+ *
+ * Structural rather than imported, because importing the registry would make it
+ * a dependency of a plugin that must also run where it does not exist.
+ */
+export interface AgentPresetsLike {
+  /** Resolve a preset id, or the profile's default when omitted. */
+  resolve(id?: string): Promise<{ readonly id: string }>
+  /** Bind one unpublished agent to a preset. */
+  mount(agentCtx: unknown, id?: string): Promise<unknown>
+}
+
+/**
+ * Creation-time composition of one agent's scoped world, as `ctx.agents` takes it.
+ *
+ * The agent argument is present on resume, where its header names the preset the
+ * session already recorded.
+ */
+export type AgentSetupLike = (
+  agentCtx: unknown,
+  agent: { readonly session: { readonly header: { readonly agentPreset?: string } } },
+) => void | Promise<void>
+
+/**
+ * The provider and model a session selects, already shaped for `create`/`resume`.
+ *
+ * Empty when the profile supplies no selection, which is why it is spread into
+ * the registry call rather than passed as a value: an absent key lets the
+ * registry fall back, while an explicit `undefined` would not.
+ */
+export interface SelectionFragment {
+  agentOptions?: { provider?: string; model?: string }
+}
+
 /** The slice of `ctx.agents` this map uses. */
 export interface AgentRegistryLike {
   /** Create and start a new agent for one session id. */
@@ -36,12 +71,21 @@ export interface AgentRegistryLike {
      * and a prompt variable with no value fails the turn before the provider is
      * called. It is also immutable once written, so a session created without
      * one can never gain it - only a new session can.
+     *
+     * `agentPreset` is what a later resume reads to rebuild the same tool set.
      */
-    meta?: { cwd?: string }
+    meta?: { cwd?: string; agentPreset?: string }
+    /** Compose the agent's scoped world, including its preset. */
+    setup?: AgentSetupLike
     signal?: AbortSignal
   }): Promise<AgentHandleLike>
   /** Load a persisted session and start an agent on it. */
-  resume(options: { resumeSessionId: SessionId; agentOptions?: { provider?: string; model?: string } }): Promise<AgentHandleLike>
+  resume(options: {
+    resumeSessionId: SessionId
+    agentOptions?: { provider?: string; model?: string }
+    /** Compose the agent's scoped world, including its preset. */
+    setup?: AgentSetupLike
+  }): Promise<AgentHandleLike>
   /** The live agent for one session id, if any. */
   get(sessionId: SessionId): { readonly id: SessionId } | undefined
 }
@@ -70,6 +114,20 @@ export interface PeerMapOptions {
    * whatever it recorded, including nothing.
    */
   cwd?: string
+  /**
+   * The profile's agent-preset registry, when this deployment has one.
+   *
+   * Not optional decoration. The web app disables every model-facing tool row
+   * on the host plane and moves them behind presets, so a session that mounts no
+   * preset has no tools at all: the model emits tool-call syntax from its
+   * training - DeepSeek leaks its `｜DSML｜` markup - and the user reads that
+   * markup as garbled text instead of an answer.
+   *
+   * Absent for a deployment that composes no preset roster (the headless
+   * runner), where the tool rows sit on the host plane and are read from the
+   * global layer anyway. There, joining a preset is neither possible nor needed.
+   */
+  presets?: AgentPresetsLike
 }
 
 /**
@@ -96,6 +154,7 @@ export class PeerMap {
   private readonly sessionExists: (sessionId: SessionId) => Promise<boolean>
   private readonly sessionOptions: { provider: string; model: string } | undefined
   private readonly cwd: string | undefined
+  private readonly presets: AgentPresetsLike | undefined
   private readonly entries = new Map<string, Entry>()
   /**
    * Session creations still in flight, per peer.
@@ -121,6 +180,7 @@ export class PeerMap {
     this.sessionExists = options.sessionExists ?? (async () => false)
     this.sessionOptions = options.sessionOptions
     this.cwd = options.cwd
+    this.presets = options.presets
   }
 
   /**
@@ -150,15 +210,88 @@ export class PeerMap {
     const agentOptions = this.sessionOptions === undefined
       ? {}
       : { agentOptions: { provider: this.sessionOptions.provider, model: this.sessionOptions.model } }
+    const handle = await this.sessionExists(sessionId)
+      ? await this.resumeSession(sessionId, agentOptions)
+      : await this.createNewSession(sessionId, agentOptions)
+    this.entries.set(peerId, { handle })
+    return handle
+  }
+
+  /**
+   * Resume one peer's persisted session under the preset it recorded.
+   *
+   * The preset comes from the session's own header rather than the profile's
+   * current default, so a session keeps the composition it was started with.
+   * Falling back to the default would silently hand an old conversation a
+   * different tool set than the one it ran with.
+   *
+   * A session created before this plugin joined a preset records none. Its
+   * header cannot be edited, so resolving `undefined` - the profile's default -
+   * is how such a session recovers without being recreated.
+   *
+   * That recovery path is verified against the registry's real behaviour rather
+   * than its types: `resolve(undefined)` is what the shipped session controller
+   * calls for the same case, and `setup` receives the loaded Agent
+   * (`agent-loop/src/index.ts`, `setup?.(prepared.agent.ctx, prepared.agent)`),
+   * which is where the recorded header is read from.
+   *
+   * @param sessionId - the persisted session id.
+   * @param agentOptions - the selected provider and model, when configured.
+   * @returns the live handle.
+   */
+  private async resumeSession(
+    sessionId: SessionId,
+    agentOptions: SelectionFragment,
+  ): Promise<AgentHandleLike> {
+    const presets = this.presets
+    if (presets === undefined) {
+      return this.registry.resume({ resumeSessionId: sessionId, ...agentOptions })
+    }
+    return this.registry.resume({
+      resumeSessionId: sessionId,
+      ...agentOptions,
+      setup: async (agentCtx, agent) => {
+        await presets.mount(agentCtx, agent.session.header.agentPreset)
+      },
+    })
+  }
+
+  /**
+   * Create one peer's session under the profile's default preset.
+   *
+   * `meta.agentPreset` and the mounted preset must agree: the header is the
+   * durable record a later resume rebuilds its composition from, and writing one
+   * id while mounting another would make the log describe a world the agent
+   * never ran in. Both come from the single `resolve` below.
+   * @param sessionId - the session id to create.
+   * @param agentOptions - the selected provider and model, when configured.
+   * @returns the live handle.
+   */
+  private async createNewSession(
+    sessionId: SessionId,
+    agentOptions: SelectionFragment,
+  ): Promise<AgentHandleLike> {
     // Only `create` takes metadata. A resume reads the header the session already
     // recorded, so passing a cwd there would be silently ignored - and a session
     // created before this was configured keeps no cwd for its whole life.
-    const meta = this.cwd === undefined ? {} : { meta: { cwd: this.cwd } }
-    const handle = await this.sessionExists(sessionId)
-      ? await this.registry.resume({ resumeSessionId: sessionId, ...agentOptions })
-      : await this.registry.create({ sessionId, ...agentOptions, ...meta })
-    this.entries.set(peerId, { handle })
-    return handle
+    const meta = this.cwd === undefined ? {} : { cwd: this.cwd }
+    const presets = this.presets
+    if (presets === undefined) {
+      // Omitted rather than an empty object when nothing is configured, so the
+      // registry sees the same call it did before presets existed.
+      return this.registry.create({
+        sessionId,
+        ...agentOptions,
+        ...(this.cwd === undefined ? {} : { meta }),
+      })
+    }
+    const preset = await presets.resolve()
+    return this.registry.create({
+      sessionId,
+      ...agentOptions,
+      meta: { ...meta, agentPreset: preset.id },
+      setup: async agentCtx => { await presets.mount(agentCtx, preset.id) },
+    })
   }
 
   /** How many peers currently hold a session. */

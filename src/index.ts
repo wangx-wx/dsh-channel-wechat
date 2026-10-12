@@ -20,7 +20,7 @@ import { loadAccount, listAccounts, saveAccount, forgetAccount } from './credent
 import { runStartupAction } from './login-command.ts'
 import { WECHAT_STARTUP_SERVICE, type WechatStartupValues } from './startup.ts'
 import { createApiClient } from './wechat/api.ts'
-import { sessionIdFor } from './bridge/peer-map.ts'
+import { sessionIdFor, type AgentPresetsLike } from './bridge/peer-map.ts'
 import { createNativeCommandExecutor, createNativeCommandLister, type CommandRuntimeLike } from './bridge/native-commands.ts'
 import { CursorStore } from './channel/cursor-store.ts'
 import { createSingleRun, type SingleRun } from './channel/single-run.ts'
@@ -229,6 +229,9 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
   const cursors = new CursorStore()
   const accounts = await listAccounts(ctx)
   const account = accounts[0]
+  // Resolved once, so every session in this run joins the same preset even if
+  // the profile's default changes mid-run.
+  const presets = presetsOf(ctx)
 
   await startChannelFromStore({
     listAccounts: async () => (account === undefined ? [] : [account]),
@@ -252,6 +255,15 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
     // reads it through `{{cwd}}`, and a session header cannot be edited later, so
     // a session created without one fails every turn for its whole life.
     cwd: config.cwd,
+    // The profile's preset registry, when it has one. A surface that keeps its
+    // model-facing tools behind presets (the web app) leaves a session that
+    // mounts none with no tools at all, and the model then emits raw tool-call
+    // syntax - DeepSeek's `｜DSML｜` markup - which the user reads as garbled
+    // text. Read through `get` rather than injected: `inject` would park this
+    // row on a deployment that composes no preset roster (headless), where the
+    // tool rows sit on the host plane and joining a preset is neither possible
+    // nor needed - and the plan requires this plugin to run on both.
+    ...(presets === undefined ? {} : { presets }),
     // Resolved before the run so a restart resumes where the last one stopped
     // rather than replaying the conversation it already answered.
     ...(account === undefined ? {} : { initialCursor: await cursors.load(account.accountId) }),
@@ -320,6 +332,29 @@ function sessionExistsOf(ctx: Context): (sessionId: string) => Promise<boolean> 
 function modelSelectionOf(ctx: Context): { provider: string; model: string } {
   const selection = ctx.agentDefaultModel.currentSelection()
   return { provider: selection.provider, model: selection.model }
+}
+
+/**
+ * The profile's agent-preset registry, when it composes one.
+ *
+ * Read through `get` rather than declared in `inject`, because a deployment
+ * without a preset roster is a supported composition rather than a broken one:
+ * the headless bundle keeps its model-facing tool rows on the host plane, where
+ * an agent reads them from the global layer, so it composes no registry and
+ * mounting a preset there is neither possible nor needed. Declaring it in
+ * `inject` would park this whole row on that deployment and the channel would
+ * never start.
+ *
+ * On a surface that DOES keep those rows behind presets - the web app disables
+ * every model-facing tool row on the host plane - a session that mounts no
+ * preset has no tools at all. The model then emits tool-call syntax from its
+ * training, and the user reads that markup as garbled text instead of an answer.
+ *
+ * @param ctx - the plugin's cordis context.
+ * @returns the registry, or `undefined` when this deployment has none.
+ */
+function presetsOf(ctx: Context): AgentPresetsLike | undefined {
+  return ctx.get('agentPresets') as AgentPresetsLike | undefined
 }
 
 /** The harness's command runtime. */

@@ -393,6 +393,97 @@ describe('a profile boot with the login action', () => {
     expect(asked[0]).toEqual({ cwd: '/work' })
   }, 30_000)
 
+  it("mounts the profile's agent preset on a new session", async () => {
+    // The web app disables every model-facing tool row on the host plane and
+    // moves them behind agent presets ("the agent plane moves behind agent
+    // presets"), so a session that mounts no preset has no tools at all. The
+    // model still emits tool-call syntax from its training - DeepSeek leaks its
+    // `｜DSML｜` markup - and the user reads that markup as garbled text instead
+    // of an answer.
+    //
+    // Asserted through the real `apply`. The real-loop suite mounts the agent
+    // loop testkit, which composes no preset registry, so nothing there can
+    // observe whether this plugin joins one.
+    const previous = process.env['DSH_HOME']
+    const home = tempHome('dsh-wechat-preset-')
+    process.env['DSH_HOME'] = home
+
+    /** Preset ids the plugin asked the profile to resolve. */
+    const resolved: (string | undefined)[] = []
+    /** Presets the plugin mounted on a session. */
+    const mounted: (string | undefined)[] = []
+    let polls = 0
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes('getupdates')) {
+        polls += 1
+        return new Response(JSON.stringify({
+          ret: 0,
+          msgs: polls === 1
+            ? [{
+              message_id: 1, from_user_id: 'user-7', message_type: 1,
+              item_list: [{ type: 1, text_item: { text: 'hi' } }],
+            }]
+            : [],
+          get_updates_buf: `c${polls}`,
+        }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ ret: 0 }), { status: 200 })
+    }) as unknown as typeof fetch)
+
+    const ctx = new Context()
+    provideCmdline(ctx, { args: [], exit: () => {}, ready: { commit() {}, await: async () => {} } } as never)
+    await ctx.plugin(CredentialsLocal as never, {} as never)
+    await ctx.plugin(CommandRuntime)
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
+    })
+    // The id is deliberately not one a hardcoding plugin could guess, so this
+    // can only pass by asking the profile for its default.
+    ctx.provide('agentPresets', {
+      resolve: (id?: string) => {
+        resolved.push(id)
+        return Promise.resolve({ id: id ?? 'from-profile' })
+      },
+      mount: (_agentCtx: unknown, id?: string) => {
+        mounted.push(id)
+        return Promise.resolve({ id: id ?? 'from-profile' })
+      },
+    })
+    ctx.provide('agents', {
+      async create({ sessionId, setup }: {
+        sessionId: string
+        setup?: (agentCtx: unknown, agent: unknown) => unknown
+      }) {
+        const agent = { id: sessionId, followup: () => {}, whenIdle: async () => {} }
+        // The real registry awaits setup before publishing the agent, which is
+        // where a preset has to be composed.
+        await setup?.(ctx, agent)
+        return { agent, dispose: async () => {} }
+      },
+      async resume() { throw new Error('no persisted session') },
+      get: () => undefined,
+    })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
+    await ctx.plugin({
+      name: 'channel-wechat',
+      inject: ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'],
+      apply: applyChannel,
+    }, { cwd: '/work' })
+
+    try {
+      await until(async () => mounted.length > 0, 3_000)
+    } finally {
+      await ctx.fiber.dispose()
+      if (previous === undefined) delete process.env['DSH_HOME']
+      else process.env['DSH_HOME'] = previous
+    }
+
+    expect(resolved).toEqual([undefined])
+    expect(mounted).toEqual(['from-profile'])
+  }, 30_000)
+
   it('resumes a session a previous run left behind instead of recreating it', async () => {
     // Every restart of a real instance hits this. A peer's session id is derived
     // from the peer, so the id already has persisted state; a run that probes

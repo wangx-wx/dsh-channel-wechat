@@ -15,7 +15,7 @@
  * @module dsh-channel-wechat/channel/channel
  */
 
-import { PeerMap, type AgentHandleLike, type AgentRegistryLike } from '../bridge/peer-map.ts'
+import { PeerMap, type AgentHandleLike, type AgentPresetsLike, type AgentRegistryLike } from '../bridge/peer-map.ts'
 import { deliverInbound } from '../bridge/dispatcher.ts'
 import { ReplyQueue, extractAssistantText, type ReplySender } from '../bridge/reply.ts'
 import { parseCommandLine, routeCommand } from '../bridge/commands.ts'
@@ -85,6 +85,15 @@ export interface ChannelOptions {
    * one fails its first turn.
    */
   cwd?: string
+  /**
+   * The profile's agent-preset registry, when this deployment has one.
+   *
+   * Without it a session mounts no preset, and on a surface that keeps its
+   * model-facing tools behind presets (the web app) the agent then has no tools
+   * at all - the model emits raw tool-call syntax that the user reads as garbled
+   * text. Absent on a surface that keeps those rows on the host plane.
+   */
+  presets?: AgentPresetsLike
 }
 
 /**
@@ -127,6 +136,7 @@ export class Channel {
         sessionExists: async sessionId => options.sessionExists?.(String(sessionId)) ?? false,
       }),
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
+      ...(options.presets === undefined ? {} : { presets: options.presets }),
     })
     this.replies = new ReplyQueue({
       send: options.send,

@@ -24,7 +24,11 @@ import { PeerMap } from '../../src/bridge/peer-map.ts'
  * handle's disposer releases the id. A stub that allowed a duplicate create
  * would hide the reuse bug this suite exists to catch.
  */
-function fakeRegistry(options: { existingSessions?: string[] } = {}) {
+function fakeRegistry(options: {
+  existingSessions?: string[]
+  /** Preset ids the stored sessions recorded, read back on resume. */
+  recordedPresets?: Record<string, string>
+} = {}) {
   const created: string[] = []
   const resumed: string[] = []
   const disposed: string[] = []
@@ -54,13 +58,23 @@ function fakeRegistry(options: { existingSessions?: string[] } = {}) {
         live.set(sessionId, handle)
         return handle
       },
-      async resume({ resumeSessionId }: { resumeSessionId: string }) {
+      async resume({ resumeSessionId, setup }: {
+        resumeSessionId: string
+        setup?: (agentCtx: unknown, agent: { session: { header: { agentPreset?: string } } }) => unknown
+      }) {
         if (!(options.existingSessions ?? []).includes(resumeSessionId)) {
           throw new Error(`session not found: ${resumeSessionId}`)
         }
         resumed.push(resumeSessionId)
         const handle = makeHandle(resumeSessionId)
         live.set(resumeSessionId, handle)
+        // The real registry awaits setup before publishing the agent, handing it
+        // the session it loaded - which is where a resume reads the recorded
+        // preset from.
+        const recorded = options.recordedPresets?.[resumeSessionId]
+        await setup?.(undefined, {
+          session: { header: recorded === undefined ? {} : { agentPreset: recorded } },
+        })
         return handle
       },
       get(sessionId: string) {
@@ -138,6 +152,64 @@ describe('resuming after a restart', () => {
 
     expect(f.created).toHaveLength(1)
     expect(f.resumed).toEqual([])
+  })
+
+  it("mounts the preset the session recorded, not the profile's current default", async () => {
+    // A resumed session rebuilds the composition it was started with: the preset
+    // decides which tools the agent has, and the recorded header is the only
+    // durable record of it. Falling back to the profile's default would silently
+    // hand an old conversation a different tool set than it ran with.
+    const f = fakeRegistry({
+      existingSessions: ['channel-wechat-user-7'],
+      recordedPresets: { 'channel-wechat-user-7': 'minimal' },
+    })
+    const resolved: (string | undefined)[] = []
+    const mounted: (string | undefined)[] = []
+    const map = new PeerMap({
+      registry: f.registry as never,
+      sessionExists: async id => id === 'channel-wechat-user-7',
+      presets: {
+        resolve: (id?: string) => {
+          resolved.push(id)
+          return Promise.resolve({ id: id ?? 'from-profile' })
+        },
+        mount: (_ctx: unknown, id?: string) => {
+          mounted.push(id)
+          return Promise.resolve({ id: id ?? 'from-profile' })
+        },
+      },
+    })
+
+    await map.sessionFor('user-7')
+
+    expect(mounted).toEqual(['minimal'])
+    // Nothing asked the profile for a default: a resume's source of truth is the
+    // session's own record, and `undefined` there is what recovers a session
+    // created before this plugin joined a preset.
+    expect(resolved).toEqual([])
+  })
+
+  it('mounts the profile default when the stored session recorded no preset', async () => {
+    // A session created by an older version of this plugin has no recorded
+    // preset, and its header cannot be edited. Resolving `undefined` gives it the
+    // profile's default, which is how it recovers without being recreated.
+    const f = fakeRegistry({ existingSessions: ['channel-wechat-user-7'] })
+    const mounted: (string | undefined)[] = []
+    const map = new PeerMap({
+      registry: f.registry as never,
+      sessionExists: async id => id === 'channel-wechat-user-7',
+      presets: {
+        resolve: (id?: string) => Promise.resolve({ id: id ?? 'from-profile' }),
+        mount: (_ctx: unknown, id?: string) => {
+          mounted.push(id)
+          return Promise.resolve({ id: id ?? 'from-profile' })
+        },
+      },
+    })
+
+    await map.sessionFor('user-7')
+
+    expect(mounted).toEqual([undefined])
   })
 })
 
