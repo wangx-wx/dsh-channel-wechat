@@ -12,6 +12,16 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { Channel } from '../../src/channel/channel.ts'
 import type { ReplySender } from '../../src/bridge/reply.ts'
 
+/** Wait until a condition holds, so a background loop has a chance to run. */
+async function until(check: () => Promise<boolean> | boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await check()) return
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+  throw new Error('condition never held')
+}
+
 /** A registry that records what was created and what was delivered to it. */
 function fakeRegistry(options: { existing?: readonly string[] } = {}) {
   const followed: { sessionId: string; text: string }[] = []
@@ -69,6 +79,8 @@ function build(options: {
   cancelRunning?: () => Promise<boolean>
   /** Where conversation generations are kept, for /new tests. */
   generations?: { generation: (peerId: string) => Promise<number>; startNew: (peerId: string) => Promise<number> }
+  /** The card answerer, for the queue-bypass tests. */
+  cards?: { addressesCard: (text: string) => boolean; answer: (peerId: string, text: string) => Promise<boolean>; dispose: () => void }
 }) {
   const polls: (string | undefined)[] = []
   const sent: { peerId: string; text: string; token: string | undefined }[] = []
@@ -98,6 +110,7 @@ function build(options: {
     // The harness's command runtime; the channel forwards unknown names to it.
     executeNativeCommand: async (line: string) => ({ kind: 'success' as const, text: `native: ${line}` }),
     ...(options.generations === undefined ? {} : { generations: options.generations }),
+    ...(options.cards === undefined ? {} : { cards: options.cards }),
     // Wired from the registry's own record, so a rotated id the test declares
     // existing is resumed rather than created - which is what proves a restart
     // lands on the new conversation.
@@ -358,6 +371,91 @@ describe('starting a new conversation', () => {
     })
 
     expect(f.followed.map(entry => entry.sessionId)).toEqual([rotated])
+  })
+})
+
+describe('answering a card while the turn holds the queue', () => {
+  it('reaches the card even though the queue is held by that turn', async () => {
+    // The hazard this exists for: the agent is inside `ask_user_question`
+    // waiting for the answer, and its turn is what holds the peer's queue. A
+    // reply routed through that queue could never arrive, so the card would
+    // deadlock the very conversation it asks about. This is why a card reply
+    // bypasses the queue exactly as `/stop` does.
+    //
+    // Driven through the real poll loop, because the queue lives in the loop's
+    // `serialize` hook: delivering to `handleMessage` directly would skip the
+    // very path under test.
+    const f = fakeRegistry()
+    /** Answers the channel received, in order. */
+    const answered: string[] = []
+    let releaseTurn: (() => void) | undefined
+    const held = new Promise<void>(resolve => { releaseTurn = resolve })
+    let turnStarted: (() => void) | undefined
+    const started = new Promise<void>(resolve => { turnStarted = resolve })
+
+    // Messages the poll should deliver, in order; the test appends as it goes.
+    const queue: unknown[] = [{ message_id: 1, from_user_id: 'user-7', message_type: 1, item_list: [{ type: 1, text_item: { text: 'please start' } }] }]
+    let polls = 0
+    let clock = 0
+    const channel = new Channel({
+      registry: f.registry as never,
+      poll: async () => {
+        polls += 1
+        // One message per poll, so the loop is between them when the card is
+        // answered - which is the concurrency being modelled.
+        return { msgs: queue.splice(0, 1), get_updates_buf: `c${polls}` }
+      },
+      send: async () => {},
+      saveCursor: async () => {},
+      sleep: async (ms: number) => { clock += ms },
+      now: () => clock,
+      pollTimeoutMs: 1_000,
+      maxRunMs: 5_000,
+      cards: {
+        // A real answerer matches only a message naming an open card, so the
+        // ordinary message still reaches the model.
+        addressesCard: text => text === 'P1 1',
+        answer: async (_peerId, text) => {
+          // A real answerer claims only the messages it addresses: the ordinary
+          // message must still reach the model, and claiming it would swallow
+          // the very turn whose queue this test needs held.
+          if (text !== 'P1 1') return false
+          answered.push(text)
+          // Answering is what lets the agent continue, and continuing is what
+          // ends the turn holding the queue.
+          releaseTurn?.()
+          return true
+        },
+        dispose: () => {},
+      },
+    })
+    channels.push(channel)
+    // The turn does not finish until the card is answered, which is the state
+    // an agent asking a question is really in.
+    f.registry.create = async ({ sessionId }: { sessionId: string }) => {
+      const agent = {
+        id: sessionId,
+        followup: () => { turnStarted?.() },
+        whenIdle: async () => { await held },
+      }
+      f.live.set(sessionId, agent)
+      return { agent, dispose: async () => void f.live.delete(sessionId) }
+    }
+
+    const running = channel.run()
+    await started
+    // The agent is now blocked, holding this peer's queue.
+    queue.push({ message_id: 2, from_user_id: 'user-7', message_type: 1, item_list: [{ type: 1, text_item: { text: 'P1 1' } }] })
+
+    try {
+      await until(async () => answered.length > 0, 5_000)
+    } finally {
+      releaseTurn?.()
+      await channel.stop()
+      await running
+    }
+
+    expect(answered).toEqual(['P1 1'])
   })
 })
 

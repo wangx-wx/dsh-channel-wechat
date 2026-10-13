@@ -35,6 +35,21 @@ export interface SessionEventsLike {
   on: (event: 'session/event', listener: (session: { id: unknown }, event: unknown) => void) => () => void
 }
 
+/**
+ * The card answerer the channel routes replies through.
+ *
+ * Structural rather than the concrete `CardService`, so this module does not
+ * depend on the card seams to test the routing between them.
+ */
+export interface CardAnswererLike {
+  /** Whether this text answers an open card, and so must not reach the model. */
+  addressesCard: (text: string) => boolean
+  /** Answer the open card this text names. Returns whether it was claimed. */
+  answer: (peerId: string, text: string) => Promise<boolean>
+  /** Stop answering cards and reject what is still open. */
+  dispose: () => void
+}
+
 /** Collaborators the channel needs. */
 export interface ChannelOptions {
   /** The agent registry. */
@@ -116,6 +131,14 @@ export interface ChannelOptions {
    * conversation the user ended.
    */
   generations?: PeerGenerationsLike
+  /**
+   * The interaction cards this channel answers.
+   *
+   * Without it a card reply is delivered to the model as ordinary text and a
+   * request with no local answerer waits forever - so an approval or question
+   * raised inside a turn hangs that turn with no reply.
+   */
+  cards?: CardAnswererLike
 }
 
 /**
@@ -129,6 +152,7 @@ export class Channel {
   private readonly options: ChannelOptions
   private readonly peers: PeerMap
   private readonly replies: ReplyQueue
+  private readonly cards: CardAnswererLike | undefined
   private readonly tokens = new Map<string, string | undefined>()
   private readonly sessionToPeer = new Map<string, string>()
   private controller: AbortController | undefined
@@ -148,6 +172,7 @@ export class Channel {
    */
   constructor(options: ChannelOptions) {
     this.options = options
+    this.cards = options.cards
     this.peers = new PeerMap({
       registry: options.registry,
       // Every session this channel creates must select the configured provider
@@ -197,6 +222,18 @@ export class Channel {
           await command
           return
         }
+        // A card reply bypasses the queue for a sharper reason than a command
+        // does: the turn it must unblock is the one *holding* the queue. The
+        // agent sits inside `ask_user_question` waiting for this answer, so
+        // anything queued behind that turn can never arrive and the card would
+        // deadlock the very conversation it is asking about.
+        if (text !== undefined && this.cards?.addressesCard(text) === true) {
+          const reply = work()
+          this.commandWork.add(reply)
+          void reply.finally(() => this.commandWork.delete(reply))
+          await reply
+          return
+        }
         const task = this.peers.runExclusive(peerId, work)
         this.turnWork.add(task)
         try {
@@ -215,6 +252,30 @@ export class Channel {
     return this.running
   }
 
+  /**
+   * The peer a session belongs to, or `undefined` when it is not this channel's.
+   *
+   * Exposed for the card service: a card arrives addressed by session, and the
+   * conversation that must receive it is this mapping's answer.
+   * @param sessionId - the session that raised the request.
+   * @returns the peer id, when this channel owns that session.
+   */
+  peerOfSession(sessionId: string): string | undefined {
+    return this.sessionToPeer.get(sessionId)
+  }
+
+  /**
+   * Send text to one peer through the queue the replies already use.
+   *
+   * Routed through that queue rather than sent directly, so a card cannot
+   * overtake the reply already in flight for the same conversation.
+   * @param peerId - the peer to send to.
+   * @param text - the text to send.
+   */
+  async sendToPeer(peerId: string, text: string): Promise<void> {
+    await this.replies.enqueue(peerId, text, this.tokens.get(peerId))
+  }
+
   /** Wait for queued work to finish; call after {@link run} in tests. */
   async settled(): Promise<void> {
     await this.running
@@ -227,6 +288,10 @@ export class Channel {
 
   /** Stop the loop and release every session this channel owns. */
   async stop(): Promise<void> {
+    // Released before anything is drained: a card still open holds a turn that
+    // is itself holding work `stop` would otherwise wait on, so draining first
+    // would hang the shutdown on the very card being abandoned.
+    this.cards?.dispose()
     this.controller?.abort()
     // Draining first means a reply already queued is attempted rather than
     // dropped; WeChat will never replay it.
@@ -386,6 +451,11 @@ export class Channel {
       await this.handleCommand(parsed.peerId, parsed.text)
       return
     }
+
+    // A card reply is answered here too, and for a stronger reason: it is the
+    // answer to a question the *running* turn is blocked on. Delivering it would
+    // both queue it behind that turn and hand the model text it should not see.
+    if (this.cards !== undefined && await this.cards.answer(parsed.peerId, parsed.text)) return
 
     const handle = await this.peers.sessionFor(parsed.peerId)
     this.sessionToPeer.set(String(handle.agent.id), parsed.peerId)

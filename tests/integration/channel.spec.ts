@@ -559,6 +559,143 @@ describe('a profile boot with the login action', () => {
     expect(stored).toBe(1)
   }, 30_000)
 
+  it('answers an approval request over WeChat', async () => {
+    // The production half of the card support, and the defect it exists for: a
+    // turn that asks for approval with no answerer on this channel never
+    // finishes, so the user gets no reply at all. Every other suite injects a
+    // `CardService` itself, so none of them can see whether `index.ts` attaches
+    // one.
+    //
+    // Raised through the real waterfall, which is exactly what
+    // `ApprovalService.request()` calls - so a listener the plugin registered is
+    // the only thing that can claim this request.
+    const previous = process.env['DSH_HOME']
+    const home = tempHome('dsh-wechat-cards-')
+    process.env['DSH_HOME'] = home
+
+    /** Text the channel sent over the wire, in order. */
+    const sentTexts: string[] = []
+    /** The id the card told the user to reply with. */
+    let cardId = ''
+    /** Set once the card has been sent, which is when a reply becomes valid. */
+    let cardSent = false
+    /** Set once the reply has been delivered, so it is not replayed. */
+    let replied = false
+    let polls = 0
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request, init?: { body?: unknown }) => {
+      const href = String(url)
+      if (href.includes('getupdates')) {
+        polls += 1
+        // The reply is delivered through the real inbound path rather than by
+        // reaching into the channel, and only once the card has gone out - which
+        // is also the ordering a person produces by reading before answering.
+        // The reply is delivered by whichever poll first finds the card sent -
+        // not a fixed poll number, because the card goes out only once the
+        // waterfall is raised and the loop keeps polling meanwhile.
+        const msgs = polls === 1
+          ? [{
+            message_id: 1, from_user_id: 'user-7', message_type: 1,
+            context_token: 'ctx-1', item_list: [{ type: 1, text_item: { text: 'hi' } }],
+          }]
+          : cardSent && !replied && cardId !== ''
+            ? (replied = true, [{
+              message_id: 2, from_user_id: 'user-7', message_type: 1,
+              context_token: 'ctx-2', item_list: [{ type: 1, text_item: { text: `${cardId} 1` } }],
+            }])
+            : []
+        return new Response(JSON.stringify({ ret: 0, msgs, get_updates_buf: `c${polls}` }), { status: 200 })
+      }
+      if (href.includes('sendmessage')) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          msg?: { item_list?: { text_item?: { text?: string } }[] }
+        }
+        const text = body.msg?.item_list?.[0]?.text_item?.text
+        if (typeof text === 'string') {
+          sentTexts.push(text)
+          if (text.includes('需要权限确认')) {
+            cardSent = true
+            cardId = /回复：(\S+)/u.exec(text)?.[1] ?? ''
+          }
+        }
+      }
+      return new Response(JSON.stringify({ ret: 0 }), { status: 200 })
+    }) as unknown as typeof fetch)
+
+    const ctx = new Context()
+    provideCmdline(ctx, { args: [], exit: () => {}, ready: { commit() {}, await: async () => {} } } as never)
+    await ctx.plugin(CredentialsLocal as never, {} as never)
+    await ctx.plugin(CommandRuntime)
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
+    })
+    const live = new Map<string, unknown>()
+    ctx.provide('agents', {
+      async create({ sessionId }: { sessionId: string }) {
+        const agent = { id: sessionId, followup: () => {}, whenIdle: async () => {} }
+        live.set(sessionId, agent)
+        return { agent, dispose: async () => void live.delete(sessionId) }
+      },
+      async resume() { throw new Error('no persisted session') },
+      get: (id: string) => live.get(id),
+    })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
+    await ctx.plugin({
+      name: 'channel-wechat',
+      inject: ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'],
+      apply: applyChannel,
+    }, { cwd: '/work' })
+
+    let card = ''
+    let outcome: string | undefined
+    try {
+      // The first message creates the session, and that mapping is how a card
+      // finds the conversation it belongs to.
+      await until(async () => live.size > 0, 3_000)
+      const sessionId = 'channel-wechat-user-7'
+
+      // `ctx.waterfall` is called through a narrow structural view: this suite
+      // needs the real dispatch (only a listener the plugin registered can claim
+      // the request) without taking a dependency on the approval package just
+      // for its event augmentation.
+      const waterfall = ctx.waterfall.bind(ctx) as unknown as (
+        thisArg: unknown,
+        name: string,
+        request: unknown,
+        fallback: () => Promise<string>,
+      ) => Promise<string>
+      const settled = waterfall(
+        { id: 'a1', session: { id: sessionId } },
+        'approval/request',
+        {
+          agent: { id: 'a1', session: { id: sessionId } },
+          toolName: 'bash',
+          reason: 'run: rm -rf build',
+        },
+        async () => 'unavailable',
+      )
+      // Held so an unresolved waterfall fails this test loudly instead of
+      // leaving an unhandled rejection behind the assertion it should produce.
+      void settled.catch(() => undefined)
+
+      // The card reaches the user, and the reply then travels the same path a
+      // person's message does.
+      await until(async () => cardSent, 3_000)
+      card = sentTexts.find(text => text.includes('需要权限确认')) ?? ''
+      outcome = await settled
+    } finally {
+      await ctx.fiber.dispose()
+      if (previous === undefined) delete process.env['DSH_HOME']
+      else process.env['DSH_HOME'] = previous
+    }
+
+    // The card showed what was being decided...
+    expect(card).toContain('bash')
+    expect(card).toContain('rm -rf build')
+    // ...and the reply reached the asker as the one-shot grant.
+    expect(outcome).toBe('allowed-once')
+  }, 30_000)
+
   it('reaches the right agent for a native command after a rotation', async () => {
     // A peer past generation zero has its live session under a rotated id. The
     // plugin used to rebuild that id from the peer alone to find the agent for a

@@ -50,7 +50,7 @@
 | Q18 | 差异化 | 功能缺失 / 无命令 / 协议不纯粹 → **完整 + 正规** |
 | Q19 | 工作区 | 参考 GUI 多工作区（切换 = 切 Session） |
 | Q20 | 长连接 | 微信侧不可；DSH 侧用进程内 `ctx.on` |
-| Q24/Q33 | 审批卡 | **审批卡 v1；提问卡 v2** |
+| Q24/Q33 | 审批卡 | **审批卡 + 提问卡都 v1**（提问卡原定 v2，见 Q42 修订） |
 | Q25 | 多账号 | 单账号（数据结构预留 accountId 维度） |
 | Q26 | 质量标准 | **TS strict + 协议层单测 + 真组合测试** |
 | Q30 | 移植策略 | **全面移植 (a)+(b)**，连带官方测试；MIT 署名 |
@@ -77,6 +77,41 @@
 **代价（记录在案）**：会话文件随 `/new` 次数累积；peer id 若含 `~` 会被 escape 而孤立旧会话（真实微信 id 为 `[A-Za-z0-9_.@-]@im.wechat`，不可能含 `~`）。
 
 **顺带修掉的回归**：原 `agentFor` 用 `sessionIdFor(peerId)` 重建 id，代次化后原生命令（`/goal`、`/compact`）会去找代次 0 的 agent。已删除这处**重复的 id 推导**：`native-commands` 改为接收**已解析的 agent**，由 channel 提供。
+
+### Q42（实现期新增）：审批卡与提问卡一起做，且默认只发微信
+
+**背景**：原计划 v1 只做审批卡、提问卡留 v2，并只做「防御」。真实会话证明防御不够：`ask_user_question` 被 GUI 的 answerer 抢先后，整轮**永远**等不到答案 —— 会话日志停在 `tool/call ask_user_question`，`tool/result` 数量为 0。所以提问卡不是 v2，是 v1 的必需项。
+
+**两条 seam 的不对称（决定了实现形状）**：
+
+| | `approval/request` | `user-questions/request` |
+|---|---|---|
+| 服务键 | `ctx.approval` | `ctx.userQuestions` |
+| 有 id 吗 | 最多 `callId` | **完全没有** |
+| durable 事件 | 有（`approval/asked`/`decided`） | **没有** |
+| 超时 | 无 | 无 |
+| 无人认领 | 返回 `'unavailable'` | 抛 `NO_PROVIDER` |
+| 失败方向 | 可 fail-closed | **任何答案都是编造** |
+
+因为没有 id，卡片 id 是本插件自己发的（`P1`、`P2`…，手输在手机上所以要短且大小写不敏感），两条 seam **共用同一个 id 命名空间**，否则同一句话可能命中两张卡。
+
+**`prepend: true` 是强制的**：不带它 GUI 自己的 answerer 先跑并抢走请求，本通道**再也看不到**，且**没有任何报错**。
+
+**配置项 `cards: 'wechat' | 'both'`**（默认 `'wechat'`）：
+- `wechat`：认领，且**永不调用 `next()`** —— 一张卡只在一个地方可答。
+- `both`：`Promise.race([本通道, next()])`，先答者胜。**代价**：微信先答后**无法撤回 GUI 卡**（`forkGuiCardSignal` 是未文档化依赖，故意不用），GUI 卡会滞留到该轮结束。
+
+**超时**（30 分钟，人类耐心而非技术约束）：
+- 审批 → `'unavailable'`（fail-closed）。
+- 提问 → **reject**。给一个编造的答案是错的；给「作废」是诚实的。
+
+**队列死锁（本次真正的核心风险）**：卡片回复到达时，提问的那一轮正阻塞在 `ask_user_question` 里，而**那一轮正持有该 peer 的队列**。所以任何走 `peers.runExclusive` 的回复**永远到不了**。卡片回复必须像 `/stop` 一样**绕过队列**。
+
+> 直接调用 `handleMessage` 的测试**绕过 `serialize`**，因此**看不见**这个死锁。现有的死锁回归测试走**真实 poll 循环**。
+
+**已知技术债（记录在案）**：
+- 提问卡**没有 durable 事件**，重启后未答的卡会**变成幽灵卡**（内存里的等待者已不存在）。审批卡有审计事件，不受影响。
+- `both` 模式微信先答时的 GUI 卡滞留。
 
 ## 3. 架构
 
@@ -192,10 +227,11 @@ queue:   每用户串行消费 → agent.followup → whenIdle
 ```ts
 ctx.on('approval/request', handler, { prepend: true })   // 必须 prepend + 不带 tag
 ```
-- **必须自己造**：卡片 id、竞速、回执、超时、渲染、fork signal
-- **`forkGuiCardSignal` 是未文档化依赖** → 必须标注技术债 + 加回归测试
-- v1 只做审批卡（有 durable 审计）；提问卡 v2
-- ⚠️ v1 不做提问卡 → **必须做防御**，否则 `ask_user_question` 会整轮卡住
+- **必须自己造**：卡片 id、竞速、回执、超时、渲染
+- 审批卡与提问卡**都在 v1**（见 Q42）：只做审批、靠「防御」挡提问，实测会让整轮永久卡住
+- `forkGuiCardSignal` 是未文档化依赖 → **故意不用**；`cards: both` 的 GUI 卡滞留是已知代价
+- **`prepend: true` 强制**：否则 GUI 抢走后本通道静默失效（无任何报错）
+- **卡片回复必须绕过 peer 队列**：提问的那一轮正持有该队列，否则死锁
 
 ### 5.7 客户端面板（Q32/Q39）
 - `dsh.client = { platform: 'web', inject: [...] }` + `exports["./client"]`
@@ -218,7 +254,7 @@ ctx.on('approval/request', handler, { prepend: true })   // 必须 prepend + 不
 | **M2 文本端到端** ✅ | `api` 消息方法 + monitor + peer-map + dispatcher + reply + runtime | 微信发「hi」→ DSH 回复到达 |
 | **M3 命令** ✅ | `ctx.commands` 透传 + 6 个自管命令 + `/stop` | `/goal off` 有原生回执；`/stop` 能中断正在跑的任务 |
 | **M4 媒体** | 移植 `cdn`/`media` + 图片/文件/语音/视频双向 + 引用 | 发图能理解；产出文件能收到 |
-| **M5 审批卡** | waterfall 监听 + 卡片渲染 + 竞速 + fork signal | 微信能批准/拒绝；GUI 卡同步消失 |
+| **M5 卡片** ✅ | waterfall 监听 + 卡片渲染/解析 + 超时 + 队列旁路 | 微信能批准/拒绝/回答提问；`cards:wechat` 时 GUI 不重复弹卡 |
 | **M6 面板** 🔶 | S1 二维码 ✅ S2 登录会话 ✅ S3 页面与 API ✅ S4 扫码即启动 ✅ S5 接线 ✅；设置页卡片待做 | web 端登录页可用（已实测）；设置页卡片待做 |
 | **M7 发布** | README 双语 + LICENSE + npm 发布 | `dsh plugin add dsh-channel-wechat` 一条命令装好 |
 
@@ -401,7 +437,6 @@ requestBody: 'buffered', fetch })`——必须挂在 `/api/*` 下。实测无 co
 - ❌ 群聊（协议无依据，recon/10）
 - ❌ 多账号运行期（v1 单账号，数据结构预留）
 - ❌ 消息去重 / 发送节流（Q35 对齐官方）
-- ❌ 提问卡（v2）
 - ❌ 主动推送（v2，接口预留）
 - ❌ 独立 HTTP 面板（用客户端插件替代）
 - ❌ 自建权限体系（Q1）

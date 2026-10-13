@@ -22,3 +22,13 @@
         # `process.cwd()` is the launcher's own directory, which is what the
         # shipped headless runner resolves by default.
         cwd: !!js process.cwd()
+        # Where an interaction card can be answered.
+        #
+        # `wechat` keeps one card in one place: this channel claims the request
+        # and the GUI is never offered it. `both` also offers the GUI card and the
+        # first answer wins, at the cost of a GUI card that lingers until the turn
+        # ends when WeChat answered first - the seam has no way to withdraw it.
+        #
+        # Written out although it equals the default, so the choice is visible in
+        # the profile rather than buried in the schema.
+        cards: wechat

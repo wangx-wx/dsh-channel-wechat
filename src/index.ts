@@ -29,6 +29,18 @@ import { mountPanelRoutes, panelUrl } from './channel/mount.ts'
 import { createReporter } from './channel/report.ts'
 import { createPanel } from './channel/panel.ts'
 import { startChannelFromStore } from './channel/runtime.ts'
+import type { Channel } from './channel/channel.ts'
+import { CardService } from './bridge/cards-service.ts'
+
+/**
+ * How long an interaction card stays answerable.
+ *
+ * Thirty minutes matches the reference implementation and is a human patience
+ * bound rather than a technical one: the point is that it is finite, because the
+ * seam has no deadline of its own and an ignored card would hold its turn open
+ * for the life of the process.
+ */
+const CARD_TIMEOUT_MS = 30 * 60 * 1_000
 
 /** Plugin name reported in boot audits and `pending (waiting for service: …)` lines. */
 export const name = 'channel-wechat'
@@ -46,6 +58,18 @@ export const name = 'channel-wechat'
 export interface Config {
   /** Absolute working directory every session this plugin creates records. */
   cwd: string
+  /**
+   * How this channel answers DSH's interaction cards.
+   *
+   * Defaults to `wechat`, because a card sent to one conversation should have
+   * one place to answer it. `both` also offers the GUI card, and the first answer
+   * wins - but this channel cannot withdraw the GUI card once WeChat has
+   * answered, so the GUI card then lingers until the turn ends.
+   *
+   * Optional because the schema defaults it: a profile that predates this key
+   * must keep loading.
+   */
+  cards?: 'wechat' | 'both'
 }
 
 /** Runtime schema for {@link Config}; `cwd` must be an absolute path. */
@@ -53,6 +77,10 @@ export const Config: z<Config> = z.object({
   // Absolute on purpose: the session boundary rejects a relative `cwd`, and
   // failing at the profile boundary names the offending value.
   cwd: z.string().required(),
+  // Defaulted rather than required: the common deployment wants one place to
+  // answer a card, and requiring the key would make every existing profile fail
+  // to load for a choice it does not have to make.
+  cards: z.union([z.const('wechat'), z.const('both')]).default('wechat'),
 })
 
 /**
@@ -237,6 +265,30 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
   // than defaulted inside the channel: without it `/new` rotates only in memory
   // and the next restart resumes the very conversation the user ended.
   const generations = new PeerSessionStore()
+  // The channel is built inside `startChannelFromStore`, while the card service
+  // has to exist before it - the channel routes replies through it. One of the
+  // two must therefore be introduced after the other, and this holder is that
+  // seam: the service tolerates an unset channel by delegating, which is the
+  // correct answer in the window before the loop starts.
+  const channelRef: { current: Channel | undefined } = { current: undefined }
+  const cards = new CardService({
+    context: ctx,
+    shareWithGui: (config.cards ?? 'wechat') === 'both',
+    peerOfSession: sessionId => channelRef.current?.peerOfSession(sessionId),
+    send: async (peerId, text) => { await channelRef.current?.sendToPeer(peerId, text) },
+    // Finite so an ignored card cannot hold its turn open for the life of the
+    // process; long enough that a person can read it and answer.
+    timeoutMs: CARD_TIMEOUT_MS,
+    onExpired: card => {
+      // Said out loud, so the user learns the card lapsed instead of waiting on
+      // a decision nobody can make any more.
+      void channelRef.current?.sendToPeer(card.peerId, '这张卡片已超时作废。')
+    },
+  })
+  // Attached before the loop starts: a request arriving with the first poll must
+  // find an answerer, and one arriving before the channel exists simply
+  // delegates to the GUI.
+  cards.attach()
 
   await startChannelFromStore({
     listAccounts: async () => (account === undefined ? [] : [account]),
@@ -270,6 +322,8 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
     // nor needed - and the plan requires this plugin to run on both.
     ...(presets === undefined ? {} : { presets }),
     generations,
+    cards,
+    onChannel: channel => { channelRef.current = channel },
     // Resolved before the run so a restart resumes where the last one stopped
     // rather than replaying the conversation it already answered.
     ...(account === undefined ? {} : { initialCursor: await cursors.load(account.accountId) }),

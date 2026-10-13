@@ -13,7 +13,7 @@ import type { WechatAccount } from '../credentials.ts'
 import type { AgentPresetsLike, AgentRegistryLike, PeerGenerationsLike } from '../bridge/peer-map.ts'
 import type { MessageApi } from '../wechat/api.ts'
 import { LOGIN_BASE_URL } from '../wechat/login-runner.ts'
-import { Channel, type SessionEventsLike } from './channel.ts'
+import { Channel, type CardAnswererLike, type SessionEventsLike } from './channel.ts'
 
 /** Collaborators for one channel run. */
 export interface RuntimeOptions {
@@ -86,8 +86,24 @@ export interface RuntimeOptions {
    * restart instead of resuming the conversation the user ended.
    */
   generations?: PeerGenerationsLike
+  /**
+   * The interaction cards this channel answers.
+   *
+   * Without it an approval or question request has no answerer here and the turn
+   * that raised one waits forever.
+   */
+  cards?: CardAnswererLike
   /** Called once the channel is polling, for a start-up log line. */
   onStarted?: (accountId: string) => void
+  /**
+   * Called with the channel before it starts polling.
+   *
+   * The card service needs the channel's own peer routing and reply queue, while
+   * the channel needs the card service - so one of the two has to be introduced
+   * after the other exists. This is that seam, and it is narrow on purpose:
+   * nothing else in this module needs to see the channel.
+   */
+  onChannel?: (channel: Channel) => void
   /**
    * Forward a command line to the harness's command runtime.
    * @returns the harness's outcome, or `undefined` when it does not know the command.
@@ -155,6 +171,7 @@ export async function startChannelFromStore(options: RuntimeOptions): Promise<vo
     cwd: options.cwd,
     ...(options.presets === undefined ? {} : { presets: options.presets }),
     ...(options.generations === undefined ? {} : { generations: options.generations }),
+    ...(options.cards === undefined ? {} : { cards: options.cards }),
     sessionExists: options.sessionExists,
     // The channel needs these to tell the user which login is live and to reach
     // the harness's own commands from WeChat.
@@ -163,6 +180,10 @@ export async function startChannelFromStore(options: RuntimeOptions): Promise<vo
     ...(options.nativeCommands === undefined ? {} : { nativeCommands: options.nativeCommands }),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   })
+
+  // Handed over before the loop starts, so the card service can answer a request
+  // that arrives with the very first poll rather than only after a restart.
+  options.onChannel?.(channel)
 
   // Subscribed before the loop starts: a poll that answered before the
   // subscription existed would deliver into a run nothing is listening to.
