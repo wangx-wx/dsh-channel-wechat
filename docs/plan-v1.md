@@ -113,6 +113,27 @@
 - 提问卡**没有 durable 事件**，重启后未答的卡会**变成幽灵卡**（内存里的等待者已不存在）。审批卡有审计事件，不受影响。
 - `both` 模式微信先答时的 GUI 卡滞留。
 
+### Q43（M4 实现期）：媒体用 ECB 全文解密，且失败绝不吞掉消息
+
+**下载/解密**（`src/wechat/crypto.ts` + `media-download.ts`）：
+- **AES-128-ECB，无 IV，PKCS#7**，**整个响应体都是密文**（无明文前缀）。
+- **没有 md5 派生密钥** —— 密钥由服务端随消息下发。`aes_key` 有**两种编码**：
+  - base64(16 原始字节)：**图片**用；
+  - base64(32 位 hex 字符串)：**文件/语音/视频**用，需**再 hex 解码**。
+  读错编码 → 解密失败，表现为「文件损坏」而非「key 读错」，所以 `parseAesKey` 分类后**拒绝**，不硬试。
+- 图片另有 item 级 `aeskey`（**裸 hex**，优先于 `media.aes_key`）→ 在解析期统一转成 base64，让下载路径**只认一种编码**。
+- 无 key = 对象**未加密**，直接拷贝（硬解会 padding 失败）。
+
+**上传**（S2 用）：`getuploadurl` → POST 密文 → 读响应头 `x-encrypted-param` → 作为 `sendmessage` 的 `encrypt_query_param`。**下载参数本身就是引用**，没有额外 id。
+
+**★ 核心纪律：媒体失败绝不吞掉消息。** CDN 报错、字节不被 store 接受、模型不支持图片 —— 全部降级为**追加在文本后的说明**，而不是丢弃整轮。媒体是用户所说内容的**附加物**，不是被听见的前提。图片类型靠**嗅探前导字节**判定（线上不带 media type，而 store 会校验声明类型与字节是否一致）。
+
+**S1e 踩到的坑（记录在案）**：第一版把模型图片能力**先缓存为 false 再异步查询**，会导致每次运行的第一张图都退化成标签。验收测试抓到了；现在改为**按消息 await 查询**，查询失败答「否」（谎报支持的代价是 provider 拒掉整条消息，反过来的代价只是一张图）。
+
+**顺带查实的既有缺陷（未修，S4 处理）**：`WeixinMessage.message_id` 我们写 `number`，而服务端是 **uint64**。已实测：`JSON.parse` 下 `9007199254740993` 与 `9007199254740992` **会碰撞成同一个值**。参考实现用 JSON 预扫描把这三个字段（`message_id`/`msg_id`/`svr_id`）**引号化**后再 parse。
+
+**语音**：服务端已给 `voice_item.text` 转写，且无 provider 接受音频 → **不下载**。**发语音不支持**（`media_type=4` 只有类型定义，参考实现从未调用）。
+
 ## 3. 架构
 
 ```
@@ -253,7 +274,7 @@ ctx.on('approval/request', handler, { prepend: true })   // 必须 prepend + 不
 | **M1 登录** ⚠️ | 协议移植改为全新写（见下方修订）+ `startup.ts` + 凭证进 `ctx.credentials` | ~~`dsh <profile> login` 扫码成功~~ → **改为 M6 面板登录**（见下方修订），CLI 仅在不挂 web app 的 profile 可用 |
 | **M2 文本端到端** ✅ | `api` 消息方法 + monitor + peer-map + dispatcher + reply + runtime | 微信发「hi」→ DSH 回复到达 |
 | **M3 命令** ✅ | `ctx.commands` 透传 + 6 个自管命令 + `/stop` | `/goal off` 有原生回执；`/stop` 能中断正在跑的任务 |
-| **M4 媒体** | 移植 `cdn`/`media` + 图片/文件/语音/视频双向 + 引用 | 发图能理解；产出文件能收到 |
+| **M4 媒体** 🔶 | S0 加密/CDN ✅ S1 入站图片 ✅（`media-download` + `bridge/media` + 接线）；S2 出站文件 / S4 引用待做 | ~~发图能理解~~ ✅ 已由真组合测试覆盖；产出文件能收到（S2） |
 | **M5 卡片** ✅ | waterfall 监听 + 卡片渲染/解析 + 超时 + 队列旁路 | 微信能批准/拒绝/回答提问；`cards:wechat` 时 GUI 不重复弹卡 |
 | **M6 面板** 🔶 | S1 二维码 ✅ S2 登录会话 ✅ S3 页面与 API ✅ S4 扫码即启动 ✅ S5 接线 ✅；设置页卡片待做 | web 端登录页可用（已实测）；设置页卡片待做 |
 | **M7 发布** | README 双语 + LICENSE + npm 发布 | `dsh plugin add dsh-channel-wechat` 一条命令装好 |
