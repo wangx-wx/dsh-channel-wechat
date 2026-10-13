@@ -38,18 +38,30 @@ export interface VoiceItem {
   text?: string
   /** Encoding identifier; not every value is decodable by this client. */
   encode_type?: number
+  /** Bits per sample. */
+  bits_per_sample?: number
   /** Sample rate in Hz. */
   sample_rate?: number
   /** Duration in milliseconds. */
   playtime?: number
+  /**
+   * The encrypted audio object.
+   *
+   * Declared because the server really sends it: without this field a voice
+   * message's audio was unreachable even though the transcription made the
+   * message look handled.
+   */
+  media?: MediaRef
 }
 
 /** CDN reference for an encrypted media object. */
 export interface MediaRef {
   /** Download parameter. */
   encrypt_query_param?: string
-  /** Base64-encoded AES key. */
+  /** Base64-encoded AES key, or the ASCII hex of one - see `parseAesKey`. */
   aes_key?: string
+  /** How the object was packed: 0 encrypts the file id only, 1 also the thumbnail. */
+  encrypt_type?: number
   /** A complete URL, preferred over constructing one from the CDN base. */
   full_url?: string
 }

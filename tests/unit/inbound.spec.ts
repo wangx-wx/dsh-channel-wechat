@@ -33,6 +33,105 @@ function message(overrides: Partial<WeixinMessage> = {}, omit: (keyof WeixinMess
   return base
 }
 
+describe('reading media out of a message', () => {
+  it('describes an image by its CDN reference, not just its label', () => {
+    // A `[图片]` label tells the model nothing. The descriptor is what lets the
+    // channel actually fetch the bytes, which is the whole of M4's inbound half.
+    const parsed = parseInboundMessage(message({
+      item_list: [{
+        type: 2,
+        image_item: { media: { encrypt_query_param: 'p1', full_url: 'https://cdn.test/x' } },
+      }],
+    }))
+
+    expect(parsed?.media).toEqual([{
+      kind: 'image',
+      encryptQueryParam: 'p1',
+      fullUrl: 'https://cdn.test/x',
+    }])
+    // The label stays as the text, so a message whose media fails to download
+    // still says something rather than arriving empty.
+    expect(parsed?.text).toBe('[图片]')
+  })
+
+  it('prefers the image\u2019s own hex aeskey, converted to the base64 form', () => {
+    // Two key fields exist and the item-level one wins. It is hex while
+    // `media.aes_key` is base64, so it has to be converted here - the download
+    // path takes one encoding only, and `parseAesKey` would misread raw hex.
+    const parsed = parseInboundMessage(message({
+      item_list: [{
+        type: 2,
+        image_item: {
+          aeskey: '000102030405060708090a0b0c0d0e0f',
+          media: { encrypt_query_param: 'p1', aes_key: 'IGNORED' },
+        },
+      }],
+    }))
+
+    expect(parsed?.media?.[0]?.aesKeyBase64).toBe('AAECAwQFBgcICQoLDA0ODw==')
+  })
+
+  it('keeps media.aes_key as it is, for the types that send it base64', () => {
+    // File, voice, and video carry the key here already base64-encoded, and
+    // re-encoding it would corrupt it.
+    const parsed = parseInboundMessage(message({
+      item_list: [{
+        type: 4,
+        file_item: { file_name: 'report.pdf', len: '2048', media: { encrypt_query_param: 'p2', aes_key: 'AAECAwQFBgcICQoLDA0ODw==' } },
+      }],
+    }))
+
+    expect(parsed?.media).toEqual([{
+      kind: 'file',
+      encryptQueryParam: 'p2',
+      aesKeyBase64: 'AAECAwQFBgcICQoLDA0ODw==',
+      name: 'report.pdf',
+      size: 2048,
+    }])
+  })
+
+  it('describes voice and video with their media references', () => {
+    // VoiceItem carried no `media` field at all before this, so voice audio
+    // could not be fetched even though the server sent it.
+    const voice = parseInboundMessage(message({
+      item_list: [{ type: 3, voice_item: { media: { encrypt_query_param: 'p3', aes_key: 'AAECAwQFBgcICQoLDA0ODw==' }, playtime: 1200 } }],
+    }))
+    const video = parseInboundMessage(message({
+      item_list: [{ type: 5, video_item: { media: { encrypt_query_param: 'p4', aes_key: 'AAECAwQFBgcICQoLDA0ODw==' } } }],
+    }))
+
+    expect(voice?.media?.[0]).toMatchObject({ kind: 'voice', encryptQueryParam: 'p3' })
+    expect(video?.media?.[0]).toMatchObject({ kind: 'video', encryptQueryParam: 'p4' })
+  })
+
+  it('reports no media for a plain text message', () => {
+    // The field must be absent rather than an empty array for the common case,
+    // so the delivery path has one obvious thing to check.
+    const parsed = parseInboundMessage(message())
+
+    expect(parsed?.media).toBeUndefined()
+  })
+
+  it('skips a media item that carries nothing to download', () => {
+    // An image item with no reference at all is a shape the wire permits; the
+    // label still stands, but there is nothing to fetch.
+    const parsed = parseInboundMessage(message({ item_list: [{ type: 2, image_item: {} }] }))
+
+    expect(parsed?.media).toBeUndefined()
+    expect(parsed?.text).toBe('[图片]')
+  })
+
+  it('describes media with no key as downloadable without decryption', () => {
+    // Images may arrive unencrypted. Marking the absence rather than omitting
+    // the descriptor is what lets the download path fetch them plain.
+    const parsed = parseInboundMessage(message({
+      item_list: [{ type: 2, image_item: { media: { encrypt_query_param: 'p5' } } }],
+    }))
+
+    expect(parsed?.media?.[0]).toEqual({ kind: 'image', encryptQueryParam: 'p5' })
+  })
+})
+
 describe('reading a user message', () => {
   it('carries the text, the sender, and the token a reply must echo', () => {
     const parsed = parseInboundMessage(message())
