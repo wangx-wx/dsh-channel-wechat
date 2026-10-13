@@ -14,6 +14,63 @@
 import { describe, expect, it } from 'vitest'
 import { buildUserMessage, deliverInbound } from '../../src/bridge/dispatcher.ts'
 
+describe('delivering a message that carried media', () => {
+  it('appends the media blocks after the text, in order', () => {
+    // The model reads the user's words first and the images that came with them
+    // second, which is the order they were sent in.
+    const image = { type: 'image', attachment: { attachmentId: 'a1', mediaType: 'image/png', bytes: 3, width: 1, height: 1 } }
+    const message = buildUserMessage({
+      peerId: 'user-7',
+      text: '看看这张图',
+      contextToken: 'ctx-1',
+      messageId: 1,
+      parts: [image as never],
+    })
+
+    expect(message.content).toEqual([
+      { type: 'text', text: '看看这张图' },
+      image,
+    ])
+  })
+
+  it('folds the failure notes into the text the model reads', () => {
+    // A note is not a separate block type; it is words the user's message gains.
+    // Dropping it would leave the model believing no image was sent at all.
+    const message = buildUserMessage({
+      peerId: 'user-7',
+      text: '看看这张图',
+      contextToken: 'ctx-1',
+      messageId: 1,
+      notes: ['（这条消息里的图片未能读取：CDN 500）'],
+    })
+
+    expect(message.content).toEqual([
+      { type: 'text', text: '看看这张图\n（这条消息里的图片未能读取：CDN 500）' },
+    ])
+  })
+
+  it('still says something when media was the only thing sent', () => {
+    // A media-only message with a failed download has no text of its own; the
+    // note is then the whole message, and an empty one is rejected.
+    const message = buildUserMessage({
+      peerId: 'user-7',
+      text: '',
+      contextToken: 'ctx-1',
+      messageId: 1,
+      notes: ['（这条消息里的图片未能读取）'],
+    })
+
+    expect(message.content).toEqual([{ type: 'text', text: '（这条消息里的图片未能读取）' }])
+  })
+
+  it('does not spend a download on a message with no media', () => {
+    // The common text-only path is unchanged, byte for byte.
+    const message = buildUserMessage({ peerId: 'user-7', text: 'hi', contextToken: 'ctx-1', messageId: 1 })
+
+    expect(message.content).toEqual([{ type: 'text', text: 'hi' }])
+  })
+})
+
 describe('building the message', () => {
   it('carries the text and the user source the plan chose', () => {
     const message = buildUserMessage({ peerId: 'user-7', text: 'hi', contextToken: 'ctx-1', messageId: 1 })

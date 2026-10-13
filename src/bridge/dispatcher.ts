@@ -17,7 +17,7 @@
  * @module dsh-channel-wechat/bridge/dispatcher
  */
 
-import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, type ContentBlock, type UserMessage } from '@deepseek-ai/dsh-llm'
 
 /** What one inbound message contributes. */
 export interface InboundInput {
@@ -29,6 +29,20 @@ export interface InboundInput {
   contextToken: string | undefined
   /** The message this delivery correlates with. */
   messageId: number | undefined
+  /**
+   * Media blocks to append after the text, already admitted by the store.
+   *
+   * Admitted rather than raw because the store's durable references are what a
+   * message may legally cite; raw bytes cannot reach a model.
+   */
+  parts?: readonly ContentBlock[]
+  /**
+   * Notes for media that could not be attached.
+   *
+   * Folded into the text rather than added as their own block, because they are
+   * words for the model to read and the message has exactly one text block.
+   */
+  notes?: readonly string[]
 }
 
 /** The subset of `Agent` this module sends through. */
@@ -49,10 +63,17 @@ export interface DeliverOptions {
  * @returns a frozen user message with a fresh identity.
  */
 export function buildUserMessage(input: InboundInput): UserMessage {
+  // Notes are appended to the user's own words, so one text block still carries
+  // everything they said plus whatever could not be attached.
+  const notes = input.notes ?? []
+  const text = notes.length === 0 ? input.text : [input.text, ...notes].filter(part => part !== '').join('\n')
   return createUserMessage({
     // An empty text block is rejected by message construction, so a body that
     // parsed to nothing still has to carry something rather than crash.
-    content: [{ type: 'text', text: input.text === '' ? '(空消息)' : input.text }],
+    content: [
+      { type: 'text', text: text === '' ? '(空消息)' : text },
+      ...(input.parts ?? []),
+    ],
     source: { kind: 'user' },
   })
 }

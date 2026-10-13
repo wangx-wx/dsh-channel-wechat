@@ -17,12 +17,13 @@
  * @module dsh-channel-wechat/bridge/media
  */
 
+import type { FileAttachmentRef, ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import type { InboundMedia } from '../wechat/inbound.ts'
 
-/** A content block this module can produce. */
+/** A content block this module can produce: an admitted image or file. */
 export type MediaPart =
-  | { type: 'image'; attachment: unknown }
-  | { type: 'file'; attachment: unknown }
+  | { type: 'image'; attachment: ImageAttachmentRef }
+  | { type: 'file'; attachment: FileAttachmentRef }
 
 /** What one message's media became. */
 export interface PreparedMedia {
@@ -37,11 +38,11 @@ export interface PrepareMediaOptions {
   /** Fetch and decrypt one object. */
   download: (media: InboundMedia) => Promise<Uint8Array>
   /** Commit one image and return its durable reference. */
-  admitImage: (input: { data: Uint8Array; mediaType: string; name?: string }) => Promise<unknown>
+  admitImage: (input: { data: Uint8Array; mediaType: ImageMediaType; name?: string }) => Promise<ImageAttachmentRef>
   /** Commit one file and return its durable reference. */
-  admitFile: (input: { data: Uint8Array; name?: string }) => Promise<unknown>
-  /** Whether the session's model accepts image input. */
-  supportsImage: () => boolean
+  admitFile: (input: { data: Uint8Array; name?: string }) => Promise<FileAttachmentRef>
+  /** Whether the session's model accepts image input. May need a lookup. */
+  supportsImage: () => boolean | Promise<boolean>
   /** Observe a failure that became a note instead of an error. */
   report?: (label: string, detail: unknown) => void
 }
@@ -104,7 +105,7 @@ async function prepareOne(
     // instead of a thrown admission error that would lose the message.
     throw new Error('unsupported image format')
   }
-  if (!options.supportsImage()) {
+  if (!(await options.supportsImage())) {
     return '（收到一张图片，但当前模型不支持图片输入，未能读取。）'
   }
   const attachment = await options.admitImage({ data, mediaType })
@@ -127,7 +128,7 @@ function noteFor(item: InboundMedia, error: unknown): string {
  * @returns a media type the store accepts, or `undefined` when it is not an
  *   image this deployment takes.
  */
-export function sniffImageType(data: Uint8Array): string | undefined {
+export function sniffImageType(data: Uint8Array): ImageMediaType | undefined {
   if (data.length >= 8
     && data[0] === 0x89 && data[1] === 0x50 && data[2] === 0x4e && data[3] === 0x47
     && data[4] === 0x0d && data[5] === 0x0a && data[6] === 0x1a && data[7] === 0x0a) return 'image/png'

@@ -26,7 +26,8 @@ import { deliverInbound } from '../bridge/dispatcher.ts'
 import { ReplyQueue, extractAssistantText, type ReplySender } from '../bridge/reply.ts'
 import { parseCommandLine, routeCommand } from '../bridge/commands.ts'
 import { runLocalCommand, type LocalCommandContext } from '../bridge/local-commands.ts'
-import { parseInboundMessage } from '../wechat/inbound.ts'
+import { parseInboundMessage, type InboundMedia } from '../wechat/inbound.ts'
+import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { monitorLoop, type MonitorResponse } from './monitor.ts'
 
 /** The event surface the reply path subscribes to. */
@@ -139,6 +140,15 @@ export interface ChannelOptions {
    * raised inside a turn hangs that turn with no reply.
    */
   cards?: CardAnswererLike
+  /**
+   * Turn a message's media into content blocks.
+   *
+   * Absent means this deployment cannot attach media at all, so a media-only
+   * message is delivered as its label. Present but failing is handled inside -
+   * it returns notes rather than throwing, because the user's words must still
+   * arrive.
+   */
+  prepareMedia?: (media: readonly InboundMedia[]) => Promise<{ parts: readonly ContentBlock[]; notes: readonly string[] }>
 }
 
 /**
@@ -435,6 +445,21 @@ export class Channel {
     return options === undefined ? {} : { provider: options.provider, model: options.model }
   }
 
+  /**
+   * Prepare a message's media, when this deployment can.
+   *
+   * A deployment with no preparer delivers the label alone rather than failing:
+   * the text the user typed must still arrive.
+   * @param media - the descriptors the parser found, if any.
+   * @returns the content blocks and notes, both empty when there is no media.
+   */
+  private async prepareMedia(media: readonly InboundMedia[] | undefined): Promise<{ parts: readonly ContentBlock[]; notes: readonly string[] }> {
+    if (media === undefined || media.length === 0) return { parts: [], notes: [] }
+    const prepare = this.options.prepareMedia
+    if (prepare === undefined) return { parts: [], notes: [] }
+    return await prepare(media)
+  }
+
   /** Read, parse, and deliver one polled message. */
   private async handleMessage(message: unknown): Promise<void> {
     const parsed = parseInboundMessage(message as never)
@@ -460,8 +485,11 @@ export class Channel {
     const handle = await this.peers.sessionFor(parsed.peerId)
     this.sessionToPeer.set(String(handle.agent.id), parsed.peerId)
     this.peers.require(handle)
+    // Prepared before the turn starts, so the first thing the model sees is the
+    // complete message rather than an image arriving as a second turn.
+    const prepared = await this.prepareMedia(parsed.media)
     this.options.onTurnStarted?.()
-    deliverInbound(agentOf(handle), parsed, { isLive: () => this.peers.has(parsed.peerId) })
+    deliverInbound(agentOf(handle), { ...parsed, ...prepared }, { isLive: () => this.peers.has(parsed.peerId) })
 
     // Wait for the turn this message started. The answer is read from the
     // committed `assistant/message`, which only exists once the turn settles,

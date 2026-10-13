@@ -696,6 +696,130 @@ describe('a profile boot with the login action', () => {
     expect(outcome).toBe('allowed-once')
   }, 30_000)
 
+  it('admits an inbound image and delivers it as an image block', async () => {
+    // The production half of M4's inbound path, and the defect it exists for:
+    // every other media test injects a preparer, so none of them can see whether
+    // `index.ts` ever builds one. If it does not, the image arrives as the text
+    // `[图片]` and the model is told nothing.
+    //
+    // The store is the real `AttachmentStore` API, stubbed only where it would
+    // touch a filesystem, so what is proven is the call sequence the plugin makes.
+    const previous = process.env['DSH_HOME']
+    const home = tempHome('dsh-wechat-media-')
+    process.env['DSH_HOME'] = home
+
+    /** Bytes the store was asked to admit. */
+    const admitted: { data: Uint8Array; mediaType: string }[] = []
+    /** Content the channel handed the agent. */
+    const delivered: { content: readonly unknown[] }[] = []
+    /** Ciphertext for the 1x1 PNG, produced by `openssl` (see the unit suite). */
+    const CIPHERTEXT = 'c8bba2a6bcbe45b24bf686d06facf9703e58f866a0a91436a5b97a9fc8371bdb527e2ed8f3028914c02e1d0cded500d6'
+    let polls = 0
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
+      const href = String(url)
+      if (href.includes('/download')) {
+        return new Response(Buffer.from(CIPHERTEXT, 'hex'), { status: 200 })
+      }
+      if (href.includes('getupdates')) {
+        polls += 1
+        return new Response(JSON.stringify({
+          ret: 0,
+          msgs: polls === 1
+            ? [{
+              message_id: 1,
+              from_user_id: 'user-7',
+              message_type: 1,
+              context_token: 'ctx-1',
+              item_list: [{
+                type: 2,
+                image_item: {
+                  // The item-level hex key, which the parser must normalize.
+                  aeskey: '000102030405060708090a0b0c0d0e0f',
+                  media: { encrypt_query_param: 'p1' },
+                },
+              }],
+            }]
+            : [],
+          get_updates_buf: `c${polls}`,
+        }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ ret: 0 }), { status: 200 })
+    }) as unknown as typeof fetch)
+
+    const ctx = new Context()
+    provideCmdline(ctx, { args: [], exit: () => {}, ready: { commit() {}, await: async () => {} } } as never)
+    await ctx.plugin(CredentialsLocal as never, {} as never)
+    await ctx.plugin(CommandRuntime)
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
+    })
+    // The model must declare image input, or the image is described instead of
+    // attached - which is the correct behaviour but not what this test is about.
+    ctx.provide('llm', {
+      async resolveModelInfo() { return { inputModalities: ['text', 'image'] } },
+    })
+    // One real image, admitted through the store's own interface.
+    ctx.provide('attachments', {
+      async saveImages(inputs: readonly { data: Uint8Array; mediaType: string }[]) {
+        for (const input of inputs) admitted.push(input)
+        return inputs.map((input, index) => ({
+          attachmentId: `att-${String(index)}`,
+          mediaType: input.mediaType,
+          bytes: input.data.length,
+          width: 1,
+          height: 1,
+        }))
+      },
+      async saveFile(input: { data: Uint8Array; name?: string }) {
+        return { attachmentId: 'file-0', name: input.name ?? 'f', bytes: input.data.length }
+      },
+    })
+    const live = new Map<string, unknown>()
+    ctx.provide('agents', {
+      async create({ sessionId }: { sessionId: string }) {
+        const agent = {
+          id: sessionId,
+          followup: (message: { content: readonly unknown[] }) => { delivered.push(message) },
+          whenIdle: async () => {},
+        }
+        live.set(sessionId, agent)
+        return { agent, dispose: async () => void live.delete(sessionId) }
+      },
+      async resume() { throw new Error('no persisted session') },
+      get: (id: string) => live.get(id),
+    })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
+    await ctx.plugin({
+      name: 'channel-wechat',
+      inject: ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'],
+      apply: applyChannel,
+    }, { cwd: '/work' })
+
+    try {
+      await until(async () => delivered.length > 0, 5_000)
+    } finally {
+      await ctx.fiber.dispose()
+      if (previous === undefined) delete process.env['DSH_HOME']
+      else process.env['DSH_HOME'] = previous
+    }
+
+    // The store was asked for the right format, sniffed from the bytes rather
+    // than assumed...
+    expect(admitted).toHaveLength(1)
+    expect(admitted[0]?.mediaType).toBe('image/png')
+    // ...and the admitted reference reached the agent as a real image block,
+    // after the label that stands in for the media.
+    expect(delivered[0]?.content).toEqual([
+      { type: 'text', text: '[图片]' },
+      {
+        type: 'image',
+        attachment: { attachmentId: 'att-0', mediaType: 'image/png', bytes: 33, width: 1, height: 1 },
+      },
+    ])
+  }, 30_000)
+
   it('reaches the right agent for a native command after a rotation', async () => {
     // A peer past generation zero has its live session under a rotated id. The
     // plugin used to rebuild that id from the peer alone to find the agent for a

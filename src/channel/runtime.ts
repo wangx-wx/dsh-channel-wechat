@@ -14,6 +14,8 @@ import type { AgentPresetsLike, AgentRegistryLike, PeerGenerationsLike } from '.
 import type { MessageApi } from '../wechat/api.ts'
 import { LOGIN_BASE_URL } from '../wechat/login-runner.ts'
 import { Channel, type CardAnswererLike, type SessionEventsLike } from './channel.ts'
+import type { InboundMedia } from '../wechat/inbound.ts'
+import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 
 /** Collaborators for one channel run. */
 export interface RuntimeOptions {
@@ -93,6 +95,13 @@ export interface RuntimeOptions {
    * that raised one waits forever.
    */
   cards?: CardAnswererLike
+  /**
+   * Turn a message's media into content blocks.
+   *
+   * Absent when this deployment cannot attach media, in which case a message is
+   * delivered as its label.
+   */
+  prepareMedia?: (media: readonly InboundMedia[]) => Promise<{ parts: readonly ContentBlock[]; notes: readonly string[] }>
   /** Called once the channel is polling, for a start-up log line. */
   onStarted?: (accountId: string) => void
   /**
@@ -172,6 +181,7 @@ export async function startChannelFromStore(options: RuntimeOptions): Promise<vo
     ...(options.presets === undefined ? {} : { presets: options.presets }),
     ...(options.generations === undefined ? {} : { generations: options.generations }),
     ...(options.cards === undefined ? {} : { cards: options.cards }),
+    ...(options.prepareMedia === undefined ? {} : { prepareMedia: options.prepareMedia }),
     sessionExists: options.sessionExists,
     // The channel needs these to tell the user which login is live and to reach
     // the harness's own commands from WeChat.

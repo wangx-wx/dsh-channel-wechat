@@ -31,6 +31,12 @@ import { createPanel } from './channel/panel.ts'
 import { startChannelFromStore } from './channel/runtime.ts'
 import type { Channel } from './channel/channel.ts'
 import { CardService } from './bridge/cards-service.ts'
+import { prepareMedia as prepareMediaBlocks } from './bridge/media.ts'
+import type { InboundMedia } from './wechat/inbound.ts'
+import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { FileAttachmentRef, ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
+import { downloadMedia } from './wechat/media-download.ts'
+import { CDN_BASE_URL } from './wechat/cdn.ts'
 
 /**
  * How long an interaction card stays answerable.
@@ -290,6 +296,11 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
   // delegates to the GUI.
   cards.attach()
 
+  // Built once per run. The store and the route's image capability are both
+  // optional: a deployment without an attachment store still runs, and simply
+  // delivers the media label instead of the image.
+  const prepareMedia = buildMediaPreparer(ctx, modelSelectionOf(ctx), report)
+
   await startChannelFromStore({
     listAccounts: async () => (account === undefined ? [] : [account]),
     api: createApiClient(),
@@ -323,6 +334,7 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
     ...(presets === undefined ? {} : { presets }),
     generations,
     cards,
+    ...(prepareMedia === undefined ? {} : { prepareMedia }),
     onChannel: channel => { channelRef.current = channel },
     // Resolved before the run so a restart resumes where the last one stopped
     // rather than replaying the conversation it already answered.
@@ -372,6 +384,65 @@ function sessionExistsOf(ctx: Context): (sessionId: string) => Promise<boolean> 
       return true
     }
   }
+}
+
+/**
+ * Build the media preparer for one run, or `undefined` when media is impossible.
+ *
+ * Returns a function rather than being inlined because three separate things can
+ * make media unavailable - no attachment store, no image-capable model, no
+ * downloaded bytes - and each has to degrade to the label rather than to a lost
+ * message.
+ *
+ * @param ctx - the plugin's context, read with `get` because neither service is
+ *   guaranteed: `attachments` is absent on a surface that mounts no store, and
+ *   `llm` on a surface that registers no adapter.
+ * @param selection - the provider and model the profile chose.
+ * @param report - where a media failure is recorded.
+ * @returns the preparer, or `undefined` when this deployment cannot attach media.
+ */
+function buildMediaPreparer(
+  ctx: Context,
+  selection: { provider: string; model: string },
+  report: (label: string, detail: unknown) => void,
+): ((media: readonly InboundMedia[]) => Promise<{ parts: readonly ContentBlock[]; notes: readonly string[] }>) | undefined {
+  const store = ctx.get('attachments') as AttachmentStoreLike | undefined
+  if (store === undefined) return undefined
+  // Resolved per message rather than once, because the model can change between
+  // turns and a session that switched to a text-only model must stop attaching.
+  const supportsImage = async (): Promise<boolean> => {
+    const llm = ctx.get('llm') as LlmLike | undefined
+    if (llm === undefined) return false
+    try {
+      const info = await llm.resolveModelInfo(selection.provider, selection.model)
+      return info?.inputModalities?.includes('image') ?? false
+    } catch {
+      // A lookup that fails must not claim support: sending an image the
+      // provider then rejects loses the whole message, while a label only costs
+      // the image.
+      return false
+    }
+  }
+  return async media => await prepareMediaBlocks(media, {
+    download: async item => await downloadMedia(item, { cdnBaseUrl: CDN_BASE_URL }),
+    // `saveImages` validates then commits, and returns one reference per input,
+    // so the single-element call is the same path the batch one takes.
+    admitImage: async input => (await store.saveImages([input]))[0] as ImageAttachmentRef,
+    admitFile: async input => await store.saveFile(input),
+    supportsImage,
+    report,
+  })
+}
+
+/** The slice of the attachment store this module uses. */
+interface AttachmentStoreLike {
+  saveImages: (inputs: readonly { data: Uint8Array; mediaType: ImageMediaType; name?: string }[]) => Promise<readonly ImageAttachmentRef[]>
+  saveFile: (input: { data: Uint8Array; name?: string }) => Promise<FileAttachmentRef>
+}
+
+/** The slice of the LLM runtime this module uses. */
+interface LlmLike {
+  resolveModelInfo: (provider: string, model: string) => Promise<{ inputModalities?: readonly string[] } | undefined>
 }
 
 /**

@@ -8,9 +8,12 @@
  */
 
 import { Context } from '@deepseek-ai/cordis'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Channel } from '../../src/channel/channel.ts'
 import type { ReplySender } from '../../src/bridge/reply.ts'
+import type { InboundMedia } from '../../src/wechat/inbound.ts'
+import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 
 /** Wait until a condition holds, so a background loop has a chance to run. */
 async function until(check: () => Promise<boolean> | boolean, timeoutMs = 5_000): Promise<void> {
@@ -81,6 +84,8 @@ function build(options: {
   generations?: { generation: (peerId: string) => Promise<number>; startNew: (peerId: string) => Promise<number> }
   /** The card answerer, for the queue-bypass tests. */
   cards?: { addressesCard: (text: string) => boolean; answer: (peerId: string, text: string) => Promise<boolean>; dispose: () => void }
+  /** Turns a message's media into content blocks; absent means none is supported. */
+  prepareMedia?: (media: readonly InboundMedia[]) => Promise<{ parts: readonly ContentBlock[]; notes: readonly string[] }>
 }) {
   const polls: (string | undefined)[] = []
   const sent: { peerId: string; text: string; token: string | undefined }[] = []
@@ -111,6 +116,7 @@ function build(options: {
     executeNativeCommand: async (line: string) => ({ kind: 'success' as const, text: `native: ${line}` }),
     ...(options.generations === undefined ? {} : { generations: options.generations }),
     ...(options.cards === undefined ? {} : { cards: options.cards }),
+    ...(options.prepareMedia === undefined ? {} : { prepareMedia: options.prepareMedia }),
     // Wired from the registry's own record, so a rotated id the test declares
     // existing is resumed rather than created - which is what proves a restart
     // lands on the new conversation.
@@ -371,6 +377,130 @@ describe('starting a new conversation', () => {
     })
 
     expect(f.followed.map(entry => entry.sessionId)).toEqual([rotated])
+  })
+})
+
+describe('delivering a message that carried media', () => {
+  it('prepares the media and puts the blocks on the delivered message', async () => {
+    // The wiring, which is what no unit test can see: `bridge/media` is tested
+    // on its own and `buildUserMessage` is tested on its own, so only a real
+    // poll through the channel proves the two are actually joined - that the
+    // parser's descriptors reach the preparer and its blocks reach the agent.
+    const f = fakeRegistry()
+    const prepared: unknown[] = []
+    const delivered: { content: readonly unknown[] }[] = []
+    f.registry.create = async ({ sessionId }: { sessionId: string }) => {
+      const agent = {
+        id: sessionId,
+        followup: (message: { content: readonly unknown[] }) => {
+          delivered.push(message)
+          f.followed.push({ sessionId, text: '' })
+        },
+      }
+      f.live.set(sessionId, agent)
+      return { agent, dispose: async () => void f.live.delete(sessionId) }
+    }
+
+    const { channel } = build({
+      registry: f,
+      messages: [{
+        message_id: 1,
+        from_user_id: 'user-7',
+        message_type: 1,
+        context_token: 'ctx-1',
+        item_list: [{ type: 2, image_item: { media: { encrypt_query_param: 'p1' } } }],
+      }],
+      prepareMedia: async (media) => {
+        prepared.push(media)
+        return {
+          parts: [{
+            type: 'image',
+            // Branded, exactly as the harness's own tests build one.
+            attachment: {
+              attachmentId: 'a1' as ImageAttachmentRef['attachmentId'],
+              mediaType: 'image/png',
+              bytes: 3,
+              width: 1,
+              height: 1,
+            },
+          }],
+          notes: [],
+        }
+      },
+    })
+
+    await channel.run()
+    await channel.settled()
+
+    // The parser's descriptor reached the preparer...
+    expect(prepared).toEqual([[
+      { kind: 'image', encryptQueryParam: 'p1' },
+    ]])
+    // ...and the admitted block reached the agent, after the label text.
+    expect(delivered[0]?.content).toEqual([
+      { type: 'text', text: '[图片]' },
+      { type: 'image', attachment: { attachmentId: 'a1', mediaType: 'image/png', bytes: 3, width: 1, height: 1 } },
+    ])
+    await channel.stop()
+  })
+
+  it('delivers the message with a note when the media could not be prepared', async () => {
+    // Media is an addition to what the user said: a failure must not swallow the
+    // turn, so the text still arrives, carrying the reason.
+    const f = fakeRegistry()
+    const delivered: { content: readonly { text?: string }[] }[] = []
+    f.registry.create = async ({ sessionId }: { sessionId: string }) => {
+      const agent = {
+        id: sessionId,
+        followup: (message: { content: readonly { text?: string }[] }) => {
+          delivered.push(message)
+          f.followed.push({ sessionId, text: '' })
+        },
+      }
+      f.live.set(sessionId, agent)
+      return { agent, dispose: async () => void f.live.delete(sessionId) }
+    }
+
+    const { channel } = build({
+      registry: f,
+      messages: [{
+        message_id: 1,
+        from_user_id: 'user-7',
+        message_type: 1,
+        context_token: 'ctx-1',
+        item_list: [
+          { type: 1, text_item: { text: '看看这个' } },
+          { type: 2, image_item: { media: { encrypt_query_param: 'p1' } } },
+        ],
+      }],
+      prepareMedia: async () => ({ parts: [], notes: ['（这条消息里的图片未能读取：CDN 500）'] }),
+    })
+
+    await channel.run()
+    await channel.settled()
+
+    expect(delivered[0]?.content).toEqual([
+      { type: 'text', text: '看看这个\n（这条消息里的图片未能读取：CDN 500）' },
+    ])
+    await channel.stop()
+  })
+
+  it('does not consult the preparer for a message with no media', async () => {
+    // The common case must not pay for a store lookup or a download.
+    const f = fakeRegistry()
+    const prepareMedia = vi.fn()
+    const { channel } = build({
+      registry: f,
+      messages: [{ message_id: 1, from_user_id: 'user-7', message_type: 1, context_token: 'ctx-1', item_list: [{ type: 1, text_item: { text: 'hi' } }] }],
+      prepareMedia,
+    })
+
+    await channel.run()
+    await channel.settled()
+
+    expect(prepareMedia).not.toHaveBeenCalled()
+    expect(f.followed[0]?.text).toBe('hi')
+    await channel.stop()
   })
 })
 

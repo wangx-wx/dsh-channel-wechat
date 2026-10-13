@@ -24,6 +24,9 @@ importers:
       '@deepseek-ai/dsh-agent-loop-testkit':
         specifier: 0.2.0-rc.1
         version: 0.2.0-rc.1(0e1730b0ee24f8f3bd799aa9e2592654)
+      '@deepseek-ai/dsh-attachment':
+        specifier: 0.2.0-rc.1
+        version: 0.2.0-rc.1(@deepseek-ai/cordis@4.0.4)(@deepseek-ai/dsh-brand@0.2.0-rc.1(@deepseek-ai/cordis@4.0.4))
       '@deepseek-ai/dsh-cmdline':
         specifier: 0.2.0-rc.1
         version: 0.2.0-rc.1(@deepseek-ai/cordis-plugin-loader@1.0.5)(@deepseek-ai/cordis@4.0.4)
