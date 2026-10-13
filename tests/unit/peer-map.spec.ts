@@ -14,7 +14,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { PeerMap } from '../../src/bridge/peer-map.ts'
+import { PeerMap, sessionIdFor } from '../../src/bridge/peer-map.ts'
 
 /**
  * A stand-in for the pieces of `ctx.agents` the map uses.
@@ -128,6 +128,40 @@ describe('session identity', () => {
 
     expect(a).not.toBe(b)
   })
+
+  it('keeps generation zero on the id every existing session already has', () => {
+    // An untouched peer must keep resuming the conversation it already has, so
+    // the first generation cannot shift the id - existing sessions are stored
+    // under exactly this name.
+    expect(sessionIdFor('user-7', 0)).toBe('channel-wechat-user-7')
+  })
+
+  it('gives a later generation an id of its own', () => {
+    // `/new` has no way to delete the stored session, so the new conversation
+    // can only be a different id. If this collided, `/new` would resume the
+    // conversation the user just ended.
+    expect(sessionIdFor('user-7', 1)).not.toBe(sessionIdFor('user-7', 0))
+    expect(sessionIdFor('user-7', 2)).not.toBe(sessionIdFor('user-7', 1))
+  })
+
+  it('does not confuse one peer\u2019s later generation with another peer\u2019s first', () => {
+    // A rotated id is `escape(peer)~gN`, so a peer id that literally contains
+    // `~g` is the case that could collide with it. Escaping BOTH families is what
+    // prevents that: the escape always writes `~7E`, so `~g` can never occur
+    // inside an escaped peer id, and the first `~g` in an id is always the
+    // separator. Escaping only the rotated family would fail this line.
+    expect(sessionIdFor('user~g1', 0)).not.toBe(sessionIdFor('user', 1))
+  })
+
+  it('leaves a real peer id untouched, so an existing session is still found', () => {
+    // WeChat ids end in `@im.wechat` over `[A-Za-z0-9_.@-]`, none of which is
+    // `~`, so the escape is the identity for every id the server actually issues.
+    // That is what keeps generation zero byte-identical to the id of every
+    // session that already exists on disk.
+    const realPeerId = 'o9cq801j8x36C_4pcNTQF6aAqKIg@im.wechat'
+
+    expect(sessionIdFor(realPeerId, 0)).toBe(`channel-wechat-${realPeerId}`)
+  })
 })
 
 describe('resuming after a restart', () => {
@@ -210,6 +244,73 @@ describe('resuming after a restart', () => {
     await map.sessionFor('user-7')
 
     expect(mounted).toEqual([undefined])
+  })
+})
+
+describe('starting a new conversation', () => {
+  it('uses a different session for the next message', async () => {
+    // What `/new` promises. The session boundary offers no delete, so the only
+    // way to start a fresh conversation is to address a different id.
+    const f = fakeRegistry()
+    const map = new PeerMap({ registry: f.registry as never })
+
+    const before = await map.sessionFor('user-7')
+    map.forget('user-7')
+    await map.startNew('user-7')
+    const after = await map.sessionFor('user-7')
+
+    expect(after.agent.id).not.toBe(before.agent.id)
+  })
+
+  it('resumes the new conversation after a restart instead of the old one', async () => {
+    // The generation has to be durable: an in-memory counter would honor `/new`
+    // until the next restart and then silently resume the ended conversation.
+    // A fresh map over a store that already says generation 1 is exactly what the
+    // next process sees.
+    const rotated = sessionIdFor('user-7', 1)
+    const f = fakeRegistry({ existingSessions: [rotated] })
+    const map = new PeerMap({
+      registry: f.registry as never,
+      sessionExists: async existing => existing === rotated,
+      generations: { generation: async () => 1, startNew: async () => 2 },
+    })
+
+    await map.sessionFor('user-7')
+
+    expect(f.resumed).toEqual([rotated])
+    expect(f.created).toEqual([])
+  })
+
+  it('carries a rotation into the next process', async () => {
+    // The write half of the same guarantee: `/new` must persist the new
+    // generation, or the restart above would read the old one back.
+    const f = fakeRegistry()
+    const advanced: string[] = []
+    const map = new PeerMap({
+      registry: f.registry as never,
+      generations: {
+        generation: async () => 0,
+        startNew: async peerId => {
+          advanced.push(peerId)
+          return 1
+        },
+      },
+    })
+
+    await map.startNew('user-7')
+
+    expect(advanced).toEqual(['user-7'])
+  })
+
+  it('does not touch another peer\u2019s session', async () => {
+    const f = fakeRegistry()
+    const map = new PeerMap({ registry: f.registry as never })
+    const other = await map.sessionFor('user-8')
+
+    await map.startNew('user-7')
+    const rebuiltOther = await map.sessionFor('user-8')
+
+    expect(rebuiltOther).toBe(other)
   })
 })
 

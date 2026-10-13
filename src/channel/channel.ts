@@ -15,7 +15,13 @@
  * @module dsh-channel-wechat/channel/channel
  */
 
-import { PeerMap, type AgentHandleLike, type AgentPresetsLike, type AgentRegistryLike } from '../bridge/peer-map.ts'
+import {
+  PeerMap,
+  type AgentHandleLike,
+  type AgentPresetsLike,
+  type AgentRegistryLike,
+  type PeerGenerationsLike,
+} from '../bridge/peer-map.ts'
 import { deliverInbound } from '../bridge/dispatcher.ts'
 import { ReplyQueue, extractAssistantText, type ReplySender } from '../bridge/reply.ts'
 import { parseCommandLine, routeCommand } from '../bridge/commands.ts'
@@ -59,17 +65,26 @@ export interface ChannelOptions {
   onTurnStarted?: () => void
   /** Cancel one peer's running turn; defaults to cancelling the live agent. */
   cancelRunning?: (peerId: string) => Promise<boolean>
-  /** Forward a line to the harness's command runtime. */
-  executeNativeCommand?: (line: string, peerId: string) => Promise<{ kind: 'success' | 'error'; text?: string } | undefined>
+  /**
+   * Forward a line to the harness's command runtime.
+   *
+   * Takes the resolved agent rather than the peer id: this channel owns the
+   * peer-to-session mapping, and a bridge that re-derived a session id from the
+   * peer would be a second copy of that knowledge - one that goes stale the
+   * moment a peer can have more than one conversation.
+   */
+  executeNativeCommand?: (line: string, agent: unknown) => Promise<{ kind: 'success' | 'error'; text?: string } | undefined>
   /** The account being polled, reported by `/status`. */
   accountId?: string | undefined
   /**
-   * Resolve the command names the harness offers one peer, listed by `/help`.
+   * Resolve the command names the harness offers one agent, listed by `/help`.
    *
-   * Per peer because the harness resolves commands against an agent's own
-   * scoped view.
+   * Takes the agent rather than the peer id, for the same reason
+   * {@link ChannelOptions.executeNativeCommand} does. `undefined` means the peer
+   * has no live session, and the lister owns what to answer - so a deployment
+   * that can answer without one still may.
    */
-  nativeCommands?: (peerId: string) => Promise<readonly string[]>
+  nativeCommands?: (agent: unknown) => Promise<readonly string[]>
   /**
    * Provider and model each new session selects.
    *
@@ -94,6 +109,13 @@ export interface ChannelOptions {
    * text. Absent on a surface that keeps those rows on the host plane.
    */
   presets?: AgentPresetsLike
+  /**
+   * Where each peer's current conversation generation is kept.
+   *
+   * Without it `/new` rotates only in memory, so the next restart resumes the
+   * conversation the user ended.
+   */
+  generations?: PeerGenerationsLike
 }
 
 /**
@@ -137,6 +159,7 @@ export class Channel {
       }),
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
       ...(options.presets === undefined ? {} : { presets: options.presets }),
+      ...(options.generations === undefined ? {} : { generations: options.generations }),
     })
     this.replies = new ReplyQueue({
       send: options.send,
@@ -271,8 +294,8 @@ export class Channel {
         // The harness resolves a command against an agent's own scoped view, so
         // a native command needs a session even when it is the peer's first
         // message. Creating it here is what lets `/goal …` open a conversation.
-        await this.peers.sessionFor(peerId)
-        return execute(line, peerId)
+        const handle = await this.peers.sessionFor(peerId)
+        return execute(line, handle.agent)
       },
     })
     if (outcome === undefined) return
@@ -295,9 +318,15 @@ export class Channel {
       endSession: async () => { await this.endPeerSession(peerId) },
       accountId: this.options.accountId,
       sessionCount: this.peers.size,
-      nativeCommands: async () => this.options.nativeCommands === undefined
-        ? []
-        : this.options.nativeCommands(peerId),
+      nativeCommands: async () => {
+        const list = this.options.nativeCommands
+        if (list === undefined) return []
+        // The live handle rather than `sessionFor`: listing what is available
+        // must not be the thing that opens a conversation. Passing `undefined`
+        // through is deliberate - the lister owns that decision, so a deployment
+        // answering from somewhere other than a live agent still can.
+        return list(this.peers.handleFor(peerId)?.agent)
+      },
     }
   }
 
@@ -313,10 +342,20 @@ export class Channel {
     return true
   }
 
-  /** End a peer's session so the next message starts a fresh one. */
+  /**
+   * End a peer's session so the next message starts a fresh one.
+   *
+   * Disposing the handle is not enough, and that was a real defect: a peer's
+   * session id was derived from the peer alone, so the persisted session
+   * outlived the handle and the next message resumed the conversation the user
+   * had just ended - the opposite of what `/new` told them. The generation is
+   * advanced first, so the id the next message addresses is one nothing has
+   * written to yet.
+   */
   private async endPeerSession(peerId: string): Promise<void> {
     const handle = this.peers.handleFor(peerId)
     this.peers.forget(peerId)
+    await this.peers.startNew(peerId)
     if (handle === undefined) return
     const id = String(handle.agent.id)
     this.sessionToPeer.delete(id)

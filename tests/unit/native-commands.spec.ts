@@ -32,12 +32,9 @@ describe('forwarding to the harness', () => {
     // else resolves a different command view.
     const f = fakeCommands({ kind: 'success', text: 'ok' })
     const agent = { id: 'session-1' }
-    const execute = createNativeCommandExecutor({
-      commands: f.runtime as never,
-      agentFor: () => agent as never,
-    })
+    const execute = createNativeCommandExecutor({ commands: f.runtime as never })
 
-    const outcome = await execute('/goal off', 'user-7')
+    const outcome = await execute('/goal off', agent)
 
     expect(f.calls[0]?.line).toBe('/goal off')
     expect(f.calls[0]?.agent).toBe(agent)
@@ -48,9 +45,9 @@ describe('forwarding to the harness', () => {
 
   it('reports the harness\u2019s error text unchanged', async () => {
     const f = fakeCommands({ kind: 'error', text: 'usage: /goal <objective>' })
-    const execute = createNativeCommandExecutor({ commands: f.runtime as never, agentFor: () => ({}) as never })
+    const execute = createNativeCommandExecutor({ commands: f.runtime as never })
 
-    const outcome = await execute('/goal', 'user-7')
+    const outcome = await execute('/goal', {})
 
     expect(outcome).toEqual({ kind: 'error', text: 'usage: /goal <objective>' })
   })
@@ -59,18 +56,18 @@ describe('forwarding to the harness', () => {
     // `undefined` means an unknown name or a rejected grammar; the router turns
     // that into a message rather than silence.
     const f = fakeCommands(undefined)
-    const execute = createNativeCommandExecutor({ commands: f.runtime as never, agentFor: () => ({}) as never })
+    const execute = createNativeCommandExecutor({ commands: f.runtime as never })
 
-    expect(await execute('/nope', 'user-7')).toBeUndefined()
+    expect(await execute('/nope', {})).toBeUndefined()
   })
 
   it('reports nothing when the peer has no agent to run the command against', async () => {
     // Commands resolve against an agent's own scoped view, so without one there
     // is nothing to execute against rather than a global fallback.
     const f = fakeCommands({ kind: 'success', text: 'should not run' })
-    const execute = createNativeCommandExecutor({ commands: f.runtime as never, agentFor: () => undefined })
+    const execute = createNativeCommandExecutor({ commands: f.runtime as never })
 
-    expect(await execute('/goal off', 'user-7')).toBeUndefined()
+    expect(await execute('/goal off', undefined)).toBeUndefined()
     expect(f.calls).toEqual([])
   })
 
@@ -80,9 +77,9 @@ describe('forwarding to the harness', () => {
     const commands = {
       async execute() { throw new Error('command runtime unavailable') },
     }
-    const execute = createNativeCommandExecutor({ commands: commands as never, agentFor: () => ({}) as never })
+    const execute = createNativeCommandExecutor({ commands: commands as never })
 
-    const outcome = await execute('/goal off', 'user-7')
+    const outcome = await execute('/goal off', {})
 
     expect(outcome?.kind).toBe('error')
     expect(outcome?.text).toContain('command runtime unavailable')
@@ -98,9 +95,9 @@ describe('forwarding to the harness', () => {
         return { commandId: 'c', result: { kind: 'success' as const, text: 'ok' } }
       },
     }
-    const execute = createNativeCommandExecutor({ commands: commands as never, agentFor: () => ({}) as never })
+    const execute = createNativeCommandExecutor({ commands: commands as never })
 
-    await execute('/goal off', 'user-7')
+    await execute('/goal off', {})
 
     expect(seen[0]).toBeInstanceOf(AbortSignal)
   })
@@ -114,10 +111,10 @@ describe('forwarding to the harness', () => {
         return { commandId: 'c', result: { kind: 'success' as const, text: 'ok' } }
       },
     }
-    const execute = createNativeCommandExecutor({ commands: commands as never, agentFor: () => ({}) as never })
+    const execute = createNativeCommandExecutor({ commands: commands as never })
 
-    await execute('/goal off', 'user-7')
-    await execute('/compact', 'user-7')
+    await execute('/goal off', {})
+    await execute('/compact', {})
 
     expect(seen[0]).not.toBe(seen[1])
   })
@@ -130,7 +127,7 @@ describe('the descriptor list', () => {
       { name: 'compact', description: 'Compact the session' },
       { name: 'goal', description: 'Set a goal' },
     ])
-    const names = await createNativeCommandLister({ commands: { list } as never, agentFor: () => ({}) as never })('user-7')
+    const names = await createNativeCommandLister({ commands: { list } as never })({})
 
     expect(names).toEqual(['compact', 'goal'])
   })
@@ -138,7 +135,7 @@ describe('the descriptor list', () => {
   it('reports nothing when the peer has no agent', async () => {
     const list = vi.fn(() => [{ name: 'goal', description: 'x' }])
 
-    const names = await createNativeCommandLister({ commands: { list } as never, agentFor: () => undefined })('user-7')
+    const names = await createNativeCommandLister({ commands: { list } as never })(undefined)
 
     expect(names).toEqual([])
     expect(list).not.toHaveBeenCalled()
@@ -147,7 +144,7 @@ describe('the descriptor list', () => {
   it('reports nothing rather than failing when the runtime throws', async () => {
     const list = vi.fn(() => { throw new Error('unavailable') })
 
-    const names = await createNativeCommandLister({ commands: { list } as never, agentFor: () => ({}) as never })('user-7')
+    const names = await createNativeCommandLister({ commands: { list } as never })({})
 
     expect(names).toEqual([])
   })

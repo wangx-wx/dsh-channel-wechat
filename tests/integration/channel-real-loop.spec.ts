@@ -273,14 +273,8 @@ describe('the harness\'s own commands over WeChat', () => {
       maxRunMs: 3_000,
       sessionOptions: { provider: 'wechat-scripted', model: 'scripted' },
       cwd: '/work',
-      executeNativeCommand: createNativeCommandExecutor({
-        commands: commands as never,
-        agentFor: peerId => ctx.agents.get(SessionId(`channel-wechat-${peerId}`)),
-      }),
-      nativeCommands: createNativeCommandLister({
-        commands: commands as never,
-        agentFor: peerId => ctx.agents.get(SessionId(`channel-wechat-${peerId}`)),
-      }),
+      executeNativeCommand: createNativeCommandExecutor({ commands: commands as never }),
+      nativeCommands: createNativeCommandLister({ commands: commands as never }),
     })
     channel.attach(ctx as never)
     channels.push(channel)

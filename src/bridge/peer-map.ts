@@ -128,19 +128,86 @@ export interface PeerMapOptions {
    * global layer anyway. There, joining a preset is neither possible nor needed.
    */
   presets?: AgentPresetsLike
+  /**
+   * Where each peer's current conversation generation is kept.
+   *
+   * Needed for `/new` to mean what it says across a restart. Without it the map
+   * can only ever address generation zero, so `/new` would be undone by the next
+   * start - the same broken promise in a slower form.
+   */
+  generations?: PeerGenerationsLike
 }
 
 /**
- * Derive the session id for one peer.
+ * The slice of the peer-session store this map uses.
  *
- * A pure function of the peer id, so a restart finds the same conversation.
- * `SessionId` is an unvalidated branded string and the JSONL backend encodes
- * it before using it as a path, so a peer id needs no escaping here.
+ * Structural rather than imported, so the map stays testable without touching
+ * the filesystem.
+ */
+export interface PeerGenerationsLike {
+  /** Read one peer's current generation; zero when it has never rotated. */
+  generation(peerId: string): Promise<number>
+  /** Advance one peer's generation and return the new value. */
+  startNew(peerId: string): Promise<number>
+}
+
+/**
+ * The separator between a peer id and its conversation generation.
+ *
+ * `~g` on purpose: {@link sessionIdFor} escapes every literal `~` in a peer id
+ * before appending this, and the escape it uses (`~7E`) always puts a `7` after
+ * the `~`, so `~g` can never be produced *inside* an escaped peer id. That is
+ * what makes the first `~g` in an id the separator rather than part of the peer.
+ */
+const GENERATION_SEPARATOR = '~g'
+
+/**
+ * Escape a peer id so it cannot contain the generation separator.
+ *
+ * Backslash-free and reversible: the only substitution is `~` → `~7E`, and
+ * because every escape it introduces carries a hex digit after the `~`, the
+ * marker `~g` cannot appear in the result.
  * @param peerId - the WeChat sender id.
+ * @returns the peer id with every literal tilde escaped.
+ */
+function escapePeerId(peerId: string): string {
+  return peerId.replaceAll('~', '~7E')
+}
+
+/**
+ * Derive the session id for one peer's conversation generation.
+ *
+ * Generation zero keeps the id a conversation already has, so an untouched peer
+ * resumes what it was talking to and a restart finds it. A later generation is a
+ * *different* id: the session boundary offers no delete, so a different id is
+ * the only way `/new` can mean what it says - reusing one would resume the very
+ * conversation the user just ended.
+ *
+ * Both families escape the peer id first, which is what makes the mapping
+ * injective. Escaping only the rotated family would collide: peer `user~g1` at
+ * generation zero and peer `user` at generation one would both derive
+ * `channel-wechat-user~g1`. Because {@link escapePeerId} writes `~7E` for every
+ * literal tilde, the separator `~g` can never occur *inside* an escaped peer id,
+ * so the first `~g` is always the separator and the two families cannot overlap.
+ *
+ * Escaping is the identity for every real peer id: WeChat issues ids ending in
+ * `@im.wechat` made of `[A-Za-z0-9_.@-]`, none of which is `~`. That is what
+ * keeps generation zero byte-identical to the id of every session that already
+ * exists. A peer id that did contain a literal `~` would have its stored session
+ * orphaned by the escape - impossible for a real id, and recorded here rather
+ * than left implicit.
+ *
+ * `SessionId` is an unvalidated branded string and the JSONL backend encodes it
+ * before using it as a path, so neither form needs further escaping here.
+ *
+ * @param peerId - the WeChat sender id.
+ * @param generation - the conversation generation; zero for the original one.
  * @returns the session id.
  */
-export function sessionIdFor(peerId: string): SessionId {
-  return `${SESSION_ID_PREFIX}${peerId}` as SessionId
+export function sessionIdFor(peerId: string, generation = 0): SessionId {
+  const escaped = `${SESSION_ID_PREFIX}${escapePeerId(peerId)}`
+  if (generation === 0) return escaped as SessionId
+  return `${escaped}${GENERATION_SEPARATOR}${String(generation)}` as SessionId
 }
 
 /** One peer's session. */
@@ -155,6 +222,14 @@ export class PeerMap {
   private readonly sessionOptions: { provider: string; model: string } | undefined
   private readonly cwd: string | undefined
   private readonly presets: AgentPresetsLike | undefined
+  private readonly generations: PeerGenerationsLike | undefined
+  /**
+   * The generation each peer is currently addressing.
+   *
+   * Held once resolved rather than re-read per message, so a `/new` that lands
+   * mid-conversation cannot move a turn already in flight to another session.
+   */
+  private readonly currentGeneration = new Map<string, number>()
   private readonly entries = new Map<string, Entry>()
   /**
    * Session creations still in flight, per peer.
@@ -181,6 +256,7 @@ export class PeerMap {
     this.sessionOptions = options.sessionOptions
     this.cwd = options.cwd
     this.presets = options.presets
+    this.generations = options.generations
   }
 
   /**
@@ -206,7 +282,7 @@ export class PeerMap {
 
   /** Create or resume one peer's session and record it. */
   private async createSession(peerId: string): Promise<AgentHandleLike> {
-    const sessionId = sessionIdFor(peerId)
+    const sessionId = sessionIdFor(peerId, await this.generationOf(peerId))
     const agentOptions = this.sessionOptions === undefined
       ? {}
       : { agentOptions: { provider: this.sessionOptions.provider, model: this.sessionOptions.model } }
@@ -215,6 +291,50 @@ export class PeerMap {
       : await this.createNewSession(sessionId, agentOptions)
     this.entries.set(peerId, { handle })
     return handle
+  }
+
+  /**
+   * The conversation generation one peer is addressing.
+   *
+   * Seeded once from durable state and then kept in memory, so every message in
+   * a conversation resolves the same id. Re-reading per message would move a turn
+   * to a different session the moment `/new` landed, splitting one exchange
+   * across two conversations.
+   * @param peerId - the WeChat sender id.
+   * @returns the generation; zero when this peer has never started a new one.
+   */
+  private async generationOf(peerId: string): Promise<number> {
+    const known = this.currentGeneration.get(peerId)
+    if (known !== undefined) return known
+    const stored = this.generations === undefined ? 0 : await this.generations.generation(peerId)
+    this.currentGeneration.set(peerId, stored)
+    return stored
+  }
+
+  /**
+   * Move one peer to a new conversation.
+   *
+   * Forgets the live handle without disposing it - the caller owns that, because
+   * `/new` must not tear a running turn down as a side effect - and advances the
+   * generation, so the peer's next message addresses a session id nothing has
+   * written yet and therefore starts empty.
+   *
+   * The counter advances in memory unconditionally and is *also* persisted when
+   * this deployment keeps generations. Rotating only in memory would honour
+   * `/new` until the next restart and then resume the conversation the user
+   * ended; refusing to rotate without a store would make the command silently do
+   * nothing, which is worse than a rotation that lasts one process.
+   *
+   * The old session is left on disk: the session boundary exposes no delete, and
+   * a conversation the user can still read beats one silently resumed.
+   * @param peerId - the WeChat sender id.
+   * @returns the generation the peer now addresses.
+   */
+  async startNew(peerId: string): Promise<number> {
+    const next = (await this.generationOf(peerId)) + 1
+    this.currentGeneration.set(peerId, next)
+    if (this.generations !== undefined) await this.generations.startNew(peerId)
+    return next
   }
 
   /**

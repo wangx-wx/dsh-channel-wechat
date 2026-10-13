@@ -10,7 +10,7 @@
  */
 
 import type { WechatAccount } from '../credentials.ts'
-import type { AgentPresetsLike, AgentRegistryLike } from '../bridge/peer-map.ts'
+import type { AgentPresetsLike, AgentRegistryLike, PeerGenerationsLike } from '../bridge/peer-map.ts'
 import type { MessageApi } from '../wechat/api.ts'
 import { LOGIN_BASE_URL } from '../wechat/login-runner.ts'
 import { Channel, type SessionEventsLike } from './channel.ts'
@@ -81,15 +81,28 @@ export interface RuntimeOptions {
    * then emits raw tool-call syntax that the user reads as garbled text.
    */
   presets?: AgentPresetsLike
+  /**
+   * Where each peer's conversation generation is kept, so `/new` survives a
+   * restart instead of resuming the conversation the user ended.
+   */
+  generations?: PeerGenerationsLike
   /** Called once the channel is polling, for a start-up log line. */
   onStarted?: (accountId: string) => void
   /**
    * Forward a command line to the harness's command runtime.
    * @returns the harness's outcome, or `undefined` when it does not know the command.
    */
-  executeNativeCommand?: (line: string, peerId: string) => Promise<{ kind: 'success' | 'error'; text?: string } | undefined>
-  /** Resolve the command names the harness offers one peer, listed by `/help`. */
-  nativeCommands?: ((peerId: string) => Promise<readonly string[]>) | undefined
+  /**
+   * Forward a command line to the harness's own command runtime.
+   *
+   * Takes the resolved agent: this channel owns the peer-to-session mapping, and
+   * a caller that re-derived a session id from the peer would hold a second copy
+   * of that knowledge.
+   * @returns the harness's outcome, or `undefined` when it does not know the command.
+   */
+  executeNativeCommand?: (line: string, agent: unknown) => Promise<{ kind: 'success' | 'error'; text?: string } | undefined>
+  /** Resolve the command names the harness offers one agent, listed by `/help`. */
+  nativeCommands?: ((agent: unknown) => Promise<readonly string[]>) | undefined
 }
 
 /**
@@ -141,6 +154,7 @@ export async function startChannelFromStore(options: RuntimeOptions): Promise<vo
     ...(options.sessionOptions === undefined ? {} : { sessionOptions: options.sessionOptions }),
     cwd: options.cwd,
     ...(options.presets === undefined ? {} : { presets: options.presets }),
+    ...(options.generations === undefined ? {} : { generations: options.generations }),
     sessionExists: options.sessionExists,
     // The channel needs these to tell the user which login is live and to reach
     // the harness's own commands from WeChat.

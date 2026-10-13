@@ -62,6 +62,22 @@
 | Q39 | 面板内容 | 状态 + 会话映射 + 日志 + reconnect/logout |
 | Q40 | 仓库/License | `github.com/wangx-wx/dsh-channel-wechat`；**MIT** |
 
+### Q41（实现期新增）：`/new` 如何真正开新会话
+
+**背景**：`/new` 原先只 dispose 句柄，但会话 id 是 peer 的纯函数、持久化会话仍在，所以下一条消息 `resume` 回**同一个**会话 —— 与它对用户的承诺相反。
+
+**约束**：`sessionPersistence` **没有任何删除 API**（只有 `create`/`open`/`flush`/`stat`/`list`），JSONL 后端的 `rm` 是私有的。所以「结束会话」只能实现为「换一个 id」。
+
+**结论**：每个 peer 维护一个**持久化的会话代次**（`channel-wechat/peer-sessions.json`，0600 原子写）。
+- 代次 0 = 现有 id（`channel-wechat-<peerId>`），**不迁移**，已有会话照常 resume。
+- `/new` → 代次 +1，下一条消息用 `channel-wechat-<escape(peerId)>~g<N>`。
+- 代次持久化，所以重启后 `/new` 仍然成立（只在内存里转，重启就会 resume 回旧对话）。
+- 旧会话留在磁盘上（无删除 API）；用户能在 GUI 里继续读到它，优于被静默 resume。
+
+**代价（记录在案）**：会话文件随 `/new` 次数累积；peer id 若含 `~` 会被 escape 而孤立旧会话（真实微信 id 为 `[A-Za-z0-9_.@-]@im.wechat`，不可能含 `~`）。
+
+**顺带修掉的回归**：原 `agentFor` 用 `sessionIdFor(peerId)` 重建 id，代次化后原生命令（`/goal`、`/compact`）会去找代次 0 的 agent。已删除这处**重复的 id 推导**：`native-commands` 改为接收**已解析的 agent**，由 channel 提供。
+
 ## 3. 架构
 
 ```

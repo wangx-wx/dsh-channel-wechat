@@ -13,9 +13,11 @@ import { Channel } from '../../src/channel/channel.ts'
 import type { ReplySender } from '../../src/bridge/reply.ts'
 
 /** A registry that records what was created and what was delivered to it. */
-function fakeRegistry() {
+function fakeRegistry(options: { existing?: readonly string[] } = {}) {
   const followed: { sessionId: string; text: string }[] = []
   const live = new Map<string, unknown>()
+  /** Whether a session id already has persisted state, as the real probe asks. */
+  const exists = (sessionId: string): boolean => (options.existing ?? []).includes(sessionId)
 
   return {
     followed,
@@ -45,6 +47,7 @@ function fakeRegistry() {
         return live.get(sessionId)
       },
     },
+    exists,
   }
 }
 
@@ -64,6 +67,8 @@ function build(options: {
   onTurnStarted?: () => void
   /** Replaces the command router's cancel, for /stop tests. */
   cancelRunning?: () => Promise<boolean>
+  /** Where conversation generations are kept, for /new tests. */
+  generations?: { generation: (peerId: string) => Promise<number>; startNew: (peerId: string) => Promise<number> }
 }) {
   const polls: (string | undefined)[] = []
   const sent: { peerId: string; text: string; token: string | undefined }[] = []
@@ -92,6 +97,11 @@ function build(options: {
     ...(options.cancelRunning === undefined ? {} : { cancelRunning: options.cancelRunning }),
     // The harness's command runtime; the channel forwards unknown names to it.
     executeNativeCommand: async (line: string) => ({ kind: 'success' as const, text: `native: ${line}` }),
+    ...(options.generations === undefined ? {} : { generations: options.generations }),
+    // Wired from the registry's own record, so a rotated id the test declares
+    // existing is resumed rather than created - which is what proves a restart
+    // lands on the new conversation.
+    sessionExists: async sessionId => options.registry.exists(sessionId),
   })
   channels.push(channel)
   return { channel, polls, sent }
@@ -297,6 +307,57 @@ describe('slash commands', () => {
     await channel.settled()
 
     expect(f.followed).toEqual([{ sessionId: 'channel-wechat-user-7', text: 'hello' }])
+  })
+})
+
+describe('starting a new conversation', () => {
+  it('delivers the next message to a different session than the one /new ended', async () => {
+    // The defect this covers: `/new` disposed the peer's handle, but a peer's
+    // session id was a pure function of the peer, so the persisted session
+    // survived and the next message resumed the conversation the user had just
+    // been told was over. Nothing about the handle being gone is observable from
+    // the reply text, so this asserts on where the message actually landed.
+    const f = fakeRegistry()
+    const { channel } = build({ registry: f, messages: [] })
+    await channel.run()
+    await channel.settled()
+
+    const handler = channel as unknown as { handleMessage: (message: unknown) => Promise<void> }
+    const fromPeer = (text: string) => ({
+      message_id: 1, from_user_id: 'user-7', message_type: 1,
+      context_token: 'ctx-1', item_list: [{ type: 1, text_item: { text } }],
+    })
+
+    await handler.handleMessage(fromPeer('first'))
+    await handler.handleMessage(fromPeer('/new'))
+    await handler.handleMessage(fromPeer('after the new conversation'))
+
+    const destinations = f.followed.map(entry => entry.sessionId)
+    expect(destinations).toHaveLength(2)
+    expect(destinations[0]).not.toBe(destinations[1])
+  })
+
+  it('honors /new across a restart through the durable generation', async () => {
+    // The in-memory half of the rotation would pass the test above and still
+    // resume the ended conversation after a restart. A fresh channel over a store
+    // that already advanced is exactly what the next process sees.
+    const rotated = 'channel-wechat-user-7~g1'
+    const f = fakeRegistry({ existing: [rotated] })
+    const { channel } = build({
+      registry: f,
+      messages: [],
+      generations: { generation: async () => 1, startNew: async () => 2 },
+    })
+
+    await channel.run()
+    await channel.settled()
+    const handler = channel as unknown as { handleMessage: (message: unknown) => Promise<void> }
+    await handler.handleMessage({
+      message_id: 1, from_user_id: 'user-7', message_type: 1,
+      context_token: 'ctx-1', item_list: [{ type: 1, text_item: { text: 'after a restart' } }],
+    })
+
+    expect(f.followed.map(entry => entry.sessionId)).toEqual([rotated])
   })
 })
 

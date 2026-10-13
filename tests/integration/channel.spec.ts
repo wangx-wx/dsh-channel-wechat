@@ -21,6 +21,7 @@ import { apply as applyChannel, inject as channelInject } from '../../src/index.
 import { loadAccount } from '../../src/credentials.ts'
 import { apply as applyStartup } from '../../src/startup.ts'
 import { saveAccount } from '../../src/credentials.ts'
+import { PeerSessionStore } from '../../src/channel/peer-session-store.ts'
 
 /** One mounted profile plus its disposable state. */
 interface Booted {
@@ -482,6 +483,158 @@ describe('a profile boot with the login action', () => {
 
     expect(resolved).toEqual([undefined])
     expect(mounted).toEqual(['from-profile'])
+  }, 30_000)
+
+  it('persists a conversation rotation when /new runs', async () => {
+    // The production half of `/new`. Advancing the generation in memory honors
+    // the command until the process ends and then resumes the conversation the
+    // user was told was over, so the store has to be wired in `index.ts` - and
+    // the channel's own suites inject one themselves, meaning nothing there can
+    // observe whether production does.
+    //
+    // Read back through a fresh `PeerSessionStore` over the same DSH_HOME, which
+    // is precisely what the next process does.
+    const previous = process.env['DSH_HOME']
+    const home = tempHome('dsh-wechat-new-')
+    process.env['DSH_HOME'] = home
+
+    let polls = 0
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes('getupdates')) {
+        polls += 1
+        // The second poll carries `/new`, which is the command under test.
+        return new Response(JSON.stringify({
+          ret: 0,
+          msgs: polls === 1
+            ? [{
+              message_id: 1, from_user_id: 'user-7', message_type: 1,
+              context_token: 'ctx-1', item_list: [{ type: 1, text_item: { text: '/new' } }],
+            }]
+            : [],
+          get_updates_buf: `c${polls}`,
+        }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ ret: 0 }), { status: 200 })
+    }) as unknown as typeof fetch)
+
+    const ctx = new Context()
+    provideCmdline(ctx, { args: [], exit: () => {}, ready: { commit() {}, await: async () => {} } } as never)
+    await ctx.plugin(CredentialsLocal as never, {} as never)
+    await ctx.plugin(CommandRuntime)
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
+    })
+    const live = new Map<string, unknown>()
+    ctx.provide('agents', {
+      async create({ sessionId }: { sessionId: string }) {
+        const agent = { id: sessionId, followup: () => {}, whenIdle: async () => {} }
+        live.set(sessionId, agent)
+        return { agent, dispose: async () => void live.delete(sessionId) }
+      },
+      async resume() { throw new Error('no persisted session') },
+      get: (id: string) => live.get(id),
+    })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
+    await ctx.plugin({
+      name: 'channel-wechat',
+      inject: ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'],
+      apply: applyChannel,
+    }, { cwd: '/work' })
+
+    let stored = -1
+    try {
+      // `/new` replies before it is observable on disk, so wait on the file the
+      // rotation is supposed to leave behind rather than on the reply.
+      await until(async () => (await new PeerSessionStore().generation('user-7')) > 0, 5_000)
+      // Read while DSH_HOME still points at this test's home: the store resolves
+      // it per call, so a read after the restore would consult the real profile.
+      stored = await new PeerSessionStore().generation('user-7')
+    } finally {
+      await ctx.fiber.dispose()
+      if (previous === undefined) delete process.env['DSH_HOME']
+      else process.env['DSH_HOME'] = previous
+    }
+
+    expect(stored).toBe(1)
+  }, 30_000)
+
+  it('reaches the right agent for a native command after a rotation', async () => {
+    // A peer past generation zero has its live session under a rotated id. The
+    // plugin used to rebuild that id from the peer alone to find the agent for a
+    // native command, which silently resolved generation zero - so after `/new`,
+    // `/goal` and `/compact` found no agent and were dropped without a word.
+    const previous = process.env['DSH_HOME']
+    const home = tempHome('dsh-wechat-native-')
+    process.env['DSH_HOME'] = home
+    // Seeded as the next process would find it: this peer already ran `/new`.
+    await new PeerSessionStore().startNew('user-7')
+
+    /** Agents the command runtime was asked to run against. */
+    const forwarded: unknown[] = []
+    let polls = 0
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes('getupdates')) {
+        polls += 1
+        return new Response(JSON.stringify({
+          ret: 0,
+          msgs: polls === 1
+            ? [{
+              message_id: 1, from_user_id: 'user-7', message_type: 1,
+              context_token: 'ctx-1', item_list: [{ type: 1, text_item: { text: '/goal off' } }],
+            }]
+            : [],
+          get_updates_buf: `c${polls}`,
+        }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ ret: 0 }), { status: 200 })
+    }) as unknown as typeof fetch)
+
+    const ctx = new Context()
+    provideCmdline(ctx, { args: [], exit: () => {}, ready: { commit() {}, await: async () => {} } } as never)
+    await ctx.plugin(CredentialsLocal as never, {} as never)
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
+    })
+    const live = new Map<string, unknown>()
+    ctx.provide('agents', {
+      async create({ sessionId }: { sessionId: string }) {
+        const agent = { id: sessionId, followup: () => {}, whenIdle: async () => {} }
+        live.set(sessionId, agent)
+        return { agent, dispose: async () => void live.delete(sessionId) }
+      },
+      async resume() { throw new Error('no persisted session') },
+      get: (id: string) => live.get(id),
+    })
+    // The harness's command surface, which the channel forwards native commands
+    // to. What matters here is which agent it is handed.
+    ctx.provide('commands', {
+      execute: async (agent: unknown, line: string) => {
+        forwarded.push(agent)
+        return { result: { kind: 'success', text: `ran ${line}` } }
+      },
+      list: () => [],
+    })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
+    await ctx.plugin({
+      name: 'channel-wechat',
+      inject: ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'],
+      apply: applyChannel,
+    }, { cwd: '/work' })
+
+    try {
+      await until(async () => forwarded.length > 0, 3_000)
+    } finally {
+      await ctx.fiber.dispose()
+      if (previous === undefined) delete process.env['DSH_HOME']
+      else process.env['DSH_HOME'] = previous
+    }
+
+    // The agent must be the live one for this peer's *current* conversation, not
+    // a lookup that missed it.
+    expect(forwarded).toEqual([live.get('channel-wechat-user-7~g1')])
   }, 30_000)
 
   it('resumes a session a previous run left behind instead of recreating it', async () => {

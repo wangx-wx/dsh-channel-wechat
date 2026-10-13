@@ -20,9 +20,10 @@ import { loadAccount, listAccounts, saveAccount, forgetAccount } from './credent
 import { runStartupAction } from './login-command.ts'
 import { WECHAT_STARTUP_SERVICE, type WechatStartupValues } from './startup.ts'
 import { createApiClient } from './wechat/api.ts'
-import { sessionIdFor, type AgentPresetsLike } from './bridge/peer-map.ts'
+import type { AgentPresetsLike } from './bridge/peer-map.ts'
 import { createNativeCommandExecutor, createNativeCommandLister, type CommandRuntimeLike } from './bridge/native-commands.ts'
 import { CursorStore } from './channel/cursor-store.ts'
+import { PeerSessionStore } from './channel/peer-session-store.ts'
 import { createSingleRun, type SingleRun } from './channel/single-run.ts'
 import { mountPanelRoutes, panelUrl } from './channel/mount.ts'
 import { createReporter } from './channel/report.ts'
@@ -232,6 +233,10 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
   // Resolved once, so every session in this run joins the same preset even if
   // the profile's default changes mid-run.
   const presets = presetsOf(ctx)
+  // The durable record of which conversation each peer is in. Wired here rather
+  // than defaulted inside the channel: without it `/new` rotates only in memory
+  // and the next restart resumes the very conversation the user ended.
+  const generations = new PeerSessionStore()
 
   await startChannelFromStore({
     listAccounts: async () => (account === undefined ? [] : [account]),
@@ -264,6 +269,7 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
     // tool rows sit on the host plane and joining a preset is neither possible
     // nor needed - and the plan requires this plugin to run on both.
     ...(presets === undefined ? {} : { presets }),
+    generations,
     // Resolved before the run so a restart resumes where the last one stopped
     // rather than replaying the conversation it already answered.
     ...(account === undefined ? {} : { initialCursor: await cursors.load(account.accountId) }),
@@ -271,14 +277,8 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
     // The harness owns the wider command surface; the channel forwards to it so
     // `/goal`, `/compact` and the rest work over WeChat without this plugin
     // tracking them.
-    executeNativeCommand: createNativeCommandExecutor({
-      commands: commandsOf(ctx),
-      agentFor: peerId => agentFor(ctx, peerId),
-    }),
-    nativeCommands: createNativeCommandLister({
-      commands: commandsOf(ctx),
-      agentFor: peerId => agentFor(ctx, peerId),
-    }),
+    executeNativeCommand: createNativeCommandExecutor({ commands: commandsOf(ctx) }),
+    nativeCommands: createNativeCommandLister({ commands: commandsOf(ctx) }),
     onStarted: accountId => { report('polling as', accountId) },
     // These two are the ones that hid a live defect: every restart rejected the
     // session create and reported it here, where nothing could read it.
@@ -366,21 +366,6 @@ function commandsOf(ctx: Context): CommandRuntimeLike {
     throw new Error('channel-wechat: ctx.commands is not mounted')
   }
   return commands
-}
-
-/**
- * Resolve the live agent for one peer.
- *
- * Command resolution is per agent: `ctx.commands` answers against the scoped
- * view of the agent it is given, so a peer with no session has no commands
- * rather than a global fallback.
- * @param ctx - the plugin's cordis context.
- * @param peerId - the WeChat sender id.
- * @returns the agent, or `undefined` when this peer has no session.
- */
-function agentFor(ctx: Context, peerId: string): unknown {
-  const agents = ctx.get('agents') as { get?: (id: string) => unknown } | undefined
-  return agents?.get?.(sessionIdFor(peerId))
 }
 
 /**

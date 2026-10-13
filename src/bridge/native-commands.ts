@@ -7,6 +7,12 @@
  * `/permission` and anything a later plugin registers all arrive here rather
  * than needing an entry in a list this plugin maintains.
  *
+ * The agent is supplied by the caller rather than looked up from the peer id.
+ * The channel owns the peer-to-session mapping, so a bridge that re-derived the
+ * session id from the peer would carry a second copy of that knowledge - and a
+ * second copy is what breaks the moment a peer can have more than one
+ * conversation.
+ *
  * A WeChat message carries no uploads, so every forward passes an empty
  * attachment list.
  *
@@ -28,26 +34,23 @@ export interface CommandRuntimeLike {
   list(agent: unknown): readonly { name: string; description: string }[]
 }
 
-/** Collaborators both bridges need. */
+/** The harness command runtime both bridges need. */
 export interface NativeCommandOptions {
   /** The harness command runtime. */
   commands: CommandRuntimeLike
-  /** Resolve the live agent a peer's command runs against. */
-  agentFor: (peerId: string) => unknown | undefined
 }
 
 /**
  * Build the forwarder the router calls for a non-local command.
- * @param options - the runtime and the agent lookup.
- * @returns a function taking the command line and the peer.
+ * @param options - the command runtime.
+ * @returns a function taking the command line and the agent it runs against.
  */
 export function createNativeCommandExecutor(
   options: NativeCommandOptions,
-): (line: string, peerId: string) => Promise<CommandOutcome | undefined> {
-  return async (line, peerId) => {
-    const agent = options.agentFor(peerId)
-    // Commands resolve against an agent's own scoped view, so without one there
-    // is nothing to run against rather than a global fallback.
+): (line: string, agent: unknown) => Promise<CommandOutcome | undefined> {
+  return async (line, agent) => {
+    // Commands resolve against an agent's own scoped view, so a caller with no
+    // agent has nothing to run against rather than a global fallback.
     if (agent === undefined) return undefined
 
     try {
@@ -72,14 +75,13 @@ export function createNativeCommandExecutor(
 
 /**
  * Build the lister `/help` uses.
- * @param options - the runtime and the agent lookup.
- * @returns a function returning the command names available to a peer.
+ * @param options - the command runtime.
+ * @returns a function returning the command names available to one agent.
  */
 export function createNativeCommandLister(
   options: NativeCommandOptions,
-): (peerId: string) => Promise<readonly string[]> {
-  return async (peerId) => {
-    const agent = options.agentFor(peerId)
+): (agent: unknown) => Promise<readonly string[]> {
+  return async (agent) => {
     if (agent === undefined) return []
     try {
       return options.commands.list(agent).map(command => command.name)
