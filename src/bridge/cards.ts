@@ -63,7 +63,10 @@ function formatApproval(card: PendingCard): string {
     '请回复其中一个：',
     ...APPROVAL_OPTIONS.map((choice, index) => `  ${String(index + 1)}. ${choice} — ${describeApproval(choice)}`),
     '',
-    `回复：${card.id}`,
+    // The id alone is not a reply - the parser requires a choice after it - so
+    // the instruction carries the choice too. A card that taught `回复：P1` on its
+    // own was telling the user to send something it would not accept.
+    `回复：${card.id} 1`,
   )
   return clamp(lines.join('\n'))
 }

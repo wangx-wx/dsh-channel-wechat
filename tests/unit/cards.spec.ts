@@ -57,10 +57,31 @@ describe('rendering an approval card', () => {
     expect(text).toContain('2. reject')
   })
 
-  it('shows the id the reply has to carry', () => {
-    // Without the id in the card the user has nothing to copy, and the reply
-    // syntax is `P1 1`.
-    expect(formatCard(approval({ id: 'P7' }))).toContain('P7')
+  it('shows the complete reply the user has to type, not just the id', () => {
+    // The defect this exists for, found on a real phone: the card said
+    // `回复：P7` while the syntax the parser accepts is `P7 <choice>`. So the one
+    // instruction the card gave was not a reply it would accept. Typing `P7`
+    // therefore answered nothing, and typing the bare option number `1` was not
+    // even recognized as a card reply - it was delivered to the model as an
+    // ordinary message and queued behind the very turn that was waiting.
+    //
+    // Asserting on the id alone cannot see this: `回复：P7` satisfies it.
+    const text = formatCard(approval({ id: 'P7' }))
+
+    expect(text).toContain('回复：P7 1')
+  })
+
+  it('tells the user the same reply syntax the parser accepts', () => {
+    // Tied to the parser rather than restated, so the two can never drift apart
+    // again: whatever the card prints must parse into a real decision.
+    const card = approval({ id: 'P7' })
+    const instructed = /回复：(P\d+ \d)/u.exec(formatCard(card))?.[1]
+    const reply = instructed === undefined
+      ? undefined
+      : parseCardReply(instructed, typed => (typed === 'P7' ? 'P7' : undefined))
+
+    expect(reply).toEqual({ cardId: 'P7', selections: ['1'] })
+    expect(readApprovalReply(reply?.selections ?? [])).toEqual({ kind: 'decided', outcome: 'allowed-once' })
   })
 
   it('prefers the asker\u2019s localized reason when it supplied one', () => {
