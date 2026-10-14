@@ -14,6 +14,10 @@ import type { AgentPresetsLike, AgentRegistryLike, PeerGenerationsLike } from '.
 import type { MessageApi } from '../wechat/api.ts'
 import { LOGIN_BASE_URL } from '../wechat/login-runner.ts'
 import { Channel, type CardAnswererLike, type SessionEventsLike } from './channel.ts'
+import { readFileBytes, sendFileToPeer } from '../bridge/send-file.ts'
+import { uploadToCdn } from '../wechat/cdn-upload.ts'
+import { CDN_BASE_URL } from '../wechat/cdn.ts'
+import type { PresentedFile } from '../bridge/deliverables.ts'
 import type { InboundMedia } from '../wechat/inbound.ts'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 
@@ -139,6 +143,69 @@ export interface RuntimeOptions {
  * @param options - the stored account, the transports, and the policy.
  * @returns when the run has finished.
  */
+/**
+ * Upload and send every file the agent declared.
+ *
+ * One failure does not stop the rest: a single unreadable file must not cost the
+ * user the others, so each is attempted and reported separately.
+ *
+ * @param params - the files, the account's transport, and the destination.
+ * @returns when every file has been attempted.
+ */
+async function sendDeclaredFiles(params: {
+  files: readonly PresentedFile[]
+  api: MessageApi
+  baseUrl: string
+  token: string
+  contextToken?: string
+  to: string
+  report?: (error: unknown, peerId: string, text: string) => void
+}): Promise<void> {
+  for (const file of params.files) {
+    try {
+      await sendFileToPeer(file, {
+        read: readFileBytes,
+        requestUploadUrl: async (input) => {
+          const target = await params.api.getUploadUrl({
+            baseUrl: params.baseUrl,
+            token: params.token,
+            filekey: input.filekey,
+            mediaType: input.mediaType,
+            to: params.to,
+            rawsize: input.rawsize,
+            rawfilemd5: input.rawfilemd5,
+            filesize: input.filesize,
+            aeskey: input.aeskey,
+          })
+          // The wire spells these snake_case; the sender takes camelCase.
+          return { uploadFullUrl: target.upload_full_url, uploadParam: target.upload_param }
+        },
+        upload: async input => await uploadToCdn({
+          data: input.data,
+          key: input.key,
+          filekey: input.filekey,
+          cdnBaseUrl: CDN_BASE_URL,
+          ...(input.uploadFullUrl === undefined ? {} : { uploadFullUrl: input.uploadFullUrl }),
+          ...(input.uploadParam === undefined ? {} : { uploadParam: input.uploadParam }),
+        }),
+        send: async input => await params.api.sendFile({
+          baseUrl: params.baseUrl,
+          token: params.token,
+          to: params.to,
+          ...(params.contextToken === undefined ? {} : { contextToken: params.contextToken }),
+          fileName: input.fileName,
+          encryptQueryParam: input.encryptQueryParam,
+          aesKeyBase64: input.aesKeyBase64,
+          ciphertextSize: input.ciphertextSize,
+          plaintextSize: input.plaintextSize,
+        }),
+      })
+    } catch (error) {
+      params.report?.(error, params.to, file.path)
+    }
+  }
+}
+
 export async function startChannelFromStore(options: RuntimeOptions): Promise<void> {
   const accounts = await options.listAccounts()
   const account = accounts[0]
@@ -182,6 +249,18 @@ export async function startChannelFromStore(options: RuntimeOptions): Promise<vo
     ...(options.generations === undefined ? {} : { generations: options.generations }),
     ...(options.cards === undefined ? {} : { cards: options.cards }),
     ...(options.prepareMedia === undefined ? {} : { prepareMedia: options.prepareMedia }),
+    // Built here rather than passed in: this module already owns the account's
+    // base URL and token, and a second copy would be a second thing to keep
+    // right.
+    sendDeliverables: (peerId, files, contextToken) => sendDeclaredFiles({
+      files,
+      api: options.api,
+      baseUrl,
+      token,
+      ...(contextToken === undefined ? {} : { contextToken }),
+      to: peerId,
+      ...(options.onReplyError === undefined ? {} : { report: options.onReplyError }),
+    }),
     sessionExists: options.sessionExists,
     // The channel needs these to tell the user which login is live and to reach
     // the harness's own commands from WeChat.

@@ -8,7 +8,7 @@
  * as opposed to each piece being proved in isolation.
  */
 
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -818,6 +818,132 @@ describe('a profile boot with the login action', () => {
         attachment: { attachmentId: 'att-0', mediaType: 'image/png', bytes: 33, width: 1, height: 1 },
       },
     ])
+  }, 30_000)
+
+  it('uploads and sends a file the agent declared with present', async () => {
+    // The production half of the outbound path, and the defect it exists for:
+    // every other deliverable test injects the sender, so none of them can see
+    // whether `index.ts` ever builds one. Without it a declared file reaches the
+    // GUI and never the user's phone.
+    const previous = process.env['DSH_HOME']
+    const home = tempHome('dsh-wechat-deliver-')
+    process.env['DSH_HOME'] = home
+
+    /** Every request the plugin made, in order. */
+    const calls: { url: string; body?: unknown }[] = []
+    let polls = 0
+    /** The file being presented, which the plugin must read from disk. */
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-present-'))
+    const filePath = join(dir, 'report.txt')
+    writeFileSync(filePath, 'hello deliverable')
+
+    const ctx = new Context()
+    provideCmdline(ctx, { args: [], exit: () => {}, ready: { commit() {}, await: async () => {} } } as never)
+    await ctx.plugin(CredentialsLocal as never, {} as never)
+    await ctx.plugin(CommandRuntime)
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
+    })
+    const live = new Map<string, unknown>()
+    ctx.provide('agents', {
+      async create({ sessionId }: { sessionId: string }) {
+        const agent = { id: sessionId, followup: () => {}, whenIdle: async () => {} }
+        live.set(sessionId, agent)
+        return { agent, dispose: async () => void live.delete(sessionId) }
+      },
+      async resume() { throw new Error('no persisted session') },
+      get: (id: string) => live.get(id),
+    })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request, init?: { body?: unknown }) => {
+      const href = String(url)
+      calls.push({ url: href, ...(init?.body === undefined ? {} : { body: init.body }) })
+      console.error('STAGE call:', href.slice(0, 70))
+      if (href.includes('getupdates')) {
+        // One message, because the session-to-peer mapping is recorded as a
+        // message is delivered - and a presented file finds its conversation
+        // through that mapping.
+        polls += 1
+        return new Response(JSON.stringify({
+          ret: 0,
+          msgs: polls === 1
+            ? [{
+              message_id: 1, from_user_id: 'user-7', message_type: 1,
+              context_token: 'ctx-1', item_list: [{ type: 1, text_item: { text: 'hi' } }],
+            }]
+            : [],
+          get_updates_buf: `c${polls}`,
+        }), { status: 200 })
+      }
+      if (href.includes('getuploadurl')) {
+        // A COMPLETE url rather than a bare parameter: this is the branch the
+        // runtime maps from the wire's snake_case, and it is preferred over
+        // rebuilding one - so a mapping slip here posts to the wrong object.
+        return new Response(JSON.stringify({ ret: 0, upload_full_url: 'https://cdn.test/authorized' }), { status: 200 })
+      }
+      if (href === 'https://cdn.test/authorized' || href.includes('/upload?')) {
+        // The CDN answers success with a HEADER, not a body.
+        return new Response(null, { status: 200, headers: { 'x-encrypted-param': 'dl-1' } })
+      }
+      return new Response(JSON.stringify({ ret: 0 }), { status: 200 })
+    }) as unknown as typeof fetch)
+
+    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
+    await ctx.plugin({
+      name: 'channel-wechat',
+      inject: ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'],
+      apply: applyChannel,
+    }, { cwd: dir })
+
+    try {
+      // The mapping from session to peer is built when a message arrives, which
+      // is also how the presented file finds its conversation.
+      await until(async () => live.size > 0, 3_000)
+      // The session-to-peer mapping is recorded as a message is delivered, so
+      // the poll must have answered at least once before the event can route.
+      await until(async () => calls.some(call => call.url.includes('getupdates')), 3_000)
+      const sessionId = 'channel-wechat-user-7'
+      // Raised the way the real listener raises it: through the context's own
+      // event surface, from the tool's own event shape.
+      // Emitted through a structural view, because the event's arguments are
+      // typed per event name and this suite needs only the session-id routing.
+      const emit = ctx.emit.bind(ctx) as unknown as (
+        name: string, session: { id: string; header: { cwd: string } }, event: unknown,
+      ) => void
+      emit('session/event',
+        { id: sessionId, header: { cwd: dir } },
+        { type: 'deliverables/presented', data: { turn: 1, callId: 'c1', files: [{ path: filePath, description: '报表' }] } })
+
+      await until(async () => calls.some(call => call.url.includes('sendmessage')), 5_000)
+      console.error('STAGE sent')
+    } finally {
+      await ctx.fiber.dispose()
+      if (previous === undefined) delete process.env['DSH_HOME']
+      else process.env['DSH_HOME'] = previous
+    }
+
+    // The file was uploaded to the CDN with metadata the server checks...
+    const uploadAsk = calls.find(call => call.url.includes('getuploadurl'))
+    const ask = JSON.parse(String(uploadAsk?.body ?? '{}')) as Record<string, unknown>
+    expect(ask['rawsize']).toBe('hello deliverable'.length)
+    // 17 plaintext bytes pad to 32 with PKCS#7, which is what the server checks
+    // against what is actually posted.
+    expect(ask['filesize']).toBe(32)
+    // ...the ciphertext was posted, and the download parameter was read from the
+    // response header...
+    expect(calls.some(call => call.url === 'https://cdn.test/authorized')).toBe(true)
+    // ...and the message the user receives cites that parameter and the name.
+    const send = calls.find(call => call.url.includes('sendmessage'))
+    const body = JSON.parse(String(send?.body ?? '{}')) as { msg?: { item_list?: unknown[] } }
+    expect(body.msg?.item_list).toEqual([{
+      type: 4,
+      file_item: {
+        media: { encrypt_query_param: 'dl-1', aes_key: expect.any(String), encrypt_type: 1 },
+        file_name: 'report.txt',
+        len: String('hello deliverable'.length),
+      },
+    }])
   }, 30_000)
 
   it('reaches the right agent for a native command after a rotation', async () => {

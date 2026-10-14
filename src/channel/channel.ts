@@ -27,13 +27,14 @@ import { ReplyQueue, extractAssistantText, type ReplySender } from '../bridge/re
 import { parseCommandLine, routeCommand } from '../bridge/commands.ts'
 import { runLocalCommand, type LocalCommandContext } from '../bridge/local-commands.ts'
 import { parseInboundMessage, type InboundMedia } from '../wechat/inbound.ts'
+import { presentedFilesFrom, type PresentedFile } from '../bridge/deliverables.ts'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { monitorLoop, type MonitorResponse } from './monitor.ts'
 
 /** The event surface the reply path subscribes to. */
 export interface SessionEventsLike {
   /** Subscribe to one committed session event. Returns the disposer. */
-  on: (event: 'session/event', listener: (session: { id: unknown }, event: unknown) => void) => () => void
+  on: (event: 'session/event', listener: (session: { id: unknown; header?: { cwd?: string } }, event: unknown) => void) => () => void
 }
 
 /**
@@ -149,6 +150,14 @@ export interface ChannelOptions {
    * arrive.
    */
   prepareMedia?: (media: readonly InboundMedia[]) => Promise<{ parts: readonly ContentBlock[]; notes: readonly string[] }>
+  /**
+   * Send the files the agent declared as deliverables.
+   *
+   * Absent means this deployment cannot send files, and a declaration is simply
+   * left alone. Present but failing must not throw into the event dispatch,
+   * which is shared with the reply path.
+   */
+  sendDeliverables?: (peerId: string, files: readonly PresentedFile[], contextToken?: string) => Promise<void>
 }
 
 /**
@@ -331,7 +340,12 @@ export class Channel {
    * @returns a disposer that unsubscribes.
    */
   attach(events: SessionEventsLike): () => void {
-    return events.on('session/event', (session, event) => { this.onSessionEvent(String(session.id), event) })
+    return events.on('session/event', (session, event) => {
+      // The working directory comes off the session header, which is where a
+      // presented file's relative path is relative to - this process's own cwd
+      // is a different directory.
+      this.onSessionEvent(String(session.id), event, session.header?.cwd)
+    })
   }
 
   /**
@@ -341,14 +355,43 @@ export class Channel {
    * routing can be tested without a session store.
    * @param sessionId - the session the event belongs to.
    * @param event - the committed event.
+   * @param cwd - the session's working directory, used to resolve a relative
+   *   presented path. Absent leaves such a path unresolved rather than guessing.
    */
-  onSessionEvent(sessionId: string, event: unknown): void {
+  onSessionEvent(sessionId: string, event: unknown, cwd?: string): void {
     // Only sessions this channel created are its to answer for.
     const peerId = this.sessionToPeer.get(sessionId)
     if (peerId === undefined) return
+
+    // A declared deliverable is a second kind of answer, alongside the model's
+    // text - so it is routed before the text check, which would otherwise
+    // return early for an event that carries no assistant message.
+    const files = presentedFilesFrom(event, cwd ?? '')
+    if (files !== undefined) {
+      this.sendDeliverables(peerId, files)
+      return
+    }
+
     const text = extractAssistantText(event as never)
     if (text === undefined) return
     void this.replies.enqueue(peerId, text, this.tokens.get(peerId))
+  }
+
+  /**
+   * Send declared deliverables, reporting a failure instead of throwing.
+   *
+   * Detached because `session/event` is a synchronous emit shared with the reply
+   * path: an await here would hold up every other listener, and a rejection
+   * would become an unhandled one inside the session service.
+   * @param peerId - the conversation that produced the files.
+   * @param files - the declared files.
+   */
+  private sendDeliverables(peerId: string, files: readonly PresentedFile[]): void {
+    const send = this.options.sendDeliverables
+    if (send === undefined) return
+    void send(peerId, files, this.tokens.get(peerId)).catch((error: unknown) => {
+      this.options.onReplyError?.(error, peerId, files.map(file => file.path).join(', '))
+    })
   }
 
   /**

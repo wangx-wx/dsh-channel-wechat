@@ -86,6 +86,8 @@ function build(options: {
   cards?: { addressesCard: (text: string) => boolean; answer: (peerId: string, text: string) => Promise<boolean>; dispose: () => void }
   /** Turns a message's media into content blocks; absent means none is supported. */
   prepareMedia?: (media: readonly InboundMedia[]) => Promise<{ parts: readonly ContentBlock[]; notes: readonly string[] }>
+  /** Sends the files the agent declared as deliverables. */
+  sendDeliverables?: (peerId: string, files: readonly { path: string; description?: string }[]) => Promise<void>
 }) {
   const polls: (string | undefined)[] = []
   const sent: { peerId: string; text: string; token: string | undefined }[] = []
@@ -117,6 +119,7 @@ function build(options: {
     ...(options.generations === undefined ? {} : { generations: options.generations }),
     ...(options.cards === undefined ? {} : { cards: options.cards }),
     ...(options.prepareMedia === undefined ? {} : { prepareMedia: options.prepareMedia }),
+    ...(options.sendDeliverables === undefined ? {} : { sendDeliverables: options.sendDeliverables }),
     // Wired from the registry's own record, so a rotated id the test declares
     // existing is resumed rather than created - which is what proves a restart
     // lands on the new conversation.
@@ -377,6 +380,116 @@ describe('starting a new conversation', () => {
     })
 
     expect(f.followed.map(entry => entry.sessionId)).toEqual([rotated])
+  })
+})
+
+describe('sending the files the agent declared', () => {
+  it('sends a presented file to the conversation that produced it', async () => {
+    // The wiring, which no unit test can see: `presentedFilesFrom` is tested on
+    // its own and the upload is tested on its own, so only a real event through
+    // the channel proves the two are joined - and proves the peer is resolved
+    // from the session rather than guessed.
+    const f = fakeRegistry()
+    const sent: { peerId: string; files: readonly { path: string; description?: string }[] }[] = []
+    // Driven through the real poll loop: the session-to-peer mapping is built as
+    // the message is delivered, and `handleMessage` is private precisely so that
+    // this path is the only one tests take.
+    const { channel } = build({
+      registry: f,
+      sendDeliverables: async (peerId, files) => { sent.push({ peerId, files }) },
+      messages: [{
+        message_id: 1, from_user_id: 'user-7', message_type: 1,
+        context_token: 'ctx-1', item_list: [{ type: 1, text_item: { text: 'hi' } }],
+      }],
+    })
+
+    await channel.run()
+    await channel.settled()
+    const sessionId = 'channel-wechat-user-7'
+    channel.onSessionEvent(sessionId, {
+      type: 'deliverables/presented',
+      data: { turn: 1, callId: 'c1', files: [{ path: '/w/report.xlsx', description: '报表' }] },
+    })
+    // Delivery is detached from the event, so the assertion waits.
+    await until(() => sent.length > 0, 2_000)
+
+    expect(sent).toEqual([{ peerId: 'user-7', files: [{ path: '/w/report.xlsx', description: '报表' }] }])
+    await channel.stop()
+  })
+
+  it('ignores a present event for a session this channel does not own', async () => {
+    // A second channel instance, or the same profile's GUI, would otherwise
+    // receive files belonging to a conversation it knows nothing about.
+    const f = fakeRegistry()
+    const sent: unknown[] = []
+    const { channel } = build({
+      registry: f,
+      sendDeliverables: async (peerId, files) => { sent.push({ peerId, files }) },
+    })
+
+    channel.onSessionEvent('someone-elses-session', {
+      type: 'deliverables/presented',
+      data: { turn: 1, callId: 'c1', files: [{ path: '/w/x.pdf' }] },
+    })
+    await new Promise(resolve => setTimeout(resolve, 50))
+
+    expect(sent).toEqual([])
+  })
+
+  it('resolves a relative path against the session working directory', async () => {
+    // The tool documents relative paths as relative to the Session cwd; a plugin
+    // process has a different one, so reading the raw value would look in the
+    // wrong place. The real `Session` carries it on its header.
+    const f = fakeRegistry()
+    const sent: { files: readonly { path: string }[] }[] = []
+    const { channel } = build({
+      registry: f,
+      sendDeliverables: async (_peerId, files) => { sent.push({ files }) },
+      messages: [{
+        message_id: 1, from_user_id: 'user-7', message_type: 1,
+        context_token: 'ctx-1', item_list: [{ type: 1, text_item: { text: 'hi' } }],
+      }],
+    })
+
+    await channel.run()
+    await channel.settled()
+    // The working directory the real `session/event` listener reads off the
+    // session's header, passed explicitly so the routing is testable here.
+    channel.onSessionEvent('channel-wechat-user-7', {
+      type: 'deliverables/presented',
+      data: { turn: 1, callId: 'c1', files: [{ path: 'out/report.xlsx' }] },
+    }, '/work/here')
+    await until(() => sent.length > 0, 2_000)
+
+    expect(sent[0]?.files).toEqual([{ path: '/work/here/out/report.xlsx' }])
+    await channel.stop()
+  })
+
+  it('does not send anything for an unrelated session event', async () => {
+    // The listener runs on every append; sending on anything but a present would
+    // flood the user with the agent's intermediate files.
+    const f = fakeRegistry()
+    const sent: unknown[] = []
+    const { channel } = build({
+      registry: f,
+      sendDeliverables: async (peerId, files) => { sent.push({ peerId, files }) },
+      messages: [{
+        message_id: 1, from_user_id: 'user-7', message_type: 1,
+        context_token: 'ctx-1', item_list: [{ type: 1, text_item: { text: 'hi' } }],
+      }],
+    })
+
+    await channel.run()
+    await channel.settled()
+    channel.onSessionEvent('channel-wechat-user-7', { type: 'assistant/message', data: { text: 'hi' } })
+    channel.onSessionEvent('channel-wechat-user-7', {
+      type: 'workspace/changes',
+      data: { turn: 1, files: [{ path: '/w/scratch.tmp' }] },
+    })
+    await new Promise(resolve => setTimeout(resolve, 50))
+
+    expect(sent).toEqual([])
+    await channel.stop()
   })
 })
 
