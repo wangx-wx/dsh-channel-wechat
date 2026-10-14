@@ -19,6 +19,15 @@ import { MessageItemType, MessageState, MessageType, type MessageItem, type Weix
 
 export type { MessageItem, WeixinMessage } from './types.ts'
 
+/**
+ * What a message that parsed to nothing is delivered as.
+ *
+ * A sentinel, not content: it exists so a blank bubble is never sent for a
+ * message that yielded no text. It must therefore never be copied anywhere that
+ * describes what a message SAID - doing so claims the sender wrote it.
+ */
+export const EMPTY_MESSAGE_PLACEHOLDER = '(空消息)'
+
 /** Which media an item carries. */
 export type MediaKind = 'image' | 'voice' | 'file' | 'video'
 
@@ -116,10 +125,13 @@ export function quoteFromItems(items: MessageItem[] | undefined): string | undef
     // one present.
     if (ref.title !== undefined && ref.title.trim() !== '') parts.push(ref.title.trim())
     if (ref.message_item !== undefined) {
-      // Read with the ordinary body reader, so a quoted image or file
-      // contributes its label rather than nothing.
-      const body = bodyFromItems([ref.message_item]).trim()
-      if (body !== '') parts.push(body)
+      // Deliberately NOT `bodyFromItems`: that reader substitutes
+      // `EMPTY_MESSAGE_PLACEHOLDER` for content it cannot read, which is right
+      // for a whole message and wrong here - copying it into the quote text
+      // claims the quoted message said "(空消息)". A quote with nothing readable
+      // contributes nothing.
+      const body = contentFromItem(ref.message_item)
+      if (body !== undefined) parts.push(body)
     }
     if (parts.length > 0) return parts.join(' | ')
   }
@@ -218,7 +230,7 @@ function commonRef(
  * @returns the text to deliver.
  */
 export function bodyFromItems(items: MessageItem[] | undefined): string {
-  if (items === undefined || items.length === 0) return '(空消息)'
+  if (items === undefined || items.length === 0) return EMPTY_MESSAGE_PLACEHOLDER
   for (const item of items) {
     // Text wins over any media in the same message, matching the protocol's
     // documented precedence.
@@ -235,7 +247,31 @@ export function bodyFromItems(items: MessageItem[] | undefined): string {
     const label = mediaLabel(item)
     if (label !== undefined) return label
   }
-  return '(空消息)'
+  return EMPTY_MESSAGE_PLACEHOLDER
+}
+
+/**
+ * Read what one item actually says, or `undefined` when it says nothing.
+ *
+ * Distinct from {@link bodyFromItems} in its failure mode, which is the whole
+ * point: this returns `undefined` for unreadable content instead of a
+ * placeholder, so a caller that composes text from it never attributes words to
+ * a sender who wrote none.
+ * @param item - the item to read.
+ * @returns the item's text or media label, or `undefined` for no content.
+ */
+export function contentFromItem(item: MessageItem): string | undefined {
+  // Text wins over media in the same item, matching the protocol's documented
+  // precedence.
+  if (item.type === MessageItemType.TEXT) {
+    const text = item.text_item?.text
+    if (typeof text === 'string' && text !== '') return text
+  }
+  if (item.type === MessageItemType.VOICE) {
+    const text = item.voice_item?.text
+    if (typeof text === 'string' && text !== '') return text
+  }
+  return mediaLabel(item)
 }
 
 /** A short description of a media item, for a message that carries no text. */

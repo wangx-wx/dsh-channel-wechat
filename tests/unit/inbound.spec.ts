@@ -98,6 +98,37 @@ describe('reading a quoted message', () => {
     expect(parseInboundMessage(message())?.quote).toBeUndefined()
   })
 
+  it('never emits the empty-message placeholder as a quote', () => {
+    // A real defect, found on a phone: quoting a message whose content the
+    // reference did not inline produced `[引用] (空消息)`. That placeholder exists
+    // to stop a blank bubble being sent for a message that parsed to nothing -
+    // it is a sentinel meaning "no content", so copying it into the text claims
+    // the quoted message SAID "(空消息)".
+    const parsed = parseInboundMessage(message({
+      item_list: [{
+        type: 1,
+        text_item: { text: '他父亲多大了' },
+        ref_msg: { message_item: { type: 1, text_item: {} } },
+      }],
+    }))
+
+    expect(parsed?.quote).toBeUndefined()
+  })
+
+  it('quotes a reference whose item can be read, even when a sibling cannot', () => {
+    // The placeholder must not leak in either direction: real content still
+    // comes through.
+    const parsed = parseInboundMessage(message({
+      item_list: [{
+        type: 1,
+        text_item: { text: '嗯' },
+        ref_msg: { message_item: { type: 1, text_item: { text: '有内容' } } },
+      }],
+    }))
+
+    expect(parsed?.quote).toBe('有内容')
+  })
+
   it('reports no quote when the reference carries nothing readable', () => {
     // A reference that names only a server id (no inline content) is the shape a
     // newer client sends. We have no local cache to resolve it from, so the
