@@ -93,6 +93,21 @@ CLI 的 `login`/`logout`/`status` 仍然保留，但仅在**不挂 web app** 的
 | **M6** 🔶 | 面板登录 | web 端实测扫码登录、扫码即启动；设置页卡片待做 |
 | **M7** 🔶 | 发布 | **v0.1.0 可安装**（`npm pack` → 新 profile 实测加载）；尚未推 npm |
 
+## 数据落在哪里
+
+| 内容 | 位置 |
+|---|---|
+| **聊天记录** | `~/.dsh/sessions/<cwd 转义>/channel-wechat-<peerId>[~g<N>]/session.v4.jsonl.zstd` |
+| 插件状态 | `~/.dsh/channel-wechat/`（游标 + 会话代次） |
+| **诊断日志** | `~/.dsh/channel-wechat/log/channel-wechat-YYYY-MM-DD.log` |
+| 登录凭证 | `~/.dsh/.credentials.yaml`（DSH 的凭证体系，非本插件私有） |
+
+**聊天记录由 DSH 自己落盘**（`ctx.agents` → `sessionPersistence`），本插件不写会话文件。格式是 **zstd 压缩的 JSONL**，用 `zstd -d -c <文件> | less` 查看。
+
+**日志每天一个文件，保留 7 天。** 文件名按**本地日期**。桌面端尤其需要它：host 进程的 stdout 交给 Electron 主进程，而那里没有终端也不写日志，**没有这个文件就什么都看不到**。
+
+⚠️ **日志留 7 天，但聊天记录永不删除**——`/new` 只是换一个会话目录，旧会话会一直累积（DSH 的会话接口没有删除 API）。
+
 ## 已知问题（记录，未修）
 
 | 问题 | 影响 | 触发条件 |

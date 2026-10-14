@@ -109,6 +109,28 @@ The design documents are written in Chinese.
 | **M6** 🔶 | Login panel | Scan-to-login verified on web, login starts the channel; settings-page card pending |
 | **M7** 🔶 | Release | **v0.1.0 is installable** (`npm pack` → verified loading in a fresh profile); not pushed to npm yet |
 
+## Where data lives
+
+| What | Where |
+|---|---|
+| **Chat transcript** | `~/.dsh/sessions/<escaped cwd>/channel-wechat-<peerId>[~g<N>]/session.v4.jsonl.zstd` |
+| Plugin state | `~/.dsh/channel-wechat/` (cursor and conversation generations) |
+| **Diagnostic log** | `~/.dsh/channel-wechat/log/channel-wechat-YYYY-MM-DD.log` |
+| Login credential | `~/.dsh/.credentials.yaml` (the harness credential store, not private to this plugin) |
+
+**The transcript is persisted by the harness** (`ctx.agents` → `sessionPersistence`);
+this plugin writes no session file. It is zstd-compressed JSONL, readable with
+`zstd -d -c <file> | less`.
+
+**The log is one file per local date, kept for seven days.** It matters most on
+the desktop app: the host process's stdout is handed to the Electron main
+process, which has no terminal and writes no log file, so without this file
+nothing is visible at all.
+
+⚠️ **The log is pruned after a week, but transcripts are never deleted** - `/new`
+only moves to a different session directory, so old conversations accumulate
+(the session boundary exposes no delete).
+
 ## Known issues (recorded, not fixed)
 
 | Issue | Impact | Trigger |
