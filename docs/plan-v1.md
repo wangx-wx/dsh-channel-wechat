@@ -333,7 +333,7 @@ ctx.on('approval/request', handler, { prepend: true })   // 必须 prepend + 不
 | **M4 媒体** 🔶 | S0 加密/CDN ✅ S1 入站图片 ✅ S2 出站文件 ✅（只发 `present` 声明的）S4 引用 ✅（内联可用；`svr_id` 分支**只记录不修**，见 Q45） | ~~发图能理解~~ ✅ 真机已验证；~~产出文件能收到~~ 代码完成，**待真机实测**；引用**真机已验证**（引 Agent ✅ / 引自己 ⚠️） |
 | **M5 卡片** ✅ | waterfall 监听 + 卡片渲染/解析 + 超时 + 队列旁路 | 微信能批准/拒绝/回答提问；`cards:wechat` 时 GUI 不重复弹卡 |
 | **M6 面板** 🔶 | S1 二维码 ✅ S2 登录会话 ✅ S3 页面与 API ✅ S4 扫码即启动 ✅ S5 接线 ✅；设置页卡片待做 | web 端登录页可用（已实测）；设置页卡片待做 |
-| **M7 发布** | README 双语 + LICENSE + npm 发布 | `dsh plugin add dsh-channel-wechat` 一条命令装好 |
+| **M7 发布** 🔶 | 双语 README ✅ LICENSE ✅ 致谢 ✅ 可发布 ✅（`0.1.0`/去 `private`/`prepack`/`files`/`exports` 修正）`npm pack` 验证 ✅；**未推 npm** | `dsh plugin add dsh-channel-wechat` 一条命令装好 —— **tarball 已在全新 profile 实测装好并加载** |
 
 **M2 是第一个真实闭环**，也是「集成契约是否正确」的验证点——协议层移植量最大，但风险最高的是全新写的集成层。
 
@@ -495,6 +495,38 @@ requestBody: 'buffered', fetch })`——必须挂在 `/api/*` 下。实测无 co
 **同时记录的技术债**：`await ctx.inject(...)` 的 `await` **无测试覆盖**
 （去掉后测试仍全过），保留是为显式表达顺序，而非有可观测差异。
 
+### M7 完成记录（2026-10-14）
+
+分两批：先记录 Q45 的两处**只记录不修复**项，再做发布准备。
+
+**`npm pack` 直接抓出 3 个缺陷** —— 它们在开发机上**全部不可见**，因为本地
+`node_modules` 是 hoisted 的、且 `lib/` 一直在原地：
+
+| # | 缺陷 | 证据 | 修法 |
+|---|---|---|---|
+| **A** | `THIRD_PARTY_NOTICES.md` **不在 tarball 里** | npm 只自动收录 README/LICENSE | 加进 `files[]` |
+| **B** | 两个裸 import **未声明** | `dsh-home-paths`/`schemastery` 既非 dep 也非 peer，却因 hoisted 而能解析 | 按官方约定：`home-paths` → peer+dev，`schemastery` → dependencies |
+| **C** | **干净 checkout 发布 = 空包** | 实测：无 `prepack` 时 tarball 只有 **4 文件 / 10.1 kB / 零代码**，而 `npm publish` 会报成功 | 加 `prepack: tsdown` |
+
+**顺带修正的第四个缺陷（同源）**：`exports["./startup"].types` 指向 `./src/startup.ts`，
+而 `src/` 不在 `files[]` —— 声明在开发机上能解析、安装后**静默退化为 `any`**。
+改为 `dts: true` 产出 `lib/startup.d.ts` 并指向它。
+
+**修法上的一个自我纠正**：最初写的测试断言「`files[]` 里的路径不得被 `.gitignore` 忽略」。
+**这个不变量是错的** —— 构建产物本来就该 gitignore；顺着它修等于把生成代码提交进仓库。
+真正的不变量是「`exports` 指向的路径必须在 `files[]` 里」，测试已改为这一条。
+
+**测试**：513 个（41 文件）全过，`tsc --noEmit` 干净。4 个新断言逐一变异验证：
+删依赖声明、`types` 指回 `src/`、删 `prepack`、把 `prepack` 换成不构建的命令 —— **全部被捕获**。
+
+**端到端验收（不是只看 `npm pack` 输出）**：真实 tarball → `dsh plugin add` 装入
+**全新隔离 profile** → `--dump-config` 显示本插件两层 → 真实启动，插件打印出自己的
+登录行（且确认那行来自 `profiles/tarcheck/node_modules/` 里解出的包，不是本地 checkout）。
+
+**版本与发布**：`0.0.0`→`0.1.0`，去掉 `private: true`，补 `repository`/`homepage`/`bugs`/`keywords`。
+README 按用户裁定做成 **中文 `README.md` + 英文 `README.en.md`**（非 DSH 官方的
+`README.md`+`README.zh.md` 约定），并修正了过期的状态行。**未推送 npm** —— 本轮只做
+「准备好 + 验证过」。
 
 ## 7. 已知风险与技术债
 

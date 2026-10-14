@@ -1,10 +1,20 @@
 # dsh-channel-wechat
 
+[English](./README.en.md) | 中文
+
 把微信（腾讯 iLink / ClawBot）接入 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的**通道插件**。
 
-> 状态：**M6 面板登录已完成**（v1 尚未发布）
+> 状态：**v0.1.0**，功能完整、可安装。出站文件尚未真机验证；`svr_id` 引用与 `message_id` 精度为**已知记录项**（见 [plan-v1 §Q45](./docs/plan-v1.md)）。
 
 ---
+
+## 安装
+
+```bash
+dsh plugin --profile <你的 profile> add dsh-channel-wechat
+```
+
+也可以从 tarball 安装：`dsh plugin --profile <name> add ./dsh-channel-wechat-0.1.0.tgz`。
 
 ## 这是什么
 
@@ -75,13 +85,22 @@ CLI 的 `login`/`logout`/`status` 仍然保留，但仅在**不挂 web app** 的
 | 阶段 | 内容 | 验收 |
 |---|---|---|
 | **M0** ✅ | 包骨架 + 真组合测试 | cordis fiber 达到 `ACTIVE` |
-| **M1** ⚠️ | 协议层 + 凭证持久化 | CLI 路径在 web/desktop 上不可用 → 改由 M6 面板登录 |
+| **M1** ⚠️ | 协议层 + 凭证持久化 | CLI 路径在 web/desktop 上不可用 → 改由面板登录 |
 | **M2** ✅ | **文本端到端** | 微信发消息 → DSH 回复到达 |
 | **M3** ✅ | 命令 + `/stop` | 原生命令有回执；能打断 |
-| M4 | 媒体双向 + 引用 | 发图能理解，产出文件能收到 |
-| M5 | 审批卡 | 微信批准/拒绝，GUI 卡同步 |
-| **M6** 🔶 | 面板登录 | **已完成**：web 端实测扫码登录、扫码即启动；设置页卡片待做 |
-| M7 | 发布 | `dsh plugin add dsh-channel-wechat` |
+| **M4** 🔶 | 媒体双向 + 引用 | 发图 ✅ / 引用 ✅ 真机验证；出站文件代码完成，**待真机验证** |
+| **M5** ✅ | 审批卡 | 微信批准/拒绝，GUI 卡同步 |
+| **M6** 🔶 | 面板登录 | web 端实测扫码登录、扫码即启动；设置页卡片待做 |
+| **M7** 🔶 | 发布 | **v0.1.0 可安装**（`npm pack` → 新 profile 实测加载）；尚未推 npm |
+
+## 已知问题（记录，未修）
+
+| 问题 | 影响 | 触发条件 |
+|---|---|---|
+| 引用**自己的消息**时客户端只发 `svr_id` | 显示 `[引用] （引用的消息内容未能读取）`；引用 Agent 的消息正常 | 需先建消息缓存才能还原 |
+| `message_id` 声明为 `number`，服务端是 uint64 | 仅影响一条错误日志里的数字 | 超过 2^53，且要做引用缓存时 |
+
+取舍与实测数据见 [plan-v1 §Q45](./docs/plan-v1.md)。
 
 ### 开发
 
@@ -90,7 +109,7 @@ pnpm install
 pnpm test              # 单元测试（毫秒级）
 pnpm test:integration  # 真组合测试：隔离 DSH_HOME 启动真实 launcher
 pnpm typecheck
-pnpm build
+pnpm build             # 发布前 `prepack` 会自动执行
 ```
 
 集成测试会在临时目录建一个隔离的 `DSH_HOME`，**不会触碰你正在使用的 dsh profile**。

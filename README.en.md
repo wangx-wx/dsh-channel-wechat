@@ -1,0 +1,157 @@
+# dsh-channel-wechat
+
+English | [中文](./README.md)
+
+A **channel plugin** that connects WeChat (Tencent iLink / ClawBot) to
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
+
+> Status: **v0.1.0**, feature-complete and installable. Outbound files are not yet
+> verified on a real device; the `svr_id` quote shape and `message_id` precision
+> are **recorded known issues** (see [plan-v1 §Q45](./docs/plan-v1.md)).
+
+---
+
+## Install
+
+```bash
+dsh plugin --profile <your-profile> add dsh-channel-wechat
+```
+
+From a tarball: `dsh plugin --profile <name> add ./dsh-channel-wechat-0.1.0.tgz`.
+
+## What this is
+
+A standard DSH **plugin + bundle** (one package) that runs inside the Harness
+process. There is no separate bridge process:
+
+```
+WeChat user ⇄ Tencent iLink ⇄ 【this plugin (inside the DSH process)】
+                ├─ getUpdates long-poll for inbound messages
+                ├─ agent.followup() injects the turn natively
+                ├─ session/event → sendmessage for replies
+                ├─ approval cards (WeChat and GUI)
+                └─ login panel (web / desktop)
+```
+
+- **Protocol layer ported from Tencent's official implementation**
+  (`@tencent-weixin/openclaw-weixin`, MIT), with its fidelity and test baseline
+- **DSH integration layer written from scratch**, against the documented
+  contracts (typed, not duck-typed)
+- **Multiple working directories**: one WeChat user can bind several sessions;
+  `/cwd` switches by creating a session in that directory
+- **Long-polling decoupled from processing**: messages keep arriving during a
+  long turn, and `/stop` can interrupt it
+
+## Login
+
+On startup the plugin prints an address you can open directly:
+
+```
+[channel-wechat] 微信登录：用手机微信打开 http://127.0.0.1:19387/api/channel-wechat/login 扫码连接
+```
+
+Open it with **WeChat on your phone** and scan. No restart is needed: the
+credential is written to `ctx.credentials` immediately and the channel begins
+polling in the same process.
+
+### Why not `dsh <profile> login`
+
+Because it is **impossible on a profile that mounts the web app** (web /
+desktop). This is not this plugin's choice:
+
+The DSH launcher hands the **same complete argument list** to **every** app in
+the profile, and each parses it. `dsh-web-app`'s program **declares flags only
+and has no positional**, so it judges `login` as `too many arguments` and calls
+`exit(1)` — **the boot ends before it ever reaches this plugin**.
+`-- login`, `--json`, `--wechat-login`, and ordering this plugin's bundle before
+the web app were all **measured to fail** (none of the five official
+command-line-parsing apps tolerates an unknown argument, and that is deliberate).
+
+Two comparable plugins avoid this road as well: `dsh-wechat` has no CLI at all
+and only offers an HTTP page; `dsh-weixin`'s CLI is a **separate executable**, and
+its README lists the panel as the preferred path.
+
+The CLI's `login`/`logout`/`status` are still present, but only work on a profile
+that does **not** mount the web app.
+
+## Differences from comparable plugins
+
+| | `dsh-wechat` | `dsh-weixin` | **this plugin** |
+|---|---|---|---|
+| Types | TS strict | plain JS | TS strict |
+| Protocol fidelity | three inbound-media gaps | no `-14` / no dedup | matches upstream + ports its tests |
+| Slash commands | 17 | none | native passthrough + 6 self-managed |
+| Concurrency | serial, blocking | serial, blocking | decoupled and interruptible |
+| Panel auth | routes exposed | no auth at all | **behind `/api`, reusing the GUI's token wall** |
+
+## Documentation
+
+The design documents are written in Chinese.
+
+| Document | Contents |
+|---|---|
+| [docs/plan-v1.md](./docs/plan-v1.md) | **Implementation plan (final)**: decision log, architecture, milestones, risks |
+| [docs/design.md](./docs/design.md) | Early design draft (v0.3, partly superseded by plan-v1) |
+| [docs/事实核查.md](./docs/事实核查.md) | Protocol fact-checking and corrected conclusions |
+| [docs/recon/](./docs/recon/) | **13 reconnaissance reports**: protocol, build, DSH contracts, comparable implementations |
+| [开发日志.md](./开发日志.md) | Decision log in reverse chronological order |
+
+## Milestones
+
+| Stage | Content | Acceptance |
+|---|---|---|
+| **M0** ✅ | Package skeleton + real composition test | cordis fiber reaches `ACTIVE` |
+| **M1** ⚠️ | Protocol layer + credential persistence | CLI path unusable on web/desktop → moved to the panel |
+| **M2** ✅ | **Text end to end** | WeChat message → DSH reply arrives |
+| **M3** ✅ | Commands + `/stop` | Native commands get a receipt; interrupts work |
+| **M4** 🔶 | Media both ways + quotes | images ✅ / quotes ✅ verified on a real device; outbound files coded, **awaiting real-device verification** |
+| **M5** ✅ | Approval cards | WeChat approves/rejects; the GUI card stays in sync |
+| **M6** 🔶 | Login panel | Scan-to-login verified on web, login starts the channel; settings-page card pending |
+| **M7** 🔶 | Release | **v0.1.0 is installable** (`npm pack` → verified loading in a fresh profile); not pushed to npm yet |
+
+## Known issues (recorded, not fixed)
+
+| Issue | Impact | Trigger |
+|---|---|---|
+| Quoting **your own message**: the client sends only `svr_id` | Shows `[引用] （引用的消息内容未能读取）`; quoting an agent message works | Needs a message cache before it can be restored |
+| `message_id` is typed `number` but the server sends a uint64 | Affects one number in one error log line | Above 2^53, and once a quote cache exists |
+
+Tradeoffs and measurements: [plan-v1 §Q45](./docs/plan-v1.md).
+
+### Development
+
+```bash
+pnpm install
+pnpm test              # unit tests (milliseconds)
+pnpm test:integration  # real composition: boots the real launcher on an isolated DSH_HOME
+pnpm typecheck
+pnpm build             # `prepack` runs this automatically before publish
+```
+
+The integration tests create an isolated `DSH_HOME` in a temporary directory and
+**never touch the dsh profile you are using**.
+
+They need a real launcher to boot, and default to the **local DSH checkout**
+(via `node apps/cli/lib/bin.js`; no Electron, and it can point at any version):
+
+```bash
+DSH_CHECKOUT=/path/to/deepseek-harness pnpm test:integration  # override the checkout
+```
+
+If that checkout is absent, they fall back to the `dsh` shim inside
+`DeepSeek Harness.app`.
+
+## Not in scope
+
+Group chats (no protocol basis), multiple accounts at runtime, message
+deduplication/throttling (matching upstream), question cards (v2), unsolicited
+push (v2), a separate authorization system.
+
+## License and acknowledgements
+
+- The protocol specification and parts of the implementation come from Tencent's
+  [`openclaw-weixin`](https://github.com/Tencent/openclaw-weixin) (**MIT**,
+  `Copyright (C) 2026 Tencent`); full notices in
+  [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)
+- Engineering practices referenced from `wechat-claude-code` (MIT)
+- This plugin is licensed **MIT**
