@@ -106,6 +106,8 @@ export interface RuntimeOptions {
    * delivered as its label.
    */
   prepareMedia?: (media: readonly InboundMedia[]) => Promise<{ parts: readonly ContentBlock[]; notes: readonly string[] }>
+  /** Record one file successfully sent to a peer. */
+  onDeliverableSent?: (label: string, detail: unknown) => void
   /** Called once the channel is polling, for a start-up log line. */
   onStarted?: (accountId: string) => void
   /**
@@ -160,6 +162,14 @@ async function sendDeclaredFiles(params: {
   contextToken?: string
   to: string
   report?: (error: unknown, peerId: string, text: string) => void
+  /**
+   * Record one file that went out.
+   *
+   * Separate from {@link report}, which is about failures: a successful send had
+   * no trace at all, so "nothing logged" could not be told apart from "nothing
+   * ran" - the ambiguity a live test could not resolve.
+   */
+  onSent?: (label: string, detail: unknown) => void
 }): Promise<void> {
   for (const file of params.files) {
     try {
@@ -200,6 +210,7 @@ async function sendDeclaredFiles(params: {
           plaintextSize: input.plaintextSize,
         }),
       })
+      params.onSent?.('已发送文件', `${file.path} → ${params.to}`)
     } catch (error) {
       params.report?.(error, params.to, file.path)
     }
@@ -260,6 +271,7 @@ export async function startChannelFromStore(options: RuntimeOptions): Promise<vo
       ...(contextToken === undefined ? {} : { contextToken }),
       to: peerId,
       ...(options.onReplyError === undefined ? {} : { report: options.onReplyError }),
+      ...(options.onDeliverableSent === undefined ? {} : { onSent: options.onDeliverableSent }),
     }),
     sessionExists: options.sessionExists,
     // The channel needs these to tell the user which login is live and to reach

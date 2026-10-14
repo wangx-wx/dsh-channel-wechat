@@ -832,6 +832,13 @@ describe('a profile boot with the login action', () => {
     /** Every request the plugin made, in order. */
     const calls: { url: string; body?: unknown }[] = []
     let polls = 0
+    // The plugin's own lines go to `console.error`; captured so the SUCCESS of a
+    // send is observable. Without this, "no output" cannot be told apart from
+    // "nothing ran" - which is exactly the ambiguity a live test left behind.
+    const logged: string[] = []
+    const consoleError = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      logged.push(args.map(String).join(' '))
+    })
     /** The file being presented, which the plugin must read from disk. */
     const dir = mkdtempSync(join(tmpdir(), 'dsh-present-'))
     const filePath = join(dir, 'report.txt')
@@ -944,6 +951,15 @@ describe('a profile boot with the login action', () => {
         len: String('hello deliverable'.length),
       },
     }])
+
+    // A successful send says so. Only failures were recorded before this, so a
+    // silent success and a silent no-op looked identical from the outside - and
+    // that ambiguity is what made a live test unable to answer whether the file
+    // had gone out.
+    consoleError.mockRestore()
+    expect(logged.join('\n')).toMatch(/已发送文件/u)
+    expect(logged.join('\n')).toContain('report.txt')
+    expect(logged.join('\n')).toContain('user-7')
   }, 30_000)
 
   it('reaches the right agent for a native command after a rotation', async () => {

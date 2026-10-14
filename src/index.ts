@@ -350,6 +350,10 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
     // session create and reported it here, where nothing could read it.
     onMessageError: (error, _message) => { report('inbound message failed', error) },
     onReplyError: (error, peerId) => { report(`reply to ${peerId} failed`, error) },
+    // A send that worked is recorded too: with only failures logged, "no output"
+    // is indistinguishable from "nothing ran", which is exactly what left a live
+    // test unable to say whether a file had gone out.
+    onDeliverableSent: (label, detail) => { report(label, detail) },
     signal,
   })
 }
