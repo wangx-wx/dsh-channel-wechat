@@ -426,6 +426,48 @@ describe('delivering a message that quoted another', () => {
     await channel.stop()
   })
 
+  it('tells the agent a reference existed when its content could not be read', async () => {
+    // The wire shape seen on a real phone: a reference present, its content
+    // omitted. The model must still learn that the user is replying to
+    // something - and the channel must carry the flag between the two modules.
+    const f = fakeRegistry()
+    const delivered: { content: readonly { text?: string }[] }[] = []
+    f.registry.create = async ({ sessionId }: { sessionId: string }) => {
+      const agent = {
+        id: sessionId,
+        followup: (message: { content: readonly { text?: string }[] }) => {
+          delivered.push(message)
+          f.followed.push({ sessionId, text: '' })
+        },
+      }
+      f.live.set(sessionId, agent)
+      return { agent, dispose: async () => void f.live.delete(sessionId) }
+    }
+
+    const { channel } = build({
+      registry: f,
+      messages: [{
+        message_id: 1,
+        from_user_id: 'user-7',
+        message_type: 1,
+        context_token: 'ctx-1',
+        item_list: [{
+          type: 1,
+          text_item: { text: '他妈妈呢？' },
+          ref_msg: { svr_id: '9007199254740993' },
+        }],
+      }],
+    })
+
+    await channel.run()
+    await channel.settled()
+
+    expect(delivered[0]?.content).toEqual([
+      { type: 'text', text: '[引用] （引用的消息内容未能读取）\n他妈妈呢？' },
+    ])
+    await channel.stop()
+  })
+
   it('leaves an ordinary message unmarked', async () => {
     // The marker must not appear in front of every message in the conversation.
     const f = fakeRegistry()

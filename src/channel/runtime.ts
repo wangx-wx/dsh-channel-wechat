@@ -106,6 +106,8 @@ export interface RuntimeOptions {
    * delivered as its label.
    */
   prepareMedia?: (media: readonly InboundMedia[]) => Promise<{ parts: readonly ContentBlock[]; notes: readonly string[] }>
+  /** Record a reference that arrived with unreadable content. */
+  onUnreadableQuote?: (detail: unknown) => void
   /** Record one file successfully sent to a peer. */
   onDeliverableSent?: (label: string, detail: unknown) => void
   /** Called once the channel is polling, for a start-up log line. */
@@ -250,6 +252,7 @@ export async function startChannelFromStore(options: RuntimeOptions): Promise<vo
     ...(options.initialCursor === undefined ? {} : { initialCursor: options.initialCursor }),
     ...(options.onReplyError === undefined ? {} : { onReplyError: options.onReplyError }),
     ...(options.onMessageError === undefined ? {} : { onMessageError: options.onMessageError }),
+    ...(options.onUnreadableQuote === undefined ? {} : { onUnreadableQuote: options.onUnreadableQuote }),
     ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.pollTimeoutMs === undefined ? {} : { pollTimeoutMs: options.pollTimeoutMs }),

@@ -73,6 +73,16 @@ export interface InboundMessage {
    * model reads - without it a reply like "这个呢?" arrives with no referent.
    */
   quote?: string
+  /**
+   * Whether the message referenced another, even if its text could not be read.
+   *
+   * `quote` alone cannot express this: "no reference" and "a reference whose
+   * content never arrived" both leave it undefined, and they are different
+   * situations - one hides a reply context from the model, the other is an
+   * ordinary message. Keeping them apart is also what makes a wire shape
+   * diagnosable from a log instead of requiring a phone screenshot.
+   */
+  quoted?: true
 }
 
 /**
@@ -91,6 +101,7 @@ export function parseInboundMessage(message: WeixinMessage): InboundMessage | un
 
   const media = mediaFromItems(message.item_list)
   const quote = quoteFromItems(message.item_list)
+  const quoted = hasReference(message.item_list)
   return {
     peerId,
     text: bodyFromItems(message.item_list),
@@ -100,7 +111,21 @@ export function parseInboundMessage(message: WeixinMessage): InboundMessage | un
     // thing to check before any download work starts.
     ...(media.length === 0 ? {} : { media }),
     ...(quote === undefined ? {} : { quote }),
+    ...(quoted ? { quoted: true as const } : {}),
   }
+}
+
+/**
+ * Whether any item references another message.
+ *
+ * Separate from {@link quoteFromItems} because a reference can exist whose text
+ * this client cannot read, and that case has to stay distinguishable from
+ * "references nothing".
+ * @param items - the message's items, in order.
+ * @returns whether a reference is present.
+ */
+export function hasReference(items: MessageItem[] | undefined): boolean {
+  return (items ?? []).some(item => item.ref_msg !== undefined)
 }
 
 /**

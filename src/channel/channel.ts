@@ -78,6 +78,15 @@ export interface ChannelOptions {
   onReplyError?: (error: unknown, peerId: string, text: string) => void
   /** Observe a handler failure; the loop continues either way. */
   onMessageError?: (error: unknown, message: unknown) => void
+  /**
+   * Observe a reference that arrived with unreadable content.
+   *
+   * The wire has more than one shape here - the content may be inline, or only an
+   * id may arrive - and the difference is invisible downstream because both leave
+   * the quote empty. Without a line naming which happened, deciding what to do
+   * about it requires a phone screenshot rather than a log.
+   */
+  onUnreadableQuote?: (detail: unknown) => void
   /** Observe a turn beginning, so a caller can tell work is in flight. */
   onTurnStarted?: () => void
   /** Cancel one peer's running turn; defaults to cancelling the live agent. */
@@ -530,6 +539,12 @@ export class Channel {
     this.peers.require(handle)
     // Prepared before the turn starts, so the first thing the model sees is the
     // complete message rather than an image arriving as a second turn.
+    // A reference whose text never arrived is reported, because "quoted nothing"
+    // and "quoted something unreadable" are indistinguishable in the delivered
+    // message and need different fixes.
+    if (parsed.quoted === true && parsed.quote === undefined) {
+      this.options.onUnreadableQuote?.(`from ${parsed.peerId}`)
+    }
     const prepared = await this.prepareMedia(parsed.media)
     this.options.onTurnStarted?.()
     deliverInbound(agentOf(handle), { ...parsed, ...prepared }, { isLive: () => this.peers.has(parsed.peerId) })

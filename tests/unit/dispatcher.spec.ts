@@ -32,6 +32,46 @@ describe('delivering a message that quoted another', () => {
     ])
   })
 
+  it('says a reference existed when its text could not be read', () => {
+    // Honest and useful: the model learns the user is replying to something even
+    // though the content never arrived - so it can ask rather than answer a
+    // question whose subject it never saw. Saying nothing would silently drop a
+    // reply context; inventing text would be worse.
+    const message = buildUserMessage({
+      peerId: 'user-7',
+      text: '他妈妈呢？',
+      contextToken: 'ctx-1',
+      messageId: 1,
+      quoted: true,
+    })
+
+    expect(message.content).toEqual([
+      { type: 'text', text: '[引用] （引用的消息内容未能读取）\n他妈妈呢？' },
+    ])
+  })
+
+  it('prefers the readable quote over the placeholder when both are present', () => {
+    // A readable quote is strictly better; the placeholder must not replace it.
+    const message = buildUserMessage({
+      peerId: 'user-7',
+      text: '嗯',
+      contextToken: 'ctx-1',
+      messageId: 1,
+      quoted: true,
+      quote: '被引用的正文',
+    })
+
+    expect(message.content).toEqual([{ type: 'text', text: '[引用] 被引用的正文\n嗯' }])
+  })
+
+  it('ignores the reference flag when no reference was sent', () => {
+    // The flag is only set by the parser when a reference exists, but a caller
+    // passing it wrongly must not put a marker on an ordinary message.
+    const message = buildUserMessage({ peerId: 'user-7', text: 'hi', contextToken: 'ctx-1', messageId: 1 })
+
+    expect(message.content).toEqual([{ type: 'text', text: 'hi' }])
+  })
+
   it('leaves an ordinary message completely alone', () => {
     // No quote means no marker: adding an empty one would put noise in front of
     // every message in the conversation.

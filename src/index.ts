@@ -349,6 +349,10 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
     // These two are the ones that hid a live defect: every restart rejected the
     // session create and reported it here, where nothing could read it.
     onMessageError: (error, _message) => { report('inbound message failed', error) },
+    // Names the wire shape rather than leaving it to be inferred: a quoted reply
+    // whose content never arrived and an ordinary message look identical once
+    // delivered.
+    onUnreadableQuote: detail => { report('引用的消息内容未能读取', detail) },
     onReplyError: (error, peerId) => { report(`reply to ${peerId} failed`, error) },
     // A send that worked is recorded too: with only failures logged, "no output"
     // is indistinguishable from "nothing ran", which is exactly what left a live

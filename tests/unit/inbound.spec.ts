@@ -129,6 +129,37 @@ describe('reading a quoted message', () => {
     expect(parsed?.quote).toBe('有内容')
   })
 
+  it('reports that a reference existed even when its text is unreadable', () => {
+    // The distinction that makes a wire shape diagnosable, and that the model
+    // needs too: "no quote" and "a quote I could not read" are different
+    // situations. Collapsing them hides a reply context from the model AND
+    // leaves no evidence of which one happened.
+    const parsed = parseInboundMessage(message({
+      item_list: [{ type: 1, text_item: { text: '他妈妈呢？' }, ref_msg: { svr_id: '123' } }],
+    }))
+
+    expect(parsed?.quote).toBeUndefined()
+    expect(parsed?.quoted).toBe(true)
+  })
+
+  it('reports no reference at all for an ordinary message', () => {
+    // The other half of the distinction: nothing to mark, so nothing is marked.
+    expect(parseInboundMessage(message())?.quoted).toBeUndefined()
+  })
+
+  it('reports a reference as present when its text was readable', () => {
+    const parsed = parseInboundMessage(message({
+      item_list: [{
+        type: 1,
+        text_item: { text: '嗯' },
+        ref_msg: { message_item: { type: 1, text_item: { text: '正文' } } },
+      }],
+    }))
+
+    expect(parsed?.quote).toBe('正文')
+    expect(parsed?.quoted).toBe(true)
+  })
+
   it('reports no quote when the reference carries nothing readable', () => {
     // A reference that names only a server id (no inline content) is the shape a
     // newer client sends. We have no local cache to resolve it from, so the

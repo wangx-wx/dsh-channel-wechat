@@ -51,10 +51,27 @@ export interface InboundInput {
    * order a person understands.
    */
   quote?: string
+  /**
+   * Whether the message referenced another, even if its text never arrived.
+   *
+   * Without this a reply whose quoted content was omitted reaches the model as a
+   * bare question with no subject, and nothing distinguishes it from an ordinary
+   * message.
+   */
+  quoted?: true
 }
 
 /** The marker that sets a quoted passage apart from the user's own words. */
 const QUOTE_PREFIX = '[引用] '
+
+/**
+ * What to show when a reference existed but its content could not be read.
+ *
+ * Said plainly rather than omitted: the model then knows the user is replying to
+ * something and can ask, instead of answering a question whose subject it never
+ * saw. Named as a constant so this string cannot drift from the parser's.
+ */
+const UNREADABLE_QUOTE = '（引用的消息内容未能读取）'
 
 /** The subset of `Agent` this module sends through. */
 export interface AgentLike {
@@ -79,7 +96,10 @@ export function buildUserMessage(input: InboundInput): UserMessage {
   const notes = input.notes ?? []
   // A quote that is only whitespace carries nothing, and its marker would claim
   // a quote existed when none did.
-  const quote = input.quote !== undefined && input.quote.trim() !== '' ? input.quote.trim() : undefined
+  const readable = input.quote !== undefined && input.quote.trim() !== '' ? input.quote.trim() : undefined
+  // A readable quote wins; otherwise a reference that existed is still reported,
+  // because that is information the model would otherwise lose.
+  const quote = readable ?? (input.quoted === true ? UNREADABLE_QUOTE : undefined)
   const body = [input.text, ...notes].filter(part => part !== '').join('\n')
   // The quoted words come first, on their own line, so the model reads the thing
   // being referred to before the reply that refers to it.
