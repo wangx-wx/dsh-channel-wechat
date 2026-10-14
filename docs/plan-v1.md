@@ -134,6 +134,27 @@
 
 **语音**：服务端已给 `voice_item.text` 转写，且无 provider 接受音频 → **不下载**。**发语音不支持**（`media_type=4` 只有类型定义，参考实现从未调用）。
 
+### Q44（M4 出站）：只发 `present` 声明的文件；署名义务已履行
+
+**为什么只发 `present` 声明的**：DSH **没有**「把文件发给用户」的一等 API。唯一信号是 `present` 工具写的 durable 事件 `deliverables/presented`（载荷是**路径**）。
+**「产出了文件」和「这个文件是给你的」是两件事**：Agent 写报告时会顺手写一堆临时脚本/中间数据。按 `present` 发 → 只收到成品；扫描所有文件 → 收到一堆垃圾。所以**不做路径扫描**。
+
+**邻接陷阱（实测发现）**：`workspace/changes` 事件描述**本轮碰过的所有文件**，正是绝不该发的那个。它的文件清单存在 projection 而非事件里，所以**事件名是唯一的判别依据**。测试里用「带 files 数组的非 present 事件」把这个判别钉住。
+
+**上传的两个静默失败点**：
+- 成功判定是响应头 `x-encrypted-param`，**不是状态码**。缺它就没有可引用的下载参数，记成功会发出指向空气的消息。
+- `filesize` 必须是**密文（填充后）大小**，服务端拿它核对实际 POST 的内容。
+
+**引用 `ref_msg`（出站）无法判定**：参考实现从未设置过，只有入站读取。**未实现**，也不假装支持。
+
+**已履行的 MIT 署名义务（实测核对，非采信）**：
+- 新增 `THIRD_PARTY_NOTICES.md`（含 Tencent 非标准 MIT 全文 + qrcode-generator 段）；MIT 正文与原文逐字符比对一致。
+- 补齐 4 个派生文件缺失的头：`api.ts`（`classifyFetchError` 含**5 条协议文档中不存在的描述串**，这正是判定「非规范、属派生」的依据）、`login-machine.ts`、`login-runner.ts`（`480_000`/`35_000`/3 次刷新预算 + 3 条逐字文案）、`types.ts`（类型表出自**本身就是 Repo B 的**文档）。
+- ★ **`docs/protocol/protocol_zh_CN.md` 是 Repo B 同名文件的逐字节副本**（md5 双侧一致）——**只看代码的审查不可能发现**。它随仓库公开（但不进 npm 包）。
+- ★ **已发布的 `lib/index.js` 曾剥掉 vendored qrcode-generator 的 MIT 头**（打包器内联时丢弃 banner）。已用构建期 banner 修复，让署名跟随真正包含该代码的文件。
+
+**留档的保留意见**：`src/bridge/cards.ts` 的卡片文案追溯到 **dsh-wechat / wechat-opencode 而非 Repo B**，而对方的 `approval-format.ts` 自身没有出处头 → 若追求完全干净，这条线索需单独核查。
+
 ## 3. 架构
 
 ```
@@ -274,7 +295,7 @@ ctx.on('approval/request', handler, { prepend: true })   // 必须 prepend + 不
 | **M1 登录** ⚠️ | 协议移植改为全新写（见下方修订）+ `startup.ts` + 凭证进 `ctx.credentials` | ~~`dsh <profile> login` 扫码成功~~ → **改为 M6 面板登录**（见下方修订），CLI 仅在不挂 web app 的 profile 可用 |
 | **M2 文本端到端** ✅ | `api` 消息方法 + monitor + peer-map + dispatcher + reply + runtime | 微信发「hi」→ DSH 回复到达 |
 | **M3 命令** ✅ | `ctx.commands` 透传 + 6 个自管命令 + `/stop` | `/goal off` 有原生回执；`/stop` 能中断正在跑的任务 |
-| **M4 媒体** 🔶 | S0 加密/CDN ✅ S1 入站图片 ✅（`media-download` + `bridge/media` + 接线）；S2 出站文件 / S4 引用待做 | ~~发图能理解~~ ✅ 已由真组合测试覆盖；产出文件能收到（S2） |
+| **M4 媒体** 🔶 | S0 加密/CDN ✅ S1 入站图片 ✅ S2 出站文件 ✅（只发 `present` 声明的）；S4 引用 + `message_id` 精度待做 | ~~发图能理解~~ ✅ 真机已验证；~~产出文件能收到~~ 代码完成，**待真机实测** |
 | **M5 卡片** ✅ | waterfall 监听 + 卡片渲染/解析 + 超时 + 队列旁路 | 微信能批准/拒绝/回答提问；`cards:wechat` 时 GUI 不重复弹卡 |
 | **M6 面板** 🔶 | S1 二维码 ✅ S2 登录会话 ✅ S3 页面与 API ✅ S4 扫码即启动 ✅ S5 接线 ✅；设置页卡片待做 | web 端登录页可用（已实测）；设置页卡片待做 |
 | **M7 发布** | README 双语 + LICENSE + npm 发布 | `dsh plugin add dsh-channel-wechat` 一条命令装好 |
