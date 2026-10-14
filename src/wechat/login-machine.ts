@@ -6,7 +6,12 @@
  * and reading the verify code stay in the caller, so the transition rules can
  * be verified without a network, a clock, or a terminal.
  *
- * Status names and their meanings: docs/protocol/protocol_zh_CN.md.
+ * Status names and their meanings: docs/protocol/protocol_zh_CN.md, which is
+ * itself reproduced from Tencent's openclaw-weixin. The transition rules, the
+ * refresh budget, and the failure messages are adapted from that project's
+ * `src/auth/login-qr.ts`. See THIRD_PARTY_NOTICES.md.
+ *
+ * Adapted from @tencent-weixin/openclaw-weixin (MIT, Copyright (C) 2026 Tencent)
  *
  * @module dsh-channel-wechat/wechat/login-machine
  */

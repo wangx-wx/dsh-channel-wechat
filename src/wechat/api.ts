@@ -7,7 +7,12 @@ import { randomUUID } from 'node:crypto'
  * from the harness: it takes its `fetch`, its route tag, and its bot agent as
  * inputs so the same code can run under a test, a CLI, or the plugin host.
  *
- * Shapes and header names come from docs/protocol/protocol_zh_CN.md.
+ * Shapes and header names come from docs/protocol/protocol_zh_CN.md, which is
+ * itself reproduced from Tencent's openclaw-weixin; the error classification
+ * (`classifyFetchError`) is adapted from that project's `src/api/api.ts`.
+ * See THIRD_PARTY_NOTICES.md.
+ *
+ * Adapted from @tencent-weixin/openclaw-weixin (MIT, Copyright (C) 2026 Tencent)
  *
  * @module dsh-channel-wechat/wechat/api
  */

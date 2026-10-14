@@ -2,9 +2,12 @@
  * Wire types for the WeChat iLink bot protocol.
  *
  * Field names, optionality, and numeric discriminants come from the protocol
- * document's type tables. Everything is optional on the wire except where the
- * document states otherwise, which is why the parsers downstream are written
+ * document's type tables (docs/protocol/protocol_zh_CN.md, reproduced from
+ * Tencent's openclaw-weixin). Everything is optional on the wire except where
+ * the document states otherwise, which is why the parsers downstream are written
  * defensively rather than trusting these shapes.
+ *
+ * Adapted from @tencent-weixin/openclaw-weixin (MIT, Copyright (C) 2026 Tencent)
  *
  * @module dsh-channel-wechat/wechat/types
  */

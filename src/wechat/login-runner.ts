@@ -9,6 +9,12 @@
  * prompt, and rendering — arrives as an option, so the loop is testable without
  * a network, a terminal, or real time.
  *
+ * The endpoints, the poll and overall deadlines, and the failure messages are
+ * adapted from Tencent's openclaw-weixin `src/auth/login-qr.ts`.
+ * See THIRD_PARTY_NOTICES.md.
+ *
+ * Adapted from @tencent-weixin/openclaw-weixin (MIT, Copyright (C) 2026 Tencent)
+ *
  * @module dsh-channel-wechat/wechat/login-runner
  */
 
