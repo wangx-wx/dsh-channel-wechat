@@ -68,7 +68,14 @@ export interface MessageApi {
   getUpdates(params: GetUpdatesParams): Promise<GetUpdatesResult>
   /** Send one text message to a conversation. */
   sendText(params: SendTextParams): Promise<void>
+  /** Ask where one object may be uploaded, and what metadata to declare. */
+  getUploadUrl(params: GetUploadUrlParams): Promise<GetUploadUrlResult>
+  /** Send one uploaded file to a conversation. */
+  sendFile(params: SendFileParams): Promise<void>
 }
+
+/** Media kinds the server accepts for an upload. */
+export const UploadMediaType = { IMAGE: 1, VIDEO: 2, FILE: 3, VOICE: 4 } as const
 
 /** The complete API surface. */
 export interface ApiClient extends ApiTransport, MessageApi {}
@@ -107,6 +114,62 @@ export interface SendTextParams {
   text: string
   /** The conversation token the inbound message issued, when there was one. */
   contextToken?: string | undefined
+  /** Request timeout. */
+  timeoutMs?: number
+}
+
+/** One upload authorization request. */
+export interface GetUploadUrlParams {
+  /** API base URL. */
+  baseUrl: string
+  /** Bot token. */
+  token: string
+  /** The object's name on the CDN. */
+  filekey: string
+  /** See {@link UploadMediaType}. */
+  mediaType: number
+  /** Destination user. */
+  to: string
+  /** Plaintext length in bytes. */
+  rawsize: number
+  /** MD5 of the plaintext, as lowercase hex. */
+  rawfilemd5: string
+  /** CIPHERTEXT length, which is the padded size - see `aesEcbPaddedSize`. */
+  filesize: number
+  /** The AES key as lowercase hex. */
+  aeskey: string
+  /** Request timeout. */
+  timeoutMs?: number
+}
+
+/** Where one object may be uploaded. */
+export interface GetUploadUrlResult {
+  /** Authorization parameter, used to build a URL when no complete one came. */
+  upload_param: string | undefined
+  /** A complete upload URL, preferred over the parameter. */
+  upload_full_url: string | undefined
+}
+
+/** One outbound file message. */
+export interface SendFileParams {
+  /** API base URL. */
+  baseUrl: string
+  /** Bot token. */
+  token: string
+  /** Destination user. */
+  to: string
+  /** The conversation token the inbound message issued, when there was one. */
+  contextToken?: string | undefined
+  /** The name the recipient sees. */
+  fileName: string
+  /** The download parameter the upload returned. */
+  encryptQueryParam: string
+  /** The AES key in base64, as the media reference spells it. */
+  aesKeyBase64: string
+  /** The CIPHERTEXT size, which the sender reports for images and video. */
+  ciphertextSize: number
+  /** The PLAINTEXT size, which the file item reports. */
+  plaintextSize: number
   /** Request timeout. */
   timeoutMs?: number
 }
@@ -338,6 +401,78 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       const parsed = JSON.parse(raw) as { ret?: number; errcode?: number; errmsg?: string }
       // HTTP 200 carrying a failure is still a failure; `-14` in particular
       // means the account's session is suspended.
+      const code = parsed.errcode ?? parsed.ret
+      if (typeof code === 'number' && code !== 0) {
+        throw new BusinessError('sendmessage', code, parsed.errmsg ?? '')
+      }
+    },
+    async getUploadUrl(params) {
+      const raw = await this.post({
+        baseUrl: params.baseUrl,
+        endpoint: 'ilink/bot/getuploadurl',
+        body: JSON.stringify({
+          filekey: params.filekey,
+          media_type: params.mediaType,
+          to_user_id: params.to,
+          rawsize: params.rawsize,
+          rawfilemd5: params.rawfilemd5,
+          // The server checks this against what is actually posted, so it must
+          // be the padded ciphertext size rather than the plaintext one.
+          filesize: params.filesize,
+          // Always declared: asking for a thumbnail URL when none will be
+          // uploaded makes the server expect a second object.
+          no_need_thumb: true,
+          aeskey: params.aeskey,
+          base_info: buildBaseInfo({ channelVersion, ...(options.botAgent === undefined ? {} : { botAgent: options.botAgent }) }),
+        }),
+        token: params.token,
+        ...(params.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
+        label: 'getuploadurl',
+      })
+      const parsed = JSON.parse(raw) as { upload_param?: string; upload_full_url?: string }
+      return { upload_param: parsed.upload_param, upload_full_url: parsed.upload_full_url }
+    },
+    async sendFile(params) {
+      if (params.fileName.trim() === '') {
+        // The client shows this name, so an unnamed file is one the user cannot
+        // identify. Failing here names the mistake where it was made.
+        throw new Error('channel-wechat: sendFile requires a non-empty file name')
+      }
+      const message: Record<string, unknown> = {
+        from_user_id: '',
+        to_user_id: params.to,
+        client_id: generateClientId(),
+        message_type: 2,
+        message_state: 2,
+        item_list: [{
+          type: 4,
+          file_item: {
+            media: {
+              encrypt_query_param: params.encryptQueryParam,
+              aes_key: params.aesKeyBase64,
+              encrypt_type: 1,
+            },
+            file_name: params.fileName,
+            // A decimal string on the wire, and the PLAINTEXT length while the
+            // media reference points at the ciphertext.
+            len: String(params.plaintextSize),
+          },
+        }],
+      }
+      if (params.contextToken !== undefined) message['context_token'] = params.contextToken
+
+      const raw = await this.post({
+        baseUrl: params.baseUrl,
+        endpoint: 'ilink/bot/sendmessage',
+        body: JSON.stringify({
+          msg: message,
+          base_info: buildBaseInfo({ channelVersion, ...(options.botAgent === undefined ? {} : { botAgent: options.botAgent }) }),
+        }),
+        token: params.token,
+        ...(params.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
+        label: 'sendmessage',
+      })
+      const parsed = JSON.parse(raw) as { ret?: number; errcode?: number; errmsg?: string }
       const code = parsed.errcode ?? parsed.ret
       if (typeof code === 'number' && code !== 0) {
         throw new BusinessError('sendmessage', code, parsed.errmsg ?? '')

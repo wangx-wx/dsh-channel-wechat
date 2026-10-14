@@ -239,3 +239,101 @@ describe('the two calls the channel makes', () => {
       .resolves.toBeUndefined()
   })
 })
+
+describe('requesting an upload target', () => {
+  it('sends the object metadata the server needs to authorize a write', async () => {
+    // Everything here is load-bearing: the server checks the declared sizes and
+    // digest against what is actually uploaded, so a missing field is a refused
+    // upload rather than a slow one.
+    const { fetchImpl, calls } = stubFetch({ body: '{"upload_param":"p1"}' })
+    const api = createApiClient({ fetchImpl })
+
+    const result = await api.getUploadUrl({
+      baseUrl: 'https://example.test/',
+      token: 'tok-1',
+      filekey: 'k1',
+      mediaType: 3,
+      to: 'user-7',
+      rawsize: 5,
+      rawfilemd5: 'a'.repeat(32),
+      filesize: 16,
+      aeskey: 'b'.repeat(32),
+    })
+
+    const body = JSON.parse(String(calls[0]?.init.body)) as Record<string, unknown>
+    expect(calls[0]?.url).toContain('getuploadurl')
+    expect(body['filekey']).toBe('k1')
+    expect(body['media_type']).toBe(3)
+    expect(body['to_user_id']).toBe('user-7')
+    expect(body['rawsize']).toBe(5)
+    expect(body['filesize']).toBe(16)
+    expect(body['aeskey']).toBe('b'.repeat(32))
+    // No thumbnail: the reference always declares none, and asking for one when
+    // it will not be uploaded makes the server expect a second object.
+    expect(body['no_need_thumb']).toBe(true)
+    expect(result).toEqual({ upload_param: 'p1', upload_full_url: undefined })
+  })
+
+  it('reads back a complete upload URL when the server sends one', async () => {
+    // Preferred over the parameter, because it is already authorized.
+    const { fetchImpl } = stubFetch({ body: '{"upload_full_url":"https://cdn.test/u?x=1"}' })
+    const api = createApiClient({ fetchImpl })
+
+    const result = await api.getUploadUrl({
+      baseUrl: 'https://example.test/', token: 'tok-1', filekey: 'k1', mediaType: 3,
+      to: 'user-7', rawsize: 5, rawfilemd5: 'a'.repeat(32), filesize: 16, aeskey: 'b'.repeat(32),
+    })
+
+    expect(result.upload_full_url).toBe('https://cdn.test/u?x=1')
+  })
+})
+
+describe('sending a file', () => {
+  it('cites the uploaded object and the plaintext length', async () => {
+    // `len` is the PLAINTEXT size while the media reference points at the
+    // ciphertext, so mixing them up produces a file the client truncates.
+    const { fetchImpl, calls } = stubFetch({ body: '{"ret":0}' })
+    const api = createApiClient({ fetchImpl })
+
+    await api.sendFile({
+      baseUrl: 'https://example.test/',
+      token: 'tok-1',
+      to: 'user-7',
+      contextToken: 'ctx-1',
+      fileName: 'report.pdf',
+      encryptQueryParam: 'dl-1',
+      aesKeyBase64: 'AAECAwQFBgcICQoLDA0ODw==',
+      ciphertextSize: 32,
+      plaintextSize: 20,
+    })
+
+    const body = JSON.parse(String(calls[0]?.init.body)) as { msg: Record<string, unknown> }
+    expect(body.msg['to_user_id']).toBe('user-7')
+    expect(body.msg['context_token']).toBe('ctx-1')
+    expect(body.msg['item_list']).toEqual([{
+      type: 4,
+      file_item: {
+        media: {
+          encrypt_query_param: 'dl-1',
+          aes_key: 'AAECAwQFBgcICQoLDA0ODw==',
+          encrypt_type: 1,
+        },
+        file_name: 'report.pdf',
+        len: '20',
+      },
+    }])
+  })
+
+  it('refuses a file with no name, rather than sending an unnamed blob', async () => {
+    // The client shows the name; without one the user gets a file they cannot
+    // identify. Failing here names the mistake at its source.
+    const { fetchImpl } = stubFetch({ body: '{"ret":0}' })
+    const api = createApiClient({ fetchImpl })
+
+    await expect(api.sendFile({
+      baseUrl: 'https://example.test/', token: 'tok-1', to: 'user-7',
+      fileName: '   ', encryptQueryParam: 'dl-1', aesKeyBase64: 'AAECAwQFBgcICQoLDA0ODw==',
+      ciphertextSize: 32, plaintextSize: 20,
+    })).rejects.toThrow()
+  })
+})

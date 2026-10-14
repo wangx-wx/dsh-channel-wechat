@@ -71,6 +71,10 @@ function bench(accounts: WechatAccount[]) {
         async sendText(params) {
           sent.push({ to: params.to, text: params.text, contextToken: params.contextToken })
         },
+        // The full surface, so this fake stays a real `MessageApi`: the media
+        // methods are part of the interface the runtime requires.
+        async getUploadUrl() { throw new Error('unused') },
+        async sendFile() { throw new Error('unused') },
       },
       createRegistry: () => ({
         async create({ sessionId }) {
@@ -159,6 +163,8 @@ describe('starting from a stored account', () => {
           }
         },
         async sendText() {},
+        async getUploadUrl() { throw new Error('unused') },
+        async sendFile() { throw new Error('unused') },
       },
       createRegistry: () => ({
         async create({ sessionId }) {
