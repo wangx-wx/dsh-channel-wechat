@@ -383,6 +383,81 @@ describe('starting a new conversation', () => {
   })
 })
 
+describe('delivering a message that quoted another', () => {
+  it('carries the quoted text through to the agent', async () => {
+    // The wiring, which no unit test can see: the parser produces `quote` and
+    // `buildUserMessage` consumes it, so only a real poll proves the channel
+    // passes it between them rather than dropping it at the seam.
+    const f = fakeRegistry()
+    const delivered: { content: readonly { text?: string }[] }[] = []
+    f.registry.create = async ({ sessionId }: { sessionId: string }) => {
+      const agent = {
+        id: sessionId,
+        followup: (message: { content: readonly { text?: string }[] }) => {
+          delivered.push(message)
+          f.followed.push({ sessionId, text: '' })
+        },
+      }
+      f.live.set(sessionId, agent)
+      return { agent, dispose: async () => void f.live.delete(sessionId) }
+    }
+
+    const { channel } = build({
+      registry: f,
+      messages: [{
+        message_id: 1,
+        from_user_id: 'user-7',
+        message_type: 1,
+        context_token: 'ctx-1',
+        item_list: [{
+          type: 1,
+          text_item: { text: '这个呢？' },
+          ref_msg: { message_item: { type: 1, text_item: { text: '小王今年13岁' } } },
+        }],
+      }],
+    })
+
+    await channel.run()
+    await channel.settled()
+
+    expect(delivered[0]?.content).toEqual([
+      { type: 'text', text: '[引用] 小王今年13岁\n这个呢？' },
+    ])
+    await channel.stop()
+  })
+
+  it('leaves an ordinary message unmarked', async () => {
+    // The marker must not appear in front of every message in the conversation.
+    const f = fakeRegistry()
+    const delivered: { content: readonly { text?: string }[] }[] = []
+    f.registry.create = async ({ sessionId }: { sessionId: string }) => {
+      const agent = {
+        id: sessionId,
+        followup: (message: { content: readonly { text?: string }[] }) => {
+          delivered.push(message)
+          f.followed.push({ sessionId, text: '' })
+        },
+      }
+      f.live.set(sessionId, agent)
+      return { agent, dispose: async () => void f.live.delete(sessionId) }
+    }
+
+    const { channel } = build({
+      registry: f,
+      messages: [{
+        message_id: 1, from_user_id: 'user-7', message_type: 1,
+        context_token: 'ctx-1', item_list: [{ type: 1, text_item: { text: 'hi' } }],
+      }],
+    })
+
+    await channel.run()
+    await channel.settled()
+
+    expect(delivered[0]?.content).toEqual([{ type: 'text', text: 'hi' }])
+    await channel.stop()
+  })
+})
+
 describe('sending the files the agent declared', () => {
   it('sends a presented file to the conversation that produced it', async () => {
     // The wiring, which no unit test can see: `presentedFilesFrom` is tested on

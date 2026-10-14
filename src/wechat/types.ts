@@ -120,7 +120,23 @@ export interface MessageItem {
   /** Whether the producer considers this element complete. */
   is_completed?: boolean
   /** The message this element quotes, when it is a reply. */
-  ref_msg?: { message_item?: MessageItem }
+  ref_msg?: RefMessage
+}
+
+/**
+ * The message an item quotes.
+ *
+ * A newer client may send only `svr_id`, omitting the inline content and
+ * expecting the reader to resolve it from a local cache. This client keeps no
+ * such cache, so that shape yields no quote rather than a guess.
+ */
+export interface RefMessage {
+  /** The quoted message's own content. */
+  message_item?: MessageItem
+  /** The server's summary of the quoted message. */
+  title?: string
+  /** The quoted message's server id, when the content was omitted. */
+  svr_id?: string
 }
 
 /** One message returned by `getUpdates`. */

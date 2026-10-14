@@ -57,6 +57,13 @@ export interface InboundMessage {
   messageId: number | undefined
   /** Media to fetch before delivering, in item order; absent when there is none. */
   media?: readonly InboundMedia[]
+  /**
+   * The text of the message this one quotes, when it quotes one.
+   *
+   * DSH messages have no quote field, so this travels as part of the text the
+   * model reads - without it a reply like "这个呢?" arrives with no referent.
+   */
+  quote?: string
 }
 
 /**
@@ -74,6 +81,7 @@ export function parseInboundMessage(message: WeixinMessage): InboundMessage | un
   if (peerId === '') return undefined
 
   const media = mediaFromItems(message.item_list)
+  const quote = quoteFromItems(message.item_list)
   return {
     peerId,
     text: bodyFromItems(message.item_list),
@@ -82,7 +90,40 @@ export function parseInboundMessage(message: WeixinMessage): InboundMessage | un
     // Absent rather than empty, so the common text-only message has one obvious
     // thing to check before any download work starts.
     ...(media.length === 0 ? {} : { media }),
+    ...(quote === undefined ? {} : { quote }),
   }
+}
+
+/**
+ * Read the quoted text out of a message's items.
+ *
+ * The reference is a property of the ITEM that replies, and its content is
+ * inline - so no lookup is needed and no server id is involved. This is why the
+ * quote path is independent of the message-id representation.
+ *
+ * A reference carrying only `svr_id` (a newer client's shape) names content this
+ * client never stored, so it yields no quote rather than an invented one.
+ * @param items - the message's items, in order.
+ * @returns the quoted text, or `undefined` when the message quotes nothing.
+ */
+export function quoteFromItems(items: MessageItem[] | undefined): string | undefined {
+  for (const item of items ?? []) {
+    const ref = item.ref_msg
+    if (ref === undefined) continue
+    const parts: string[] = []
+    // The title is the server's summary and the body is the content; the
+    // protocol's own reader keeps both, joined, because either can be the only
+    // one present.
+    if (ref.title !== undefined && ref.title.trim() !== '') parts.push(ref.title.trim())
+    if (ref.message_item !== undefined) {
+      // Read with the ordinary body reader, so a quoted image or file
+      // contributes its label rather than nothing.
+      const body = bodyFromItems([ref.message_item]).trim()
+      if (body !== '') parts.push(body)
+    }
+    if (parts.length > 0) return parts.join(' | ')
+  }
+  return undefined
 }
 
 /**

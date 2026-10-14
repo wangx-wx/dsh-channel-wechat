@@ -33,6 +33,98 @@ function message(overrides: Partial<WeixinMessage> = {}, omit: (keyof WeixinMess
   return base
 }
 
+describe('reading a quoted message', () => {
+  it('carries the quoted text so the model knows what is being replied to', () => {
+    // Without this the model sees only "这个呢?" and has no idea what "这个"
+    // refers to. DSH has no native quote field, so the context has to travel as
+    // part of the text.
+    const parsed = parseInboundMessage(message({
+      item_list: [{
+        type: 1,
+        text_item: { text: '这个呢？' },
+        ref_msg: { message_item: { type: 1, text_item: { text: '小王今年13岁' } } },
+      }],
+    }))
+
+    expect(parsed?.quote).toBe('小王今年13岁')
+    // The user's own words are still the message; the quote is additional.
+    expect(parsed?.text).toBe('这个呢？')
+  })
+
+  it('reads the quote from the reference title when that is all there is', () => {
+    // `title` is the server's own summary of the quoted message, and some client
+    // versions send only that.
+    const parsed = parseInboundMessage(message({
+      item_list: [{
+        type: 1,
+        text_item: { text: '嗯' },
+        ref_msg: { title: '小王今年13岁' },
+      }],
+    }))
+
+    expect(parsed?.quote).toBe('小王今年13岁')
+  })
+
+  it('joins the title and the quoted body the way the protocol describes', () => {
+    // The reference implementation joins them with " | ", and both halves carry
+    // information: the title is a summary, the body is the content.
+    const parsed = parseInboundMessage(message({
+      item_list: [{
+        type: 1,
+        text_item: { text: '嗯' },
+        ref_msg: { title: '摘要', message_item: { type: 1, text_item: { text: '正文' } } },
+      }],
+    }))
+
+    expect(parsed?.quote).toBe('摘要 | 正文')
+  })
+
+  it('quotes a media message by its label', () => {
+    // Quoting an image gives no text, so the label is what tells the model what
+    // kind of thing is being referred to.
+    const parsed = parseInboundMessage(message({
+      item_list: [{
+        type: 1,
+        text_item: { text: '这张' },
+        ref_msg: { message_item: { type: 2, image_item: { media: { encrypt_query_param: 'p' } } } },
+      }],
+    }))
+
+    expect(parsed?.quote).toBe('[图片]')
+  })
+
+  it('reports no quote for an ordinary message', () => {
+    // Absent rather than empty, so the delivery path has one thing to check.
+    expect(parseInboundMessage(message())?.quote).toBeUndefined()
+  })
+
+  it('reports no quote when the reference carries nothing readable', () => {
+    // A reference that names only a server id (no inline content) is the shape a
+    // newer client sends. We have no local cache to resolve it from, so the
+    // honest answer is no quote rather than an invented one.
+    const parsed = parseInboundMessage(message({
+      item_list: [{ type: 1, text_item: { text: '嗯' }, ref_msg: { svr_id: '9007199254740993' } }],
+    }))
+
+    expect(parsed?.quote).toBeUndefined()
+  })
+
+  it('does not mistake the quoting message\u2019s own text for the quote', () => {
+    // The reply's own item sits next to the reference; reading the wrong one
+    // would make the model think the user said their own message twice.
+    const parsed = parseInboundMessage(message({
+      item_list: [{
+        type: 1,
+        text_item: { text: '我的新消息' },
+        ref_msg: { message_item: { type: 1, text_item: { text: '被引用的旧消息' } } },
+      }],
+    }))
+
+    expect(parsed?.quote).toBe('被引用的旧消息')
+    expect(parsed?.quote).not.toContain('我的新消息')
+  })
+})
+
 describe('reading media out of a message', () => {
   it('describes an image by its CDN reference, not just its label', () => {
     // A `[图片]` label tells the model nothing. The descriptor is what lets the

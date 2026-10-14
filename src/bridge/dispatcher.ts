@@ -43,7 +43,18 @@ export interface InboundInput {
    * words for the model to read and the message has exactly one text block.
    */
   notes?: readonly string[]
+  /**
+   * The text of the message this one quotes.
+   *
+   * DSH messages have no quote field, so the context travels as text. It is
+   * placed FIRST, because reading the quoted words and then the reply is the
+   * order a person understands.
+   */
+  quote?: string
 }
+
+/** The marker that sets a quoted passage apart from the user's own words. */
+const QUOTE_PREFIX = '[引用] '
 
 /** The subset of `Agent` this module sends through. */
 export interface AgentLike {
@@ -66,7 +77,13 @@ export function buildUserMessage(input: InboundInput): UserMessage {
   // Notes are appended to the user's own words, so one text block still carries
   // everything they said plus whatever could not be attached.
   const notes = input.notes ?? []
-  const text = notes.length === 0 ? input.text : [input.text, ...notes].filter(part => part !== '').join('\n')
+  // A quote that is only whitespace carries nothing, and its marker would claim
+  // a quote existed when none did.
+  const quote = input.quote !== undefined && input.quote.trim() !== '' ? input.quote.trim() : undefined
+  const body = [input.text, ...notes].filter(part => part !== '').join('\n')
+  // The quoted words come first, on their own line, so the model reads the thing
+  // being referred to before the reply that refers to it.
+  const text = quote === undefined ? body : `${QUOTE_PREFIX}${quote}\n${body}`
   return createUserMessage({
     // An empty text block is rejected by message construction, so a body that
     // parsed to nothing still has to carry something rather than crash.

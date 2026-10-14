@@ -14,6 +14,59 @@
 import { describe, expect, it } from 'vitest'
 import { buildUserMessage, deliverInbound } from '../../src/bridge/dispatcher.ts'
 
+describe('delivering a message that quoted another', () => {
+  it('puts the quoted text in the message, before the reply', () => {
+    // The model has to know what the user is referring to. DSH messages have no
+    // quote field, so the context travels as text - and it goes FIRST, because
+    // reading "被引用的话" then "我的回复" is the order a person understands.
+    const message = buildUserMessage({
+      peerId: 'user-7',
+      text: '这个呢？',
+      contextToken: 'ctx-1',
+      messageId: 1,
+      quote: '小王今年13岁',
+    })
+
+    expect(message.content).toEqual([
+      { type: 'text', text: '[引用] 小王今年13岁\n这个呢？' },
+    ])
+  })
+
+  it('leaves an ordinary message completely alone', () => {
+    // No quote means no marker: adding an empty one would put noise in front of
+    // every message in the conversation.
+    const message = buildUserMessage({ peerId: 'user-7', text: 'hi', contextToken: 'ctx-1', messageId: 1 })
+
+    expect(message.content).toEqual([{ type: 'text', text: 'hi' }])
+  })
+
+  it('keeps the quote when the message also carries media and notes', () => {
+    // Three additions compose: the quote, the user's words, the media note.
+    const message = buildUserMessage({
+      peerId: 'user-7',
+      text: '这张呢？',
+      contextToken: 'ctx-1',
+      messageId: 1,
+      quote: '前面那张图',
+      notes: ['（这条消息里的图片未能读取）'],
+    })
+
+    expect(message.content).toEqual([
+      { type: 'text', text: '[引用] 前面那张图\n这张呢？\n（这条消息里的图片未能读取）' },
+    ])
+  })
+
+  it('does not add the marker for a quote that is only whitespace', () => {
+    // A whitespace-only quote carries nothing, and the marker without content
+    // would tell the model a quote existed when none did.
+    const message = buildUserMessage({
+      peerId: 'user-7', text: 'hi', contextToken: 'ctx-1', messageId: 1, quote: '   ',
+    })
+
+    expect(message.content).toEqual([{ type: 'text', text: 'hi' }])
+  })
+})
+
 describe('delivering a message that carried media', () => {
   it('appends the media blocks after the text, in order', () => {
     // The model reads the user's words first and the images that came with them
