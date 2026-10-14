@@ -962,6 +962,80 @@ describe('a profile boot with the login action', () => {
     expect(logged.join('\n')).toContain('user-7')
   }, 30_000)
 
+  it('reports an unreadable reference through the plugin\u2019s own reporter', async () => {
+    // The production wiring, and the gap a mutation exposed: every composition
+    // test injects the reporter, so none of them can see whether `index.ts`
+    // wires one. Without it the wire shape is recorded nowhere, and telling an
+    // unreadable reference from an ordinary message needs a phone screenshot.
+    const previous = process.env['DSH_HOME']
+    const home = tempHome('dsh-wechat-quote-')
+    process.env['DSH_HOME'] = home
+
+    /** The plugin's own lines, which go to `console.error`. */
+    const logged: string[] = []
+    const consoleError = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      logged.push(args.map(String).join(' '))
+    })
+    let polls = 0
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
+      const href = String(url)
+      if (href.includes('getupdates')) {
+        polls += 1
+        return new Response(JSON.stringify({
+          ret: 0,
+          msgs: polls === 1
+            ? [{
+              message_id: 1, from_user_id: 'user-7', message_type: 1,
+              context_token: 'ctx-1',
+              // The shape seen on a phone: a reference with its content omitted.
+              item_list: [{ type: 1, text_item: { text: '他妈妈呢？' }, ref_msg: { svr_id: '123' } }],
+            }]
+            : [],
+          get_updates_buf: `c${polls}`,
+        }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ ret: 0 }), { status: 200 })
+    }) as unknown as typeof fetch)
+
+    const ctx = new Context()
+    provideCmdline(ctx, { args: [], exit: () => {}, ready: { commit() {}, await: async () => {} } } as never)
+    await ctx.plugin(CredentialsLocal as never, {} as never)
+    await ctx.plugin(CommandRuntime)
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
+    })
+    const live = new Map<string, unknown>()
+    ctx.provide('agents', {
+      async create({ sessionId }: { sessionId: string }) {
+        const agent = { id: sessionId, followup: () => {}, whenIdle: async () => {} }
+        live.set(sessionId, agent)
+        return { agent, dispose: async () => void live.delete(sessionId) }
+      },
+      async resume() { throw new Error('no persisted session') },
+      get: (id: string) => live.get(id),
+    })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
+    await ctx.plugin({
+      name: 'channel-wechat',
+      inject: ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'],
+      apply: applyChannel,
+    }, { cwd: '/work' })
+
+    try {
+      await until(async () => logged.some(line => line.includes('引用的消息内容未能读取')), 5_000)
+    } finally {
+      await ctx.fiber.dispose()
+      consoleError.mockRestore()
+      if (previous === undefined) delete process.env['DSH_HOME']
+      else process.env['DSH_HOME'] = previous
+    }
+
+    expect(logged.join('\n')).toContain('引用的消息内容未能读取')
+    expect(logged.join('\n')).toContain('user-7')
+  }, 30_000)
+
   it('reaches the right agent for a native command after a rotation', async () => {
     // A peer past generation zero has its live session under a rotated id. The
     // plugin used to rebuild that id from the peer alone to find the agent for a

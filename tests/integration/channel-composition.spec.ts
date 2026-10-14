@@ -88,6 +88,8 @@ function build(options: {
   prepareMedia?: (media: readonly InboundMedia[]) => Promise<{ parts: readonly ContentBlock[]; notes: readonly string[] }>
   /** Sends the files the agent declared as deliverables. */
   sendDeliverables?: (peerId: string, files: readonly { path: string; description?: string }[]) => Promise<void>
+  /** Observes a reference whose content never arrived. */
+  onUnreadableQuote?: (detail: unknown) => void
 }) {
   const polls: (string | undefined)[] = []
   const sent: { peerId: string; text: string; token: string | undefined }[] = []
@@ -120,6 +122,7 @@ function build(options: {
     ...(options.cards === undefined ? {} : { cards: options.cards }),
     ...(options.prepareMedia === undefined ? {} : { prepareMedia: options.prepareMedia }),
     ...(options.sendDeliverables === undefined ? {} : { sendDeliverables: options.sendDeliverables }),
+    ...(options.onUnreadableQuote === undefined ? {} : { onUnreadableQuote: options.onUnreadableQuote }),
     // Wired from the registry's own record, so a rotated id the test declares
     // existing is resumed rather than created - which is what proves a restart
     // lands on the new conversation.
@@ -465,6 +468,49 @@ describe('delivering a message that quoted another', () => {
     expect(delivered[0]?.content).toEqual([
       { type: 'text', text: '[引用] （引用的消息内容未能读取）\n他妈妈呢？' },
     ])
+    await channel.stop()
+  })
+
+  it('reports the unreadable reference so the wire shape is diagnosable', async () => {
+    // Without this line the two situations are indistinguishable from outside the
+    // process, and the only way to tell them apart is a screenshot of a phone.
+    const f = fakeRegistry()
+    const reported: unknown[] = []
+    const { channel } = build({
+      registry: f,
+      onUnreadableQuote: detail => { reported.push(detail) },
+      messages: [{
+        message_id: 1, from_user_id: 'user-7', message_type: 1,
+        context_token: 'ctx-1',
+        item_list: [{ type: 1, text_item: { text: '他妈妈呢？' }, ref_msg: { svr_id: '123' } }],
+      }],
+    })
+
+    await channel.run()
+    await channel.settled()
+
+    expect(reported).toEqual(['from user-7'])
+    await channel.stop()
+  })
+
+  it('does not report an ordinary message as an unreadable reference', async () => {
+    // The report must be about a real reference, or it becomes noise that hides
+    // the case it exists for.
+    const f = fakeRegistry()
+    const reported: unknown[] = []
+    const { channel } = build({
+      registry: f,
+      onUnreadableQuote: detail => { reported.push(detail) },
+      messages: [{
+        message_id: 1, from_user_id: 'user-7', message_type: 1,
+        context_token: 'ctx-1', item_list: [{ type: 1, text_item: { text: 'hi' } }],
+      }],
+    })
+
+    await channel.run()
+    await channel.settled()
+
+    expect(reported).toEqual([])
     await channel.stop()
   })
 
