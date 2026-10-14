@@ -6,9 +6,10 @@
  * way to fix it from inside the plugin, so the fields are pinned here.
  */
 
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import semver from 'semver'
+import ts from 'typescript'
 
 const manifest = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as {
   name: string
@@ -18,6 +19,7 @@ const manifest = JSON.parse(readFileSync(new URL('../../package.json', import.me
   license?: string
   exports?: Record<string, unknown>
   files?: string[]
+  scripts?: Record<string, string>
   peerDependencies?: Record<string, string>
   dependencies?: Record<string, string>
   dsh?: { bundle?: { patch?: string | string[] } }
@@ -25,6 +27,49 @@ const manifest = JSON.parse(readFileSync(new URL('../../package.json', import.me
 
 /** The dsh runtime versions a released plugin must stay installable under. */
 const RUNTIME_VERSIONS = ['0.2.0-rc.1', '0.2.0-rc.2']
+
+/** Every source file that ends up in the published bundle. */
+function sourceFiles(dir: URL): URL[] {
+  const out: URL[] = []
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const child = new URL(`${entry.name}${entry.isDirectory() ? '/' : ''}`, dir)
+    if (entry.isDirectory()) out.push(...sourceFiles(child))
+    else if (/\.m?ts$/u.test(entry.name) && !entry.name.endsWith('.d.mts')) out.push(child)
+  }
+  return out
+}
+
+/**
+ * Bare specifiers (not relative, not node: builtins) that `src/` imports.
+ *
+ * Parsed rather than pattern-matched: this source is dense with prose that
+ * mentions `import` and quotes a path, and a regex reads those comments as
+ * dependencies.
+ * @returns each imported package name, deduplicated and sorted.
+ */
+function bareSpecifiers(): string[] {
+  const found = new Set<string>()
+  for (const file of sourceFiles(new URL('../../src/', import.meta.url))) {
+    const parsed = ts.createSourceFile(file.pathname, readFileSync(file, 'utf8'), ts.ScriptTarget.ESNext, true)
+    const specifiers: string[] = []
+    const visit = (node: ts.Node): void => {
+      if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier !== undefined) {
+        if (ts.isStringLiteral(node.moduleSpecifier)) specifiers.push(node.moduleSpecifier.text)
+      } else if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+        const [first] = node.arguments
+        if (first !== undefined && ts.isStringLiteral(first)) specifiers.push(first.text)
+      }
+      ts.forEachChild(node, visit)
+    }
+    visit(parsed)
+    for (const specifier of specifiers) {
+      if (specifier.startsWith('.') || specifier.startsWith('node:')) continue
+      // A subpath import is served by the same declared dependency as its root.
+      found.add(specifier.startsWith('@') ? specifier.split('/').slice(0, 2).join('/') : specifier.split('/')[0]!)
+    }
+  }
+  return [...found].sort()
+}
 
 describe('package manifest', () => {
   it('declares the bundle patch file the profile loader follows', () => {
@@ -77,5 +122,53 @@ describe('package manifest', () => {
       : entry && typeof entry === 'object' && 'default' in entry ? entry.default : undefined
     expect(target, 'root export must resolve to a path').toBeTypeOf('string')
     expect(target).toMatch(/^\.\/.+\.js$/u)
+  })
+
+  it('declares every bare specifier its own source imports', () => {
+    // An undeclared import still resolves while developing, because this
+    // checkout's node_modules is hoisted and holds the whole harness. It stops
+    // resolving once the package is installed somewhere its ancestors do not
+    // happen to provide that name, and the failure appears at plugin load, far
+    // from the missing declaration.
+    const declared = new Set([
+      ...Object.keys(manifest.dependencies ?? {}),
+      ...Object.keys(manifest.peerDependencies ?? {}),
+    ])
+    const missing = bareSpecifiers().filter(specifier => !declared.has(specifier))
+    expect(missing, `undeclared imports: ${missing.join(', ')}`).toEqual([])
+  })
+
+  it('ships every path its exports point at', () => {
+    // `exports` is what a consumer resolves; `files` is what npm packs. They
+    // are independent fields, so a type face can point at a source path that
+    // the tarball omits - the consumer silently falls back to `any`, and the
+    // breakage lands on whoever installs rather than on whoever published.
+    const shipped = (path: string): boolean => {
+      const clean = path.replace(/^\.\//u, '')
+      return (manifest.files ?? []).some(entry => clean === entry || clean.startsWith(entry))
+    }
+    const offenders: string[] = []
+    for (const [subpath, target] of Object.entries(manifest.exports ?? {})) {
+      if (subpath === './package.json') continue
+      const fields = typeof target === 'string' ? [target] : Object.values(target as Record<string, string>)
+      for (const path of fields) {
+        if (typeof path === 'string' && path.startsWith('./') && !shipped(path)) offenders.push(`${subpath} -> ${path}`)
+      }
+    }
+    expect(offenders, `exports point outside files[]: ${offenders.join(', ')}`).toEqual([])
+  })
+
+  it('builds before packing, so a publish cannot ship an empty package', () => {
+    // lib/ is generated and git-ignored. Without a hook that runs the build,
+    // `npm publish` from a fresh clone packs only the hand-written files -
+    // measured: 4 files, 10.1 kB, no code at all - and reports success.
+    const hooks = Object.entries(manifest.scripts ?? {})
+      .filter(([name]) => /^(prepack|prepublishOnly|prepare)$/u.test(name))
+      .map(([, command]) => command)
+    expect(hooks.length, 'one of prepack/prepublishOnly/prepare must build').toBeGreaterThan(0)
+    expect(
+      hooks.some(command => /\b(build|tsdown)\b/u.test(command)),
+      'the publish hook must actually run the build',
+    ).toBe(true)
   })
 })

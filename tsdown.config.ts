@@ -19,7 +19,11 @@ const config: UserConfig = {
   // The published manifest names lib/index.js; keep the emitted extension
   // fixed so the entry path cannot drift with the package's "type" field.
   fixedExtension: false,
-  dts: false,
+  // The `./startup` subpath declares a `types` face, so one has to exist in the
+  // artifact that ships. It used to point at `src/startup.ts`, which `files[]`
+  // does not carry: the declaration resolved while developing and silently
+  // degraded to `any` for anyone who installed the package.
+  dts: true,
   sourcemap: false,
   clean: true,
   // The bundle inlines the vendored qrcode-generator, whose MIT header lives in

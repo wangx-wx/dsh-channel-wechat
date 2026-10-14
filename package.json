@@ -1,11 +1,25 @@
 {
   "name": "dsh-channel-wechat",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "WeChat (iLink / ClawBot) channel for DeepSeek Harness",
   "license": "MIT",
   "type": "module",
-  "private": true,
   "packageManager": "pnpm@11.7.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wangx-wx/dsh-channel-wechat.git"
+  },
+  "homepage": "https://github.com/wangx-wx/dsh-channel-wechat#readme",
+  "bugs": "https://github.com/wangx-wx/dsh-channel-wechat/issues",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "wechat",
+    "weixin",
+    "ilink",
+    "channel",
+    "plugin"
+  ],
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
   },
@@ -15,17 +29,18 @@
     "./package.json": "./package.json",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./startup": {
-      "types": "./src/startup.ts",
+      "types": "./lib/startup.d.ts",
       "default": "./lib/startup.js"
     }
   },
   "files": [
-    "lib/index.js",
-    "lib/startup.js",
-    "cordis.patch.yml"
+    "lib/",
+    "cordis.patch.yml",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
     "build": "tsdown",
+    "prepack": "tsdown",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
@@ -43,6 +58,7 @@
     "@deepseek-ai/dsh-attachment": "^0.2.0-rc.1",
     "@deepseek-ai/dsh-cmdline": "^0.2.0-rc.1",
     "@deepseek-ai/dsh-credentials": "^0.2.0-rc.1",
+    "@deepseek-ai/dsh-home-paths": "^0.2.0-rc.1",
     "@deepseek-ai/dsh-llm": "^0.2.0-rc.1",
     "@deepseek-ai/dsh-session": "^0.2.0-rc.1"
   },
@@ -55,6 +71,7 @@
     "@deepseek-ai/dsh-cmdline": "0.2.0-rc.1",
     "@deepseek-ai/dsh-credentials": "0.2.0-rc.1",
     "@deepseek-ai/dsh-credentials-local": "0.2.0-rc.1",
+    "@deepseek-ai/dsh-home-paths": "0.2.0-rc.1",
     "@deepseek-ai/dsh-llm": "0.2.0-rc.1",
     "@deepseek-ai/dsh-llm-replay": "0.2.0-rc.1",
     "@deepseek-ai/dsh-session": "0.2.0-rc.1",
@@ -67,6 +84,7 @@
     "vitest": "^3.2.4"
   },
   "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.4",
     "commander": "^15.0.0"
   }
 }
