@@ -8,7 +8,7 @@
  * as opposed to each piece being proved in isolation.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -1275,4 +1275,105 @@ describe('a profile boot with no action', () => {
     // Nothing was stored either, which is what a user-visible hijack would do.
     expect(await loadAccount(ctx, 'bot-9')).toBeUndefined()
   })
+
+  it('writes its diagnostics to a file the harness home owns', async () => {
+    // The seam this suite exists for. Every unit test injects its own sink, so
+    // none of them can observe whether `apply` ever builds one - the exact shape
+    // that hid a missing `sessionEvents` subscription, a missing `cwd`, and a
+    // missing unreadable-quote report. A `createLogFileSink` that is correct and
+    // simply never called looks identical from the unit suite's side.
+    //
+    // On the desktop app this file is the only trace a diagnostic leaves: the
+    // host's stdout goes to a process with no terminal and no log file.
+    const previous = process.env['DSH_HOME']
+    const home = tempHome('dsh-wechat-log-')
+    process.env['DSH_HOME'] = home
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes('getupdates')) {
+        return new Response(JSON.stringify({ ret: 0, msgs: [], get_updates_buf: 'c1' }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ ret: 0 }), { status: 200 })
+    }) as unknown as typeof fetch)
+
+    const ctx = new Context()
+    provideCmdline(ctx, { args: [], exit: () => {}, ready: { commit() {}, await: async () => {} } } as never)
+    await ctx.plugin(CredentialsLocal as never, {} as never)
+    await ctx.plugin(AgentRegistry)
+    await ctx.plugin(CommandRuntime)
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
+    })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
+    await ctx.plugin({ name: 'channel-wechat', inject: ['wechatStartup', 'credentials', 'agents'], apply: applyChannel }, { cwd: '/work' })
+
+    // `polling as` is reported once the loop's first poll succeeds, so waiting
+    // for the file to contain it waits for the real run rather than for a timer.
+    const logDir = join(home, 'channel-wechat', 'log')
+    await until(async () => {
+      try {
+        return readdirSync(logDir).some(entry => readFileSync(join(logDir, entry), 'utf8').includes('polling as'))
+      } catch {
+        return false
+      }
+    })
+    await ctx.fiber.dispose()
+
+    const files = readdirSync(logDir)
+    expect(files).toHaveLength(1)
+    expect(files[0]).toMatch(/^channel-wechat-\d{4}-\d{2}-\d{2}\.log$/u)
+    const body = readFileSync(join(logDir, files[0]!), 'utf8')
+    // The account it polls as, reported through the production reporter.
+    expect(body).toContain('[channel-wechat] polling as: bot-9')
+    // One line per report, each newline-terminated: appending line by line is
+    // what makes the file readable while the process is still running.
+    expect(body.endsWith('\n')).toBe(true)
+
+    if (previous === undefined) delete process.env['DSH_HOME']
+    else process.env['DSH_HOME'] = previous
+  }, 30_000)
+
+  it('records a channel that dies before it ever polls', async () => {
+    // The diagnostics most worth keeping are the ones from a channel that never
+    // came up: on the desktop app the file is the only trace, and a start
+    // failure is otherwise a message the user watches arrive with no reply.
+    //
+    // This deliberately omits `agentDefaultModel`, which the run reads. The
+    // throw happens inside the detached launch, so nothing surfaces at the call
+    // site - only the reporter sees it, which is what makes this the test that
+    // proves `channel stopped` was routed there rather than to the logger that
+    // reaches nothing on that host.
+    const previous = process.env['DSH_HOME']
+    const home = tempHome('dsh-wechat-crash-')
+    process.env['DSH_HOME'] = home
+
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ret: 0 }), { status: 200 })) as unknown as typeof fetch)
+
+    const ctx = new Context()
+    provideCmdline(ctx, { args: [], exit: () => {}, ready: { commit() {}, await: async () => {} } } as never)
+    await ctx.plugin(CredentialsLocal as never, {} as never)
+    await ctx.plugin(AgentRegistry)
+    await ctx.plugin(CommandRuntime)
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
+    await ctx.plugin({ name: 'channel-wechat', inject: ['wechatStartup', 'credentials', 'agents'], apply: applyChannel }, { cwd: '/work' })
+
+    const logDir = join(home, 'channel-wechat', 'log')
+    await until(async () => {
+      try {
+        return readdirSync(logDir).some(entry => readFileSync(join(logDir, entry), 'utf8').includes('channel stopped'))
+      } catch {
+        return false
+      }
+    })
+    await ctx.fiber.dispose()
+
+    const body = readFileSync(join(logDir, readdirSync(logDir)[0]!), 'utf8')
+    expect(body).toContain('[channel-wechat] channel stopped: ')
+    expect(body).toContain('agentDefaultModel')
+
+    if (previous === undefined) delete process.env['DSH_HOME']
+    else process.env['DSH_HOME'] = previous
+  }, 30_000)
 })

@@ -26,7 +26,8 @@ import { CursorStore } from './channel/cursor-store.ts'
 import { PeerSessionStore } from './channel/peer-session-store.ts'
 import { createSingleRun, type SingleRun } from './channel/single-run.ts'
 import { mountPanelRoutes, panelUrl } from './channel/mount.ts'
-import { createReporter } from './channel/report.ts'
+import { createReporter, type Report } from './channel/report.ts'
+import { createLogFileSink, logDirPath } from './channel/log-file.ts'
 import { createPanel } from './channel/panel.ts'
 import { startChannelFromStore } from './channel/runtime.ts'
 import type { Channel } from './channel/channel.ts'
@@ -184,7 +185,7 @@ async function mountLoginPanel(ctx: Context, config: Config): Promise<void> {
     // the panel owns that ordering. A start that beat the write would poll as
     // the previous account or as none.
     startChannel: () => startChannel(ctx, config, { force: true }),
-    onError: (error: unknown) => { ctx.logger(name).warn('login panel failed to connect: %s', String(error)) },
+    onError: (error: unknown) => { reporterFor(ctx)('login panel failed to connect', error) },
   }))
 
   // `console.log`, not `ctx.logger`: no profile mounts a console exporter for
@@ -234,10 +235,10 @@ function channelRun(ctx: Context, config: Config): SingleRun {
     // rejection would surface as a process-level warning instead of a log line.
     launch: signal => {
       void runChannel(ctx, config, signal).catch((error: unknown) => {
-        ctx.logger(name).warn('channel stopped: %s', String(error))
+        reporterFor(ctx)('channel stopped', error)
       })
     },
-    onError: (error: unknown) => { ctx.logger(name).warn('channel failed to start: %s', String(error)) },
+    onError: (error: unknown) => { reporterFor(ctx)('channel failed to start', error) },
   })
   runs.set(ctx, run)
   // Unloading the plugin ends the poll instead of leaving it running against a
@@ -252,13 +253,45 @@ function channelRun(ctx: Context, config: Config): SingleRun {
 /** One run owner per context, so a reload does not inherit a dead one. */
 const runs = new WeakMap<Context, SingleRun>()
 
+/** One reporter per context, so every diagnostic lands in the same file. */
+const reporters = new WeakMap<Context, Report>()
+
+/**
+ * The reporter for one context.
+ *
+ * Shared rather than built per call site: the channel's start, its run, and the
+ * login panel all report, and three reporters would open three sinks over one
+ * file. It is also what makes the file the *only* place these lines survive on a
+ * host with no terminal - the reason this exists at all.
+ *
+ * The durable sink resolves its directory once, from the harness home. It is
+ * built lazily and kept, because the file is appended to, not rewritten.
+ * @param ctx - the plugin's cordis context.
+ * @returns the reporter this context uses everywhere.
+ */
+function reporterFor(ctx: Context): Report {
+  const existing = reporters.get(ctx)
+  if (existing !== undefined) return existing
+  const report = createReporter({
+    logger: ctx.logger(name),
+    also: createLogFileSink({
+      dir: logDirPath(),
+      // A failed write is itself worth knowing about, and the console is where
+      // whoever is watching can still see it.
+      onError: error => { console.error(`[channel-wechat] could not write the log file: ${String(error)}`) },
+    }),
+  })
+  reporters.set(ctx, report)
+  return report
+}
+
 /**
  * Poll until the signal aborts.
  * @param ctx - the plugin's cordis context.
  * @param signal - aborted when this run is replaced or the plugin unloads.
  */
 async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Promise<void> {
-  const report = createReporter({ logger: ctx.logger(name) })
+  const report = reporterFor(ctx)
   // One account in v1, so one cursor; the store is per-account for the
   // multi-account release the data structures already allow.
   const cursors = new CursorStore()

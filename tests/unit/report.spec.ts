@@ -73,4 +73,43 @@ describe('reporting a problem', () => {
       spy.mockRestore()
     }
   })
+
+  it('also hands the line to a durable sink', () => {
+    // The console is what a person at a terminal sees. On the desktop app the
+    // host's stdout reaches a process with no terminal and no log file, so this
+    // second sink is the only thing that outlives the session.
+    const durable: string[] = []
+    const written: string[] = []
+    const report = createReporter({
+      logger: recordingLogger().logger,
+      write: line => written.push(line),
+      also: line => durable.push(line),
+    })
+
+    report('polling as', 'bot-9')
+
+    // The durable sink gets the terminating newline: it appends line by line.
+    expect(durable).toEqual(['[channel-wechat] polling as: bot-9\n'])
+    // The console sink does not: it prints its own.
+    expect(written).toEqual(['[channel-wechat] polling as: bot-9'])
+  })
+
+  it('still reaches the console when the durable sink throws', () => {
+    // A full disk must not also blind the person watching the terminal. The two
+    // sinks fail independently, so one going wrong cannot take the other with it.
+    const written: string[] = []
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const report = createReporter({
+        logger: recordingLogger().logger,
+        write: line => written.push(line),
+        also: () => { throw new Error('disk full') },
+      })
+
+      expect(() => { report('reply failed', new Error('nope')) }).not.toThrow()
+      expect(written).toEqual(['[channel-wechat] reply failed: nope'])
+    } finally {
+      spy.mockRestore()
+    }
+  })
 })
