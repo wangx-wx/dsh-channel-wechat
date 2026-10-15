@@ -5,19 +5,48 @@ English | [中文](./README.md)
 A **channel plugin** that connects WeChat (Tencent iLink / ClawBot) to
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
 
-> Status: **v0.1.0**, feature-complete and installable. Outbound files are not yet
-> verified on a real device; the `svr_id` quote shape and `message_id` precision
-> are **recorded known issues** (see [plan-v1 §Q45](./docs/plan-v1.md)).
+> Status: **v0.1.0**, feature-complete and installable. Outbound files are
+> **verified on a real device**; the `svr_id` quote shape and `message_id`
+> precision are **recorded known issues** (see [plan-v1 §Q45](./docs/plan-v1.md)).
 
 ---
 
 ## Install
 
+**Not published to npm yet**, so `add dsh-channel-wechat` returns 404. Use:
+
 ```bash
-dsh plugin --profile <your-profile> add dsh-channel-wechat
+# recommended: install from the git repository (pnpm builds it via prepack)
+dsh plugin --profile <your-profile> add github:wangx-wx/dsh-channel-wechat
 ```
 
-From a tarball: `dsh plugin --profile <name> add ./dsh-channel-wechat-0.1.0.tgz`.
+For a git dependency pnpm **refuses to run build scripts**, so the first attempt
+fails and prints an `allowBuilds` entry. Add it to the **profile's
+`pnpm-workspace.yaml`** and retry (this is pnpm's safety mechanism, not a plugin
+defect):
+
+```yaml
+allowBuilds:
+  dsh-channel-wechat@<the full key pnpm printed>: true
+```
+
+A tarball works too, and also builds automatically:
+
+```bash
+npm pack                      # produces dsh-channel-wechat-0.1.0.tgz
+dsh plugin --profile <your-profile> add ./dsh-channel-wechat-0.1.0.tgz
+```
+
+⚠️ **Do not `add` a local directory.** That creates a `link:`, and **`link:`
+runs no build**. Since `lib/` is gitignored, the installed package has no
+`lib/`, so startup reports `failed to import` and **silently loads nothing**.
+If you must, run `pnpm install && pnpm build` in that directory first.
+
+`add` also **inserts the package into the profile's `bundles`**, and that step is
+not optional: a package present in `dependencies` but absent from `bundles` is
+installed and then **never loaded** — zero lines in `--dump-config`, no error.
+The desktop profile was wired that way by hand and the plugin was installed but
+**never active**.
 
 ## What this is
 

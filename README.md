@@ -4,17 +4,41 @@
 
 把微信（腾讯 iLink / ClawBot）接入 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的**通道插件**。
 
-> 状态：**v0.1.0**，功能完整、可安装。出站文件尚未真机验证；`svr_id` 引用与 `message_id` 精度为**已知记录项**（见 [plan-v1 §Q45](./docs/plan-v1.md)）。
+> 状态：**v0.1.0**，功能完整、可安装。出站文件已**真机验证**；`svr_id` 引用与 `message_id` 精度为**已知记录项**（见 [plan-v1 §Q45](./docs/plan-v1.md)）。
 
 ---
 
 ## 安装
 
+**尚未发布到 npm**，所以 `add dsh-channel-wechat` 会 404。用下面任一方式：
+
 ```bash
-dsh plugin --profile <你的 profile> add dsh-channel-wechat
+# 推荐：从 Git 仓库安装（pnpm 会用 prepack 自动构建）
+dsh plugin --profile <你的 profile> add github:wangx-wx/dsh-channel-wechat
 ```
 
-也可以从 tarball 安装：`dsh plugin --profile <name> add ./dsh-channel-wechat-0.1.0.tgz`。
+从 Git 安装时 pnpm 会**拒绝执行构建脚本**，首次会失败并打印一行 `allowBuilds` 配置。
+把它加进 **profile 的 `pnpm-workspace.yaml`**，再跑一次即可（这是 pnpm 的安全机制，不是本插件的问题）：
+
+```yaml
+allowBuilds:
+  dsh-channel-wechat@<pnpm 打印的那串完整键>: true
+```
+
+也可以从 tarball 安装（同样会自动构建）：
+
+```bash
+npm pack                      # 在仓库根产出 dsh-channel-wechat-0.1.0.tgz
+dsh plugin --profile <你的 profile> add ./dsh-channel-wechat-0.1.0.tgz
+```
+
+⚠️ **不要直接 `add` 一个本地目录**：那会建立 `link:`，而 **`link:` 不会执行构建**。
+仓库里 `lib/` 是 `gitignore` 的，于是装出来的包**没有 `lib/`**，启动时报
+`failed to import` 并**静默不加载**。真要这么做，必须先在目录里 `pnpm install && pnpm build`。
+
+`add` 还会**把这个包加进 profile 的 `bundles`**——这一步不能省：
+只写进 `dependencies` 而不进 `bundles`，包会被装好但**永远不加载**（`--dump-config` 里一行都没有，且不报错）。
+桌面端 profile 就曾这样被手工 `link:` 挂过，结果**装了却从不生效**。
 
 ## 这是什么
 
