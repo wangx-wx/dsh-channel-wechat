@@ -1334,6 +1334,59 @@ describe('a profile boot with no action', () => {
     else process.env['DSH_HOME'] = previous
   }, 30_000)
 
+  it('writes the login address to the log file, not only to a terminal', async () => {
+    // The whole reason the log file exists is the desktop app, where the host's
+    // stdout goes to a process with no terminal and no log file. So the one line
+    // a first-time user needs - where to scan the QR - was the one line that
+    // survived only in a place that user cannot see.
+    //
+    // Observed on a real desktop install: the plugin loaded, its routes answered,
+    // and the user had no login address and no log directory at all. Every other
+    // report is written only once there is an account to poll; with none, this
+    // line was the only thing that would have created the file.
+    const previous = process.env['DSH_HOME']
+    const home = tempHome('dsh-wechat-login-line-')
+    process.env['DSH_HOME'] = home
+
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ret: 0 }), { status: 200 })) as unknown as typeof fetch)
+
+    const ctx = new Context()
+    provideCmdline(ctx, { args: [], exit: () => {}, ready: { commit() {}, await: async () => {} } } as never)
+    await ctx.plugin(CredentialsLocal as never, {} as never)
+    await ctx.plugin(AgentRegistry)
+    await ctx.plugin(CommandRuntime)
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
+    })
+    // A browser-facing host, which is the only place a panel exists at all.
+    ctx.provide('connection', {
+      fetch: { register: () => () => {} },
+    } as never)
+    ctx.provide('webServer', { port: 19387, host: '127.0.0.1' })
+    // No account: the state a first-time user is in, and the state in which
+    // `polling as` never runs to create the file.
+    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
+    await ctx.plugin({ name: 'channel-wechat', inject: ['wechatStartup', 'credentials', 'agents'], apply: applyChannel }, { cwd: '/work' })
+
+    const logDir = join(home, 'channel-wechat', 'log')
+    await until(async () => {
+      try {
+        return readdirSync(logDir).some(entry => readFileSync(join(logDir, entry), 'utf8').includes('微信登录'))
+      } catch {
+        return false
+      }
+    })
+    await ctx.fiber.dispose()
+
+    const files = readdirSync(logDir)
+    const body = readFileSync(join(logDir, files[0]!), 'utf8')
+    // The address a person can actually open, with the port the host bound.
+    expect(body).toContain('http://127.0.0.1:19387/api/channel-wechat/login')
+
+    if (previous === undefined) delete process.env['DSH_HOME']
+    else process.env['DSH_HOME'] = previous
+  }, 30_000)
+
   it('records a channel that dies before it ever polls', async () => {
     // The diagnostics most worth keeping are the ones from a channel that never
     // came up: on the desktop app the file is the only trace, and a start

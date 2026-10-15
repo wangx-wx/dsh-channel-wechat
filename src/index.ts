@@ -188,9 +188,13 @@ async function mountLoginPanel(ctx: Context, config: Config): Promise<void> {
     onError: (error: unknown) => { reporterFor(ctx)('login panel failed to connect', error) },
   }))
 
-  // `console.log`, not `ctx.logger`: no profile mounts a console exporter for
-  // the named logger, so a URL written through it is never seen. The shipped web
-  // app prints its own URL the same way.
+  // Reported rather than `console.log`, so the one line a first-time user needs
+  // also reaches the durable sink. This is the same argument the reporter itself
+  // exists for: the desktop host's stdout goes to a process with no terminal and
+  // no log file. Written through `console.log` it was the only diagnostic that
+  // could not be found there, which made a working plugin look broken - the
+  // routes answered and the log directory was never created, because every other
+  // report needs an account before it has anything to say.
   //
   // The wording matters and is not decorative. The page is a browser page that
   // shows a QR for the *phone* to scan, so "open it with WeChat" would send the
@@ -198,7 +202,7 @@ async function mountLoginPanel(ctx: Context, config: Config): Promise<void> {
   // so the panel URL works in a browser that has already opened the Harness UI -
   // which the desktop app always has, and which the user's browser has by the
   // time they are reading this, because that is where the UI is.
-  console.log(`[channel-wechat] 微信登录：在已打开 Harness 界面的浏览器中打开 ${panelUrl(ctx)}，用手机微信扫码`)
+  reporterFor(ctx)('微信登录', `在已打开 Harness 界面的浏览器中打开 ${panelUrl(ctx)}，用手机微信扫码`)
 }
 
 /**

@@ -8,3 +8,6 @@ lib/
 # reports. They stay local: the reports cite exact line numbers, but shipping
 # someone else's full checkout in this repository's history is not the point.
 docs/recon/_analysis/
+
+# Packed tarballs (`npm pack` writes them to the repo root)
+*.tgz

@@ -138,6 +138,29 @@ describe('package manifest', () => {
     expect(missing, `undeclared imports: ${missing.join(', ')}`).toEqual([])
   })
 
+  it('keeps dsh runtime packages out of dependencies, where the profile would duplicate them', () => {
+    // The failure this exists for is silent and only appears on a real turn.
+    //
+    // `dependencies` is installed INTO the profile. A `@deepseek-ai/*` package
+    // declared there gets its own physical copy under
+    // `$DSH_HOME/profiles/<name>/node_modules`, beside the identical copy the
+    // installation already resolves from its own closure. Two physical
+    // instances of one package are two module graphs: `cosmokit` seeds
+    // `Symbol.for("cosmokit.volatile.write")` and cordis builds its reactive
+    // system on it, so a plugin holding instance B registers effects the Host's
+    // instance A never sees. The reported symptoms were
+    // `no agent factory registered` and
+    // `cannot create effect on inactive context` - every inbound WeChat message
+    // failed - while the plugin loaded, advertised its routes, and reported
+    // nothing wrong.
+    //
+    // The versions match in that state, which is why a version check cannot
+    // catch it: the copies differed only by inode. Declaring these as peers
+    // instead makes the profile resolve the one closure the Host already has.
+    const core = Object.keys(manifest.dependencies ?? {}).filter(name => name.startsWith('@deepseek-ai/'))
+    expect(core, `dsh runtime packages installed into the profile: ${core.join(', ')}`).toEqual([])
+  })
+
   it('ships every path its exports point at', () => {
     // `exports` is what a consumer resolves; `files` is what npm packs. They
     // are independent fields, so a type face can point at a source path that

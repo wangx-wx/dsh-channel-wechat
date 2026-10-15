@@ -314,6 +314,78 @@ npm 要求二者满足其一。用户开启 2FA 后即通过。
 > 已核对：**`src/` 与 `package.json` 自发布点起零变化**，只有文档变过 ——
 > 所以把 tag 指向更新后的 HEAD 仍是准确的（tag 打于 `04c5bb2`）。
 
+### Q50（0.1.0 真实使用后）：**我们把 DSH 核心包装进了 profile，分裂了运行时**
+
+**现象**（用户真机，桌面端安装 `0.1.0` 后）：插件**加载正常**、路由**能响应**（实测对照 `200` vs 不存在的路径 `404`），但**每条微信消息都失败**，日志依次出现：
+
+```
+inbound message failed: no agent factory registered (load an agent-loop plugin)
+inbound message failed: cannot create effect on inactive context
+```
+
+**排查中被推翻的三个假设**（都写下来，因为它们看起来都很像答案）：
+
+| 假设 | 为何不成立 |
+|---|---|
+| 「`agent-loop` 的 6 个注入服务缺了」 | dump 出的 **1308 行**配置树里，`agent-loop` 行存在且 6 个提供者齐全 |
+| 「默认模型 `deepseek-flash` 不存在」 | `agent-loop` 的 config 只是 `agents: []`，**不读默认模型**；且 GUI 自身能正常对话 = factory 在进程里是好的 |
+| 「桌面端宿主 `desktop-host` 与 cli 行为不同」 | 用**完全相同的配置**在隔离环境跑 cli 版本，**能正常创建会话并回复** |
+
+**真正的根因**（社区手册命中）：官方仓库 **issues 被关闭**（只用 Discussions），但社区维护的
+[deepseek-harness-handbook](https://github.com/sandbaseai/deepseek-harness-handbook) 中
+[`duplicate-core-runtime-closure`](https://github.com/sandbaseai/deepseek-harness-handbook/blob/main/docs/en/troubleshooting/duplicate-core-runtime-closure.md)
+一条**精确描述**了它：
+
+> A third-party profile dependency should own its genuinely external dependencies. Its DSH runtime
+> contracts should be compatible peers resolved from the Host closure. **Installing missing core
+> peers into the profile may silence the package manager while splitting runtime identity.**
+> **do not add DSH core packages as profile dependencies.**
+
+**我们的错误**：`package.json` 的 `dependencies` 里有 **`@deepseek-ai/schemastery`**（DSH 核心包），
+于是 `pnpm add` 把它**实体装进 profile**。铁证 —— **同版本、不同 inode 的两份副本**：
+
+```
+3.18.4  inode 12121912  ~/.dsh/profiles/desktop/node_modules/@deepseek-ai/schemastery
+3.18.4  inode 12148791  ~/.dsh/profiles/node_modules/@deepseek-ai/schemastery   ← 官方核心闭包
+```
+
+**机制**：`cosmokit`（`cordis` 微内核的响应式底座）里有
+`Symbol.for("cosmokit.volatile.write")`。插件用自己的副本 = **第二套模块图**，
+于是 `ctx.effect()` 跨了两套响应式系统：Host 的 `cordis` 在实例 A 上注册 factory，
+插件在实例 B 上申请 effect → `no agent factory` / `inactive context`。
+**版本号一致**，所以**任何版本检查都发现不了，只有 inode 不同**。
+
+**修复**：把 `@deepseek-ai/schemastery` 从 `dependencies` 移到 `peerDependencies`（+`devDependencies`
+供本地构建），让它由 Host 闭包解析。修复后 profile 的 `node_modules/@deepseek-ai/` **为空**，
+只剩真正的第三方依赖 `commander`。
+
+**为什么 M7 没抓到**：当时验证的是「**tarball 装进全新 profile 能加载**」——
+而 `schemastery` 副本在**全新 profile** 里同样会装进去，只是**没有历史会话/真实对话去触发**。
+**「装得上」和「能工作」是两件事**，与本项目 Q47/Q48/Q49 是同一个模式的又一次复发。
+测试缺口也一致：清单测试当时**只检查「声明的 import 都有声明」**，
+**没有任何测试问过「哪些包根本不该装进 profile」**。已补
+`keeps dsh runtime packages out of dependencies`（修复前失败、修复后通过，变异验证过）。
+
+### Q51（0.1.0 真实使用后）：登录地址是**唯一不落盘**的诊断
+
+**现象**：桌面端首次使用时，用户**看不到登录地址**，且 `~/.dsh/channel-wechat/log/` **目录根本不存在**。
+
+**两个原因叠加**：
+
+| 环节 | 事实 |
+|---|---|
+| 登录地址提示 | 走 `console.log`（`src/index.ts:201`）→ **只写终端** |
+| 桌面端 | host 的 stdout 交给 Electron 主进程，**没有终端、也不写日志文件** |
+| 日志文件 | **只在有账号可轮询时**才写第一条（`polling as`）→ 未登录时**正常也不创建** |
+
+结果：**插件完全正常，用户却两眼一抹黑** —— 而 Q46 建这个日志功能的理由**恰恰就是**「桌面端 stdout 不落盘」。
+
+**修复**：登录地址改走 `reporterFor(ctx)`，终端与日志文件**双写**。补集成测试
+`writes the login address to the log file, not only to a terminal`（**无账号**状态下启动真实
+`apply`，断言文件含完整地址与端口）—— 修复前 `condition never held`，修复后通过，变异验证过。
+
+**顺带**：`.gitignore` 加 `*.tgz`（`npm pack` 会在仓库根留包）。
+
 ## 3. 架构
 
 ```
