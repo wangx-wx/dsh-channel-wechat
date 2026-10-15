@@ -29,7 +29,7 @@ WeChat user ⇄ Tencent iLink ⇄ 【this plugin (inside the DSH process)】
                 ├─ getUpdates long-poll for inbound messages
                 ├─ agent.followup() injects the turn natively
                 ├─ session/event → sendmessage for replies
-                ├─ approval cards (WeChat and GUI)
+                ├─ approval and question cards (WeChat and GUI)
                 └─ login panel (web / desktop)
 ```
 
@@ -37,8 +37,10 @@ WeChat user ⇄ Tencent iLink ⇄ 【this plugin (inside the DSH process)】
   (`@tencent-weixin/openclaw-weixin`, MIT), with its fidelity and test baseline
 - **DSH integration layer written from scratch**, against the documented
   contracts (typed, not duck-typed)
-- **Multiple working directories**: one WeChat user can bind several sessions;
-  `/cwd` switches by creating a session in that directory
+- **Sessions and working directory**: the directory comes from the profile's
+  `cwd` config and is written when the session is created — immutable after
+  that. The `/cwd` command is registered but **not implemented yet**; it says so
+  explicitly rather than failing silently
 - **Long-polling decoupled from processing**: messages keep arriving during a
   long turn, and `/stop` can interrupt it
 
@@ -104,8 +106,8 @@ The design documents are written in Chinese.
 | **M1** ⚠️ | Protocol layer + credential persistence | CLI path unusable on web/desktop → moved to the panel |
 | **M2** ✅ | **Text end to end** | WeChat message → DSH reply arrives |
 | **M3** ✅ | Commands + `/stop` | Native commands get a receipt; interrupts work |
-| **M4** 🔶 | Media both ways + quotes | images ✅ / quotes ✅ verified on a real device; outbound files coded, **awaiting real-device verification** |
-| **M5** ✅ | Approval cards | WeChat approves/rejects; the GUI card stays in sync |
+| **M4** ✅ | Media both ways + quotes | images ✅ / quotes ✅ / **outbound files ✅ verified on a real device** |
+| **M5** ✅ | Approval + question cards | WeChat approves/rejects/answers; with `cards: wechat` the GUI shows no duplicate |
 | **M6** 🔶 | Login panel | Scan-to-login verified on web, login starts the channel; settings-page card pending |
 | **M7** 🔶 | Release | **v0.1.0 is installable** (`npm pack` → verified loading in a fresh profile); not pushed to npm yet |
 
@@ -166,8 +168,12 @@ If that checkout is absent, they fall back to the `dsh` shim inside
 ## Not in scope
 
 Group chats (no protocol basis), multiple accounts at runtime, message
-deduplication/throttling (matching upstream), question cards (v2), unsolicited
-push (v2), a separate authorization system.
+deduplication/throttling (matching upstream), unsolicited push (v2), a separate
+authorization system.
+
+> **Question cards shipped in v1** (not v2): an unclaimed `ask_user_question`
+> wedges the whole turn forever, so it was built alongside approval cards — see
+> [plan-v1 §Q42](./docs/plan-v1.md).
 
 ## License and acknowledgements
 
