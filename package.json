@@ -1,6 +1,6 @@
 {
   "name": "dsh-channel-wechat",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "WeChat (iLink / ClawBot) channel for DeepSeek Harness",
   "license": "MIT",
   "type": "module",
