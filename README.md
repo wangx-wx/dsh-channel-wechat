@@ -4,7 +4,7 @@
 
 把微信（腾讯 iLink / ClawBot）接入 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的**通道插件**。
 
-> 状态：**v0.1.0 已发布到 npm**。出站文件已**真机验证**；`svr_id` 引用与 `message_id` 精度为**已知记录项**（见 [plan-v1 §Q45](./docs/plan-v1.md)）。
+> 状态：**v0.1.1 已发布到 npm**。出站文件已**真机验证**；`svr_id` 引用与 `message_id` 精度为**已知记录项**（见 [plan-v1 §Q45](./docs/plan-v1.md)）。
 
 ---
 
@@ -135,7 +135,7 @@ CLI 的 `login`/`logout`/`status` 仍然保留，但仅在**不挂 web app** 的
 | **M4** ✅ | 媒体双向 + 引用 | 发图 ✅ / 引用 ✅ / **出站文件 ✅ 真机已验证** |
 | **M5** ✅ | 审批卡 + 提问卡 | 微信批准/拒绝/回答提问；`cards: wechat` 时 GUI 不重复弹卡 |
 | **M6** 🔶 | 面板登录 | web 端实测扫码登录、扫码即启动；设置页卡片待做 |
-| **M7** ✅ | 发布 | **v0.1.0 已发布到 npm**；`dsh plugin add dsh-channel-wechat` 经全新 profile 实测装好并加载 |
+| **M7** ✅ | 发布 | **v0.1.1 已发布到 npm**；`dsh plugin add dsh-channel-wechat` 经全新 profile 实测装好并加载 |
 
 ## 数据落在哪里
 

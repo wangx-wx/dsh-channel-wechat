@@ -5,7 +5,7 @@ English | [中文](./README.md)
 A **channel plugin** that connects WeChat (Tencent iLink / ClawBot) to
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
 
-> Status: **v0.1.0, published to npm**. Outbound files are **verified on a real
+> Status: **v0.1.1, published to npm**. Outbound files are **verified on a real
 > device**; the `svr_id` quote shape and `message_id` precision are **recorded
 > known issues** (see [plan-v1 §Q45](./docs/plan-v1.md)).
 
@@ -162,7 +162,7 @@ The design documents are written in Chinese.
 | **M4** ✅ | Media both ways + quotes | images ✅ / quotes ✅ / **outbound files ✅ verified on a real device** |
 | **M5** ✅ | Approval + question cards | WeChat approves/rejects/answers; with `cards: wechat` the GUI shows no duplicate |
 | **M6** 🔶 | Login panel | Scan-to-login verified on web, login starts the channel; settings-page card pending |
-| **M7** ✅ | Release | **v0.1.0 is on npm**; `dsh plugin add dsh-channel-wechat` verified installing and loading in a fresh profile |
+| **M7** ✅ | Release | **v0.1.1 is on npm**; `dsh plugin add dsh-channel-wechat` verified installing and loading in a fresh profile |
 
 ## Where data lives
 
