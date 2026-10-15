@@ -171,6 +171,8 @@ pnpm typecheck
 pnpm build             # 发布前 `prepack` 会自动执行
 ```
 
+**发布新版本**：见 [docs/release.md](./docs/release.md)（切官方源 → 发布 → 静候审核 → 切回镜像源）。
+
 集成测试会在临时目录建一个隔离的 `DSH_HOME`，**不会触碰你正在使用的 dsh profile**。
 
 它们需要一个真实的 launcher 来启动，默认用**本地 DSH 仓库**（走

@@ -205,6 +205,9 @@ pnpm typecheck
 pnpm build             # `prepack` runs this automatically before publish
 ```
 
+**Releasing a new version**: see [docs/release.md](./docs/release.md) (switch to the
+official registry → publish → wait for review → switch back to the mirror).
+
 The integration tests create an isolated `DSH_HOME` in a temporary directory and
 **never touch the dsh profile you are using**.
 
