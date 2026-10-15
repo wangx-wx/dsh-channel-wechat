@@ -172,15 +172,76 @@ DSH_HOME=/tmp/npmverify dsh plugin --profile v add dsh-channel-wechat
 
 ---
 
-## 六、收尾
+## 六、收尾：tag 与 GitHub Release
+
+### 6.1 打 tag
+
+**推荐：用 `npm version` 打包 tag 一起做。** 实测它会**自动改 `package.json` + 提交 + 打 `v<版本>` tag**：
 
 ```bash
-# 文档里的状态行、里程碑表、计划书同步更新
-git add -A && git commit -m "Release v<版本>"
-git push origin main
+npm version patch -m "Release %s"   # minor / major 同理
 ```
 
-如有 `npm version` 产生的 tag，一并推送：`git push --tags`
+> ⚠️ **工作区必须先干净**，否则它直接拒绝（实测报 `Git working directory not clean.`）。
+> 所以顺序是：**先提交所有改动 → 再 `npm version`**。
+
+如已有 `package.json` 的版本号（本次 `0.1.0` 就是手工改的），也可**手工补 tag**：
+
+```bash
+git tag -a v0.1.0 -m "Release v0.1.0"
+git push origin v0.1.0      # tag 要单独推送，git push 不带 --tags 不会推它
+```
+
+推送后确认远端已有：
+
+```bash
+git ls-remote --tags origin | grep v0.1.0
+# 会看到两行：tag 对象本身 + 它指向的提交（<tag>^{}）
+```
+
+### 6.2 建 GitHub Release
+
+本机**没有 `gh` CLI**（`command -v gh` 为空），两条路：
+
+**方式 A：网页**（最简单）
+
+打开 `https://github.com/<owner>/<repo>/releases/new`，选择刚推的 tag，填标题与说明。
+
+**方式 B：API**（无 `gh` 时可用）
+
+凭据可从 macOS 钥匙串直接取，**不必手工粘贴 token**：
+
+```bash
+tok=$(printf "protocol=https\nhost=github.com\n\n" | git credential fill | grep '^password=' | cut -d= -f2)
+```
+
+然后 `POST https://api.github.com/repos/<owner>/<repo>/releases`，
+body 含 `tag_name` / `name` / `body` / `draft: false` / `prerelease: false`，
+请求头带 `Authorization: Bearer $tok`。
+
+> ⚠️ **`releases/latest` 未认证会被限流**（`API rate limit exceeded for <ip>`），
+> **不代表 release 不存在**。验证时带上 `Authorization` 头，或改用
+> `releases/tags/<tag>`。
+
+**Release 说明值得写这些**（不只是「发布了」）：安装命令、功能列表、
+**数据落在哪里**（会话 / 插件状态 / 日志三处路径）、已知问题、不做的事、许可致谢。
+目标：打开页面的人**不用翻仓库就能用起来**。
+
+---
+
+## 七、本次发布的一个遗留瑕疵（如实记录）
+
+`0.1.0` **先发布、后修文档**，因此 **npm 页面上的 README 是旧版**——
+里面还写着「尚未发布到 npm，用 `github:` 安装」，与它自己已经上线这件事矛盾
+（registry 的 `readme` 字段为证）。
+
+**教训**：**发布前先把文档定稿并提交**。`prepack` 打包的是**工作区当时的内容**，
+不是「最后一次提交」，所以文档没写完就发，npm 页面会一直挂着旧说明
+（同一版本号不可重发，只能等下一版修正）。
+
+> 当时确认过：**`src/`、`package.json` 等代码文件自发布点起零变化**，只有文档变了，
+> 所以 tag 指向更新后的 HEAD 仍是准确的。
+
 
 ---
 
@@ -219,4 +280,6 @@ git push origin main
 | npm CLI | 11.13.0（**无 `stage` 子命令**） |
 | 发布耗时 | `PUT` → 202，约 2 分钟后 `0.1.0` 可见 |
 | 包体积 | 72.1 kB（解包 231.9 kB，10 个文件） |
-| git tag | **无** —— `0.1.0` 是手工改版本号发布的，没有走 `npm version`，因此**没有对应 tag**。后续版本若用 `npm version` 会自动打 tag，记得 `git push --tags` |
+| git tag | `v0.1.0`（**后来补打**的 annotated tag，指向 `04c5bb2`）。发布当时没有 tag：版本号是手工改的，没走 `npm version` |
+| GitHub Release | [v0.1.0](https://github.com/wangx-wx/dsh-channel-wechat/releases/tag/v0.1.0)，经 API 创建（本机无 `gh`） |
+| 遗留瑕疵 | npm 页面的 README 是旧版（先发布后修文档），见 §七 |
