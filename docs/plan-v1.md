@@ -386,6 +386,46 @@ inbound message failed: cannot create effect on inactive context
 
 **顺带**：`.gitignore` 加 `*.tgz`（`npm pack` 会在仓库根留包）。
 
+### Q52（0.1.1 真机验收）：默认模型不可用时**没有形状**，以及一条只有 stderr 才说的诊断
+
+修完 Q50/Q51 并发布 `0.1.1` 后真机验收，又暴露两件事。
+
+**① 默认模型指向不存在的模型 → 每条消息 400，而插件一字不报。**
+
+`desktop` profile **没有** `agent-default-model` 覆盖，于是用 base 的默认
+`deepseek-official / deepseek-flash`；而该 profile 的 `llm-deepseek` 只提供
+`deepseek-v4.1-flash` 与 `deepseek-v4-pro`。结果每条消息：
+
+```
+turn/end | {"reason":{"kind":"error","error":{"message":"unknown provider for model deepseek-flash",
+           "code":"INVALID_REQUEST","status":400}}}
+```
+
+对照 `web` profile（**能用**）：它有显式覆盖，`model: deepseek-v4.1-flash`。**差别就是这一行配置。**
+
+**这是我这轮排查中的一次判断失误，值得记录**：我早先提出「默认模型可能不对」，随后**自己推翻了**，
+理由是「`agent-loop` 的 config 只有 `agents: []`，不读默认模型」——**这个理由是对的，结论却是错的**：
+不读它的是 `agent-loop`，**读它的是本插件自己**（`modelSelectionOf` → `ctx.agentDefaultModel.currentSelection()`），
+而插件的 `cwd` 是必填、模型**不是**。**我把「谁读它」搞错了，就否掉了正确的方向。**
+
+**② 一条 `name mismatch` 诊断只在 stderr，桌面端永远看不到。**
+
+用户按我的指引加覆盖时，我把包名写成 `@deepseek-ai/agent-default-model`（漏了 `dsh-`）。
+DSH 的 loader 其实**说得非常清楚**：
+
+```
+dsh: [.../cordis.patch.yml] patch: name mismatch for "agent-default-model"
+     (expected "@deepseek-ai/dsh-agent-default-model", got "@deepseek-ai/agent-default-model"), skipping
+```
+
+但这行走 **stderr**，而**桌面端不落盘 stderr**（Q46 那条日志功能覆盖的只是**插件自己**的输出）。
+**同一类盲区第三次出现**：Q50 的 `skipping profile bundle`、这里的 `name mismatch`，都只写 stderr。
+
+**结论与后续（待做）**：插件应在**启动时校验模型可用性**，不可用就明确报错——
+理由与 `cwd` 完全一致（计划 §5.5：`cwd` 必填是「宁可启动失败，也不要静默把会话写进一个改不了的目录」）。
+**一个不可用的模型和缺失的 `cwd` 是同一类错误，现在只有前者没有形状。**
+未在 `0.1.1` 做，因为它需要先确认「可用模型」从哪个服务读最可靠，属独立改动。
+
 ## 3. 架构
 
 ```

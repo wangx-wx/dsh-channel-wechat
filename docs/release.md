@@ -145,6 +145,45 @@ npm config set registry https://registry.npmmirror.com
 
 ---
 
+## 四之二、升级已安装的 profile：**必须带版本号**
+
+发布新版本后升级用户，`add` **不会**替你升级。`^0.1.0` 的语义是「≥0.1.0 且 <0.2.0」，
+**新版本本就满足它**，于是 pnpm 判定「无需变更」→ **原样重装旧版，并报成功**：
+
+```
+$ dsh plugin --profile desktop add dsh-channel-wechat
+dependencies:
++ dsh-channel-wechat ^0.1.0
+Packages: +5
+reused 5, downloaded 0        ← 一个包都没下载
+```
+
+**正确做法：先移除，再装上带版本号的目标**：
+
+```bash
+# 必须先完全退出桌面端（profile 被 Electron 独占）
+dsh plugin --profile desktop remove dsh-channel-wechat
+dsh plugin --profile desktop add dsh-channel-wechat@0.1.1
+```
+
+| 要点 | 原因 |
+|---|---|
+| **写 `@<版本>`** | 只写包名 → 已被现有范围满足 → **什么都不做**（还报成功） |
+| **先 `remove`** | 清掉旧 `dependencies` 与它带进 profile 的实体依赖；否则可能与新版本共存 |
+| **GUI 装不了特定版本** | 安装框只接受包名，写不了 `@0.1.1`；要精确版本走命令行 |
+
+**装完自查两项**（第二项是历史上出过真实故障的地方）：
+
+```bash
+grep '"version"' <profile>/node_modules/dsh-channel-wechat/package.json   # 应是目标版本
+ls <profile>/node_modules/@deepseek-ai/                                   # 应为空
+```
+
+> 第二条的存在理由见 `plan-v1 §Q50`：第三方插件**不得把 DSH 核心包装进 profile**，
+> 那会分裂运行时身份。**这个目录非空就是缺陷信号。**
+
+---
+
 ## 五、验证「能装」（不是只看发布回执）
 
 **发布回执不算验证。** 必须真的装一次：
