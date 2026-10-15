@@ -266,6 +266,42 @@ M4 真机验证通过后逐份复核 README，发现**两处描述与代码不�
 两者的根因都是**只验证了自己关心的那条路**——M7 验了 tarball，就默认 README 的 npm 指令也能用。
 **「我验证过 A」不等于「我文档里写的 B 也对」。**
 
+### Q49（M7 收官）：发布到 npm 成功，途中撞上 **staged publishing** 这道新门
+
+用户登录 npm 并开启 2FA 后发布成功。`dsh-channel-wechat@0.1.0` 现已上线，
+并**经全新 profile 从 npm 实测装好、真实启动、打印登录行**（不只是看发布回执）。
+
+**中途两个卡点，都值得记录**：
+
+**① 首次发布被 403 拒绝——token 缺少 2FA 能力。**
+```
+403 Two-factor authentication or granular access token with bypass 2fa enabled is required
+```
+账号当时 `two-factor auth: disabled`，而 token 是 **granular** 类型（`npm_` 前缀）却**未勾选 "Bypass 2FA"**。
+npm 要求二者满足其一。用户开启 2FA 后即通过。
+（附带发现：`npm token list` 对新式 granular token 返回空数组，**不能用它判断 token 是否存在**。）
+
+**② 发布回执是 `202 Accepted`，但注册表上出现的是 `0.0.0-stage`，不是 `0.1.0`。**
+
+这是个**新手会误判为「发错包」的现象**：npm 现在对**新包**启用
+[staged publishing](https://docs.npmjs.com/staged-publishing/)——`npm publish` 先把包送进暂存区，
+注册表上发一个**公开占位版本 `0.0.0-stage`**（描述字面写着 *"Temporary package placeholder for staged publishing"*），
+真正的内容要**审核通过并批准**后才可见。实测时间线：
+
+| 时刻 | 事件 |
+|---|---|
+| 14:16:41 | `PUT` → **202 Accepted** |
+| 14:16:48 | `0.0.0-stage` 占位出现（`latest = 0.0.0-stage`） |
+| 14:18:58 | **`0.1.0` 出现，`latest` 切到 `0.1.0`** |
+
+所以「发完立刻 `npm view` 看到 0.0.0-stage」**是正常的中间态**，不是发错了。
+另一个坑：本机 npm **11.13.0 没有 `stage` 子命令**，无法主动查暂存状态——
+`npm view` 才是可靠的观测点。这两点已写进本记录，供下次发布参考。
+
+**③ 真机验证（不是只看回执）**：`add dsh-channel-wechat` 装入全新隔离 profile →
+`dependencies` 得到 `^0.1.0`、`bundles` **自动写入** → 包内含真实 `lib/` 四个文件 →
+`--dump-config` 出现本插件两层 → 真实启动打印登录行。**M7 至此收敛。**
+
 ## 3. 架构
 
 ```
@@ -409,7 +445,7 @@ ctx.on('approval/request', handler, { prepend: true })   // 必须 prepend + 不
 | **M4 媒体** ✅ | S0 加密/CDN ✅ S1 入站图片 ✅ S2 出站文件 ✅（只发 `present` 声明的）S4 引用 ✅（内联可用；`svr_id` 分支**只记录不修**，见 Q45） | ~~发图能理解~~ ✅ 真机已验证；~~产出文件能收到~~ ✅ **真机已验证（2026-10-15）**；引用**真机已验证**（引 Agent ✅ / 引自己 ⚠️） |
 | **M5 卡片** ✅ | waterfall 监听 + 卡片渲染/解析 + 超时 + 队列旁路 | 微信能批准/拒绝/回答提问；`cards:wechat` 时 GUI 不重复弹卡 |
 | **M6 面板** 🔶 | S1 二维码 ✅ S2 登录会话 ✅ S3 页面与 API ✅ S4 扫码即启动 ✅ S5 接线 ✅；设置页卡片待做 | web 端登录页可用（已实测）；设置页卡片待做 |
-| **M7 发布** 🔶 | 双语 README ✅ LICENSE ✅ 致谢 ✅ 可发布 ✅（`0.1.0`/去 `private`/`prepack`/`files`/`exports` 修正）`npm pack` 验证 ✅；**未推 npm** | `dsh plugin add dsh-channel-wechat` 一条命令装好 —— **tarball 已在全新 profile 实测装好并加载** |
+| **M7 发布** ✅ | 双语 README ✅ LICENSE ✅ 致谢 ✅ 可发布 ✅（`0.1.0`/去 `private`/`prepack`/`files`/`exports` 修正）**已发布到 npm** ✅ | `dsh plugin add dsh-channel-wechat` 一条命令装好 —— **已从 npm 实测装好并加载**（见 Q49） |
 
 **M2 是第一个真实闭环**，也是「集成契约是否正确」的验证点——协议层移植量最大，但风险最高的是全新写的集成层。
 
@@ -603,6 +639,9 @@ requestBody: 'buffered', fetch })`——必须挂在 `/api/*` 下。实测无 co
 README 按用户裁定做成 **中文 `README.md` + 英文 `README.en.md`**（非 DSH 官方的
 `README.md`+`README.zh.md` 约定），并修正了过期的状态行。**未推送 npm** —— 本轮只做
 「准备好 + 验证过」。
+
+**（2026-10-15 补记）已发布。** 当日用户登录 npm 并开启 2FA，`0.1.0` 上线官方源，
+并已从 npm 实测安装加载。发布过程中撞上的 staged publishing 门与 token 2FA 要求见 Q49。
 
 ## 7. 已知风险与技术债
 

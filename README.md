@@ -4,41 +4,61 @@
 
 把微信（腾讯 iLink / ClawBot）接入 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的**通道插件**。
 
-> 状态：**v0.1.0**，功能完整、可安装。出站文件已**真机验证**；`svr_id` 引用与 `message_id` 精度为**已知记录项**（见 [plan-v1 §Q45](./docs/plan-v1.md)）。
+> 状态：**v0.1.0 已发布到 npm**。出站文件已**真机验证**；`svr_id` 引用与 `message_id` 精度为**已知记录项**（见 [plan-v1 §Q45](./docs/plan-v1.md)）。
 
 ---
 
 ## 安装
 
-**尚未发布到 npm**，所以 `add dsh-channel-wechat` 会 404。用下面任一方式：
-
 ```bash
-# 推荐：从 Git 仓库安装（pnpm 会用 prepack 自动构建）
-dsh plugin --profile <你的 profile> add github:wangx-wx/dsh-channel-wechat
+dsh plugin --profile <你的 profile> add dsh-channel-wechat
 ```
 
-从 Git 安装时 pnpm 会**拒绝执行构建脚本**，首次会失败并打印一行 `allowBuilds` 配置。
-把它加进 **profile 的 `pnpm-workspace.yaml`**，再跑一次即可（这是 pnpm 的安全机制，不是本插件的问题）：
+装完**重启 DSH**。就这么简单——`add` 会自动构建、并把包注册进 profile 的 `bundles` 层。
+
+### 装完怎么用
+
+1. 启动后日志里会打印一个登录地址：
+   ```
+   [channel-wechat] 微信登录：用手机微信打开 http://127.0.0.1:<端口>/api/channel-wechat/login 扫码连接
+   ```
+2. 用**手机微信**扫码确认，**无需重启**：凭证即刻写入，长轮询开始
+3. 之后直接在微信里给这个 bot 发消息即可，DSH 的回复会回到微信
+
+⚠️ **装之前先定 `cwd`**：配置项 `cwd` 决定所有微信会话的工作目录，**会话创建时写入且不可变**。
+不设的话取启动器的 `process.cwd()`，**桌面端那是 `~/.dsh/profiles/desktop`**——不该让 agent 在里面干活。在 profile 的 `cordis.patch.yml` 里指定：
+
+```yaml
+- id: channel-wechat
+  config:
+    cwd: /你的/工作目录
+    cards: wechat        # 微信独占卡片（默认）；改 both 则 GUI 也弹
+```
+
+### 其他安装方式
+
+从 Git 仓库（pnpm 会用 `prepack` 自动构建）或本地 tarball：
+
+```bash
+dsh plugin --profile <你的 profile> add github:wangx-wx/dsh-channel-wechat
+dsh plugin --profile <你的 profile> add ./dsh-channel-wechat-0.1.0.tgz
+```
+
+从 Git 安装时 pnpm 会**拒绝执行构建脚本**，首次失败并打印一行 `allowBuilds` 配置，
+把它加进 profile 的 `pnpm-workspace.yaml` 再跑一次即可（pnpm 的安全机制，非本插件问题）：
 
 ```yaml
 allowBuilds:
   dsh-channel-wechat@<pnpm 打印的那串完整键>: true
 ```
 
-也可以从 tarball 安装（同样会自动构建）：
-
-```bash
-npm pack                      # 在仓库根产出 dsh-channel-wechat-0.1.0.tgz
-dsh plugin --profile <你的 profile> add ./dsh-channel-wechat-0.1.0.tgz
-```
-
 ⚠️ **不要直接 `add` 一个本地目录**：那会建立 `link:`，而 **`link:` 不会执行构建**。
-仓库里 `lib/` 是 `gitignore` 的，于是装出来的包**没有 `lib/`**，启动时报
-`failed to import` 并**静默不加载**。真要这么做，必须先在目录里 `pnpm install && pnpm build`。
+仓库里 `lib/` 是 gitignore 的，于是装出来的包**没有 `lib/`**，启动时报
+`failed to import` 并**静默不加载**。真要这么做，必须先 `pnpm install && pnpm build`。
 
-`add` 还会**把这个包加进 profile 的 `bundles`**——这一步不能省：
-只写进 `dependencies` 而不进 `bundles`，包会被装好但**永远不加载**（`--dump-config` 里一行都没有，且不报错）。
-桌面端 profile 就曾这样被手工 `link:` 挂过，结果**装了却从不生效**。
+> **`bundles` 是什么**：`dependencies` 说「下载什么」，profile 的 `dsh.profile.bundles` 说「**加载**什么」。
+> 只进前者不进后者 → 包装好却**永不加载**，`--dump-config` 一行都没有且不报错。
+> `dsh plugin add` 会两处都写；**手工 `link:` 只写前者**，这正是桌面端曾「装了却从不生效」的原因。
 
 ## 这是什么
 
@@ -115,7 +135,7 @@ CLI 的 `login`/`logout`/`status` 仍然保留，但仅在**不挂 web app** 的
 | **M4** ✅ | 媒体双向 + 引用 | 发图 ✅ / 引用 ✅ / **出站文件 ✅ 真机已验证** |
 | **M5** ✅ | 审批卡 + 提问卡 | 微信批准/拒绝/回答提问；`cards: wechat` 时 GUI 不重复弹卡 |
 | **M6** 🔶 | 面板登录 | web 端实测扫码登录、扫码即启动；设置页卡片待做 |
-| **M7** 🔶 | 发布 | **v0.1.0 可安装**（`npm pack` → 新 profile 实测加载）；尚未推 npm |
+| **M7** ✅ | 发布 | **v0.1.0 已发布到 npm**；`dsh plugin add dsh-channel-wechat` 经全新 profile 实测装好并加载 |
 
 ## 数据落在哪里
 

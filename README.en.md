@@ -5,48 +5,72 @@ English | [中文](./README.md)
 A **channel plugin** that connects WeChat (Tencent iLink / ClawBot) to
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
 
-> Status: **v0.1.0**, feature-complete and installable. Outbound files are
-> **verified on a real device**; the `svr_id` quote shape and `message_id`
-> precision are **recorded known issues** (see [plan-v1 §Q45](./docs/plan-v1.md)).
+> Status: **v0.1.0, published to npm**. Outbound files are **verified on a real
+> device**; the `svr_id` quote shape and `message_id` precision are **recorded
+> known issues** (see [plan-v1 §Q45](./docs/plan-v1.md)).
 
 ---
 
 ## Install
 
-**Not published to npm yet**, so `add dsh-channel-wechat` returns 404. Use:
+```bash
+dsh plugin --profile <your-profile> add dsh-channel-wechat
+```
+
+Then **restart DSH**. That is all — `add` builds it and registers the package in
+the profile's `bundles` layer.
+
+### Using it
+
+1. On startup the log prints a login address:
+   ```
+   [channel-wechat] WeChat login: open http://127.0.0.1:<port>/api/channel-wechat/login in mobile WeChat and scan
+   ```
+2. Scan it with **mobile WeChat** and confirm — **no restart needed**; credentials
+   are stored and long-polling starts.
+3. Message that bot in WeChat from then on; DSH's replies come back to WeChat.
+
+⚠️ **Decide `cwd` before installing.** The `cwd` config sets the working directory
+of every WeChat session, and it is **written at session creation and immutable**.
+Unset, it takes the launcher's `process.cwd()` — which on desktop is
+`~/.dsh/profiles/desktop`, not somewhere an agent should work. Set it in the
+profile's `cordis.patch.yml`:
+
+```yaml
+- id: channel-wechat
+  config:
+    cwd: /your/working/directory
+    cards: wechat        # WeChat-only cards (default); `both` also shows the GUI card
+```
+
+### Other install paths
+
+From git (pnpm builds it via `prepack`), or a local tarball:
 
 ```bash
-# recommended: install from the git repository (pnpm builds it via prepack)
 dsh plugin --profile <your-profile> add github:wangx-wx/dsh-channel-wechat
+dsh plugin --profile <your-profile> add ./dsh-channel-wechat-0.1.0.tgz
 ```
 
 For a git dependency pnpm **refuses to run build scripts**, so the first attempt
-fails and prints an `allowBuilds` entry. Add it to the **profile's
-`pnpm-workspace.yaml`** and retry (this is pnpm's safety mechanism, not a plugin
-defect):
+fails and prints an `allowBuilds` entry. Add it to the profile's
+`pnpm-workspace.yaml` and retry (pnpm's safety mechanism, not a plugin defect):
 
 ```yaml
 allowBuilds:
   dsh-channel-wechat@<the full key pnpm printed>: true
 ```
 
-A tarball works too, and also builds automatically:
+⚠️ **Do not `add` a local directory.** That creates a `link:`, and **`link:` runs
+no build**. Since `lib/` is gitignored, the installed package has no `lib/`, so
+startup reports `failed to import` and **silently loads nothing**. If you must,
+run `pnpm install && pnpm build` in that directory first.
 
-```bash
-npm pack                      # produces dsh-channel-wechat-0.1.0.tgz
-dsh plugin --profile <your-profile> add ./dsh-channel-wechat-0.1.0.tgz
-```
-
-⚠️ **Do not `add` a local directory.** That creates a `link:`, and **`link:`
-runs no build**. Since `lib/` is gitignored, the installed package has no
-`lib/`, so startup reports `failed to import` and **silently loads nothing**.
-If you must, run `pnpm install && pnpm build` in that directory first.
-
-`add` also **inserts the package into the profile's `bundles`**, and that step is
-not optional: a package present in `dependencies` but absent from `bundles` is
-installed and then **never loaded** — zero lines in `--dump-config`, no error.
-The desktop profile was wired that way by hand and the plugin was installed but
-**never active**.
+> **What `bundles` is**: `dependencies` says what to *download*; the profile's
+> `dsh.profile.bundles` says what to *load*. Present in the former but not the
+> latter means installed and **never loaded** — zero lines in `--dump-config`, no
+> error. `dsh plugin add` writes both; attaching by hand with `link:` writes only
+> the first, which is why the desktop profile was installed but never active.
 
 ## What this is
 
@@ -138,7 +162,7 @@ The design documents are written in Chinese.
 | **M4** ✅ | Media both ways + quotes | images ✅ / quotes ✅ / **outbound files ✅ verified on a real device** |
 | **M5** ✅ | Approval + question cards | WeChat approves/rejects/answers; with `cards: wechat` the GUI shows no duplicate |
 | **M6** 🔶 | Login panel | Scan-to-login verified on web, login starts the channel; settings-page card pending |
-| **M7** 🔶 | Release | **v0.1.0 is installable** (`npm pack` → verified loading in a fresh profile); not pushed to npm yet |
+| **M7** ✅ | Release | **v0.1.0 is on npm**; `dsh plugin add dsh-channel-wechat` verified installing and loading in a fresh profile |
 
 ## Where data lives
 
