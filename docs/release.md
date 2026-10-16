@@ -76,7 +76,7 @@ npm publish --dry-run
 | `LICENSE` | 在 |
 | `THIRD_PARTY_NOTICES.md` | 在（MIT 署名义务） |
 | `cordis.patch.yml` | 在（bundle 层入口） |
-| 文件数 | 约 10 个 |
+| 文件数 | **9 个**（`lib/` 3 + 两个 README + `LICENSE` + `THIRD_PARTY_NOTICES.md` + `cordis.patch.yml` + `package.json`） |
 | `private: true` | **必须没有** |
 
 ---
