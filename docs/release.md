@@ -201,11 +201,15 @@ DSH_HOME=/tmp/npmverify dsh plugin --profile v add dsh-channel-wechat
 |---|---|
 | 装进了依赖 | `dependencies` 出现 `"dsh-channel-wechat": "^<版本>"` |
 | **自动注册 bundle** | `dsh.profile.bundles` 里出现包名 |
-| 包内有真代码 | `node_modules/dsh-channel-wechat/lib/` 有 4 个文件 |
+| 包内有真代码 | `node_modules/dsh-channel-wechat/lib/` 有 3 个文件：`index.js`、`index.d.ts`、`client.js` |
 | 配置树认到它 | `DSH_HOME=/tmp/npmverify dsh --profile v --dump-config \| grep channel-wechat` |
 | **真的能加载** | 启动后日志打印 `[channel-wechat] 微信登录：…` |
 
 最后一条最关键——**只是装好不等于能加载**（见下方「两个历史陷阱」）。
+
+> `lib/` 的文件数在 0.1.2 变了：0.1.0 / 0.1.1 是 **4 个**（多一对 `startup.js` + `startup.d.ts`），
+> 0.1.2 把 startup 那行合并进主入口后是 **3 个**。数出 3 个不是装坏了；
+> 真正的判别据是**能加载**（上表最后一条），不是文件个数。
 
 清理：`rm -rf /tmp/npmverify`
 
