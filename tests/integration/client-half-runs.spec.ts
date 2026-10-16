@@ -368,4 +368,27 @@ describe.skipIf(!REACT_AVAILABLE)('the browser half as a script', () => {
     expect(source).toContain('SegmentedControl')
     expect(source).not.toContain('cw-select')
   })
+
+  it('leaves no CSS class unused, and no className undefined', () => {
+    // Both directions of the same silent mistake, and both were made by hand
+    // while restructuring this page: a `className` naming a class the stylesheet
+    // never defines renders unstyled with no error anywhere, and a rule whose
+    // class no element carries is dead weight that reads as live styling.
+    // Neither shows up in any other assertion here, which checks behaviour.
+    const source = readFileSync(join(REPO_ROOT, 'lib/client.js'), 'utf8')
+
+    const referenced = new Set<string>()
+    for (const match of source.matchAll(/className: '([^']+)'/gu)) {
+      for (const name of match[1]!.split(/\s+/u)) if (name !== '') referenced.add(name)
+    }
+
+    // Only this bundle's own rules: the `var()` overrides that target the
+    // primitives' hashed module classes are attribute selectors, not `.cw-*`.
+    const declared = new Set<string>()
+    for (const match of source.matchAll(/\.(cw-[a-z0-9-]+)/gu)) declared.add(match[1]!)
+
+    expect(declared.size).toBeGreaterThan(0)
+    expect([...referenced].filter(name => name.startsWith('cw-') && !declared.has(name)).sort()).toEqual([])
+    expect([...declared].filter(name => !referenced.has(name)).sort()).toEqual([])
+  })
 })

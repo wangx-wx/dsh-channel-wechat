@@ -261,71 +261,79 @@ window.__ModuleLoader__.load({
       var phase = status.phase;
       var live = phase === 'waiting' || phase === 'scanned' || phase === 'need-verifycode';
 
-      return h('section', { className: 'cw-section' },
-        h('h3', { className: 'cw-h3' }, t('connection')),
-        account && !live
-          ? h('p', { className: 'cw-ok' }, t('connectedAs', { account: account }))
-          : h('p', { className: 'cw-muted' }, t('notConnected')),
+      return h('section', { className: 'cw-card' },
+        h('div', { className: 'cw-card-head' }, h('h3', { className: 'cw-card-title' }, t('connection'))),
+        h('div', { className: 'cw-card-body' },
+          account && !live
+            ? h('p', { className: 'cw-ok' }, t('connectedAs', { account: account }))
+            : h('p', { className: 'cw-muted' }, t('notConnected')),
 
-        live ? h('p', { className: 'cw-muted' }, status.message || t(PHASE_KEY[phase] || 'waiting')) : null,
+          // While an attempt is live the status line, the code and its caption
+          // form one centred group: a centred 200px block under a left-aligned
+          // line reads as two unrelated things.
+          live
+            ? h('div', { className: 'cw-qr-wrap' },
+              h('p', { className: 'cw-muted' }, status.message || t(PHASE_KEY[phase] || 'waiting')),
+              // The SVG endpoint re-renders per request, so a refreshed code
+              // appears without this page tracking which one it holds.
+              status.qrcodeUrl
+                ? h('img', {
+                  className: 'cw-qr',
+                  alt: t('scan'),
+                  src: ROUTES.qr + '?t=' + String(Date.now()),
+                })
+                : null,
+            )
+            : null,
 
-        // The SVG endpoint re-renders per request, so a refreshed code appears
-        // without this page tracking which one it holds.
-        live && status.qrcodeUrl
-          ? h('img', {
-            className: 'cw-qr',
-            alt: t('scan'),
-            src: ROUTES.qr + '?t=' + String(Date.now()),
-          })
-          : null,
-
-        phase === 'need-verifycode'
-          ? h('form', {
-            className: 'cw-row',
-            onSubmit: function (event) {
-              event.preventDefault();
-              if (code.trim() === '') return;
-              var body = new URLSearchParams();
-              body.set('code', code);
-              post(ROUTES.verifyCode, body).then(function () { setCode(''); });
+          phase === 'need-verifycode'
+            ? h('form', {
+              className: 'cw-row',
+              onSubmit: function (event) {
+                event.preventDefault();
+                if (code.trim() === '') return;
+                var body = new URLSearchParams();
+                body.set('code', code);
+                post(ROUTES.verifyCode, body).then(function () { setCode(''); });
+              },
             },
-          },
-            h(Input, {
-              value: code,
-              inputMode: 'numeric',
-              autoComplete: 'one-time-code',
-              placeholder: t('needVerify'),
-              'aria-label': t('needVerify'),
-              onChange: function (event) { setCode(event.target.value); },
-            }),
-            h(Button, { variant: 'primary', type: 'submit', disabled: busy }, t('submit')),
-          )
-          : null,
+              h(Input, {
+                value: code,
+                inputMode: 'numeric',
+                autoComplete: 'one-time-code',
+                placeholder: t('needVerify'),
+                'aria-label': t('needVerify'),
+                onChange: function (event) { setCode(event.target.value); },
+              }),
+              h(Button, { variant: 'primary', size: 'sm', type: 'submit', disabled: busy }, t('submit')),
+            )
+            : null,
 
-        !live
-          ? h('div', { className: 'cw-row' },
-            h(Button, {
-              variant: 'primary',
-              size: 'sm',
-              disabled: busy,
-              onClick: function () { post(ROUTES.begin, null); },
-            }, account ? t('reconnect') : t('connect')),
-            account
-              ? h(Button, {
-                variant: 'outline',
+          !live
+            ? h('div', { className: 'cw-row' },
+              h(Button, {
+                variant: 'primary',
                 size: 'sm',
                 disabled: busy,
-                onClick: function () {
-                  if (!window.confirm(t('logoutConfirm'))) return;
-                  post(ROUTES.logout, null);
-                },
-              }, t('logout'))
-              : null,
-          )
-          : null,
+                onClick: function () { post(ROUTES.begin, null); },
+              }, account ? t('reconnect') : t('connect')),
+              account
+                ? h(Button, {
+                  variant: 'outline',
+                  size: 'sm',
+                  disabled: busy,
+                  onClick: function () {
+                    if (!window.confirm(t('logoutConfirm'))) return;
+                    post(ROUTES.logout, null);
+                  },
+                }, t('logout'))
+                : null,
+            )
+            : null,
 
-        phase === 'failed' ? h('p', { className: 'cw-err' }, status.message || t('failed')) : null,
-        error ? h('p', { className: 'cw-err' }, error) : null,
+          phase === 'failed' ? h('p', { className: 'cw-err' }, status.message || t('failed')) : null,
+          error ? h('p', { className: 'cw-err' }, error) : null,
+        ),
       );
     }
 
@@ -341,57 +349,59 @@ window.__ModuleLoader__.load({
       // `unavailable` line itself from `state.available`, and duplicating that
       // here would be two places to keep the same rule.
       var disabled = !state.writable;
-      return h('section', { className: 'cw-section' },
-        h('h3', { className: 'cw-h3' }, t('config')),
-        h(SettingsForm, {
-          labels: formLabels(t),
-          state: state,
-          onSave: props.save,
-          onDiscard: props.discard,
-        },
-          h(SettingsValueField, {
-            id: 'cw-cwd',
-            label: t('cwd'),
-            hint: t('cwdHint'),
-            overriddenLabel: t('overridden'),
-            resetLabel: t('reset'),
-            invalidLabel: t('cwdInvalid'),
-            disabled: disabled,
-            text: state.cwd.text,
-            overridden: state.cwd.overridden,
-            invalid: state.cwd.invalid,
-            onEdit: function (text) { props.edit('cwd', text); },
-            onReset: function () { props.resetField('cwd'); },
-          }),
-          // The enum uses the primitives' own segmented control rather than a
-          // bare `<select>`: it is what the official settings pages use, it
-          // carries the tablist keyboard semantics, and it needs no styling of
-          // ours to match the rest of the page. The empty value is the reset
-          // gesture, not a value.
-          h('div', { className: 'cw-field' },
-            // A `span`, not a `label`: the segmented control is a tablist that
-            // carries its own accessible name (`label` below), and a `<label>`
-            // pointing at no control would be the only unnamed element here.
-            h('div', { className: 'cw-head' },
-              h('span', { className: 'cw-label' }, t('cards')),
-            ),
-            h(SegmentedControl, {
-              id: 'cw-cards',
-              className: 'cw-segments',
-              label: t('cards'),
+      return h('section', { className: 'cw-card' },
+        h('div', { className: 'cw-card-head' }, h('h3', { className: 'cw-card-title' }, t('config'))),
+        h('div', { className: 'cw-card-body' },
+          h(SettingsForm, {
+            labels: formLabels(t),
+            state: state,
+            onSave: props.save,
+            onDiscard: props.discard,
+          },
+            h(SettingsValueField, {
+              id: 'cw-cwd',
+              label: t('cwd'),
+              hint: t('cwdHint'),
+              overriddenLabel: t('overridden'),
+              resetLabel: t('reset'),
+              invalidLabel: t('cwdInvalid'),
               disabled: disabled,
-              value: state.cards.text,
-              options: [
-                { value: '', label: t('cardsInherit') },
-                { value: 'wechat', label: t('cardsWechat') },
-                { value: 'both', label: t('cardsBoth') },
-              ],
-              onChange: function (next) {
-                if (next === '') props.resetField('cards');
-                else props.edit('cards', next);
-              },
+              text: state.cwd.text,
+              overridden: state.cwd.overridden,
+              invalid: state.cwd.invalid,
+              onEdit: function (text) { props.edit('cwd', text); },
+              onReset: function () { props.resetField('cwd'); },
             }),
-            h('p', { className: 'cw-hint' }, t('cardsHint')),
+            // The enum uses the primitives' own segmented control rather than a
+            // bare `<select>`: it is what the official settings pages use, it
+            // carries the tablist keyboard semantics, and it needs no styling of
+            // ours to match the rest of the page. The empty value is the reset
+            // gesture, not a value.
+            h('div', { className: 'cw-field' },
+              // A `span`, not a `label`: the segmented control is a tablist that
+              // carries its own accessible name (`label` below), and a `<label>`
+              // pointing at no control would be the only unnamed element here.
+              h('div', { className: 'cw-head' },
+                h('span', { className: 'cw-label' }, t('cards')),
+              ),
+              h(SegmentedControl, {
+                id: 'cw-cards',
+                className: 'cw-segments',
+                label: t('cards'),
+                disabled: disabled,
+                value: state.cards.text,
+                options: [
+                  { value: '', label: t('cardsInherit') },
+                  { value: 'wechat', label: t('cardsWechat') },
+                  { value: 'both', label: t('cardsBoth') },
+                ],
+                onChange: function (next) {
+                  if (next === '') props.resetField('cards');
+                  else props.edit('cards', next);
+                },
+              }),
+              h('p', { className: 'cw-hint' }, t('cardsHint')),
+            ),
           ),
         ),
       );
@@ -414,15 +424,29 @@ window.__ModuleLoader__.load({
 
     /** This plugin's card stylesheet. */
     var CSS = [
-      '.cw-root{display:flex;flex-direction:column;gap:20px;}',
-      '.cw-section{display:flex;flex-direction:column;gap:8px;}',
-      '.cw-h3{font-size:13px;font-weight:600;margin:0;color:var(--dsw-alias-label-secondary);}',
+      // Apple's grouped-inset rhythm, expressed in the tokens the theme already
+      // has: a card per group, a gap between groups roughly twice the gap
+      // between the lines inside one, and hierarchy carried by size and space
+      // rather than by weight. The theme's `corner-shape: superellipse(1.5)`
+      // applies to these radii on its own, so the corners are squircles.
+      '.cw-root{display:flex;flex-direction:column;gap:28px;}',
+      '.cw-card{display:flex;flex-direction:column;border:0.5px solid var(--dsw-alias-settings-card-stroke);border-radius:var(--dsw-radius-xl);background:var(--dsw-alias-settings-card-fill);overflow:hidden;}',
+      '.cw-card-head{padding:20px 20px 4px;}',
+      // 16px/500, not the page's 13px/600: a group heading earns its rank from
+      // size and the space under it, the way the panel's own headings do.
+      '.cw-card-title{margin:0;font-size:16px;font-weight:500;line-height:24px;color:var(--dsw-alias-label-primary);}',
+      '.cw-card-body{display:flex;flex-direction:column;gap:14px;padding:12px 20px 20px;}',
       '.cw-muted{margin:0;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:1.6;}',
-      '.cw-ok{margin:0;color:var(--dsw-alias-state-success-primary);font-size:13px;}',
-      '.cw-err{margin:0;color:var(--dsw-alias-state-error-primary);font-size:13px;}',
-      '.cw-hint{margin:4px 0 0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5;}',
+      '.cw-ok{margin:0;color:var(--dsw-alias-state-success-primary);font-size:13px;line-height:1.6;}',
+      '.cw-err{margin:0;color:var(--dsw-alias-state-error-primary);font-size:13px;line-height:1.6;}',
+      // The field owns the 6px gap above a caption; no negative margin here, or
+      // the hint would ride up over the control it describes.
+      '.cw-hint{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5;}',
       '.cw-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}',
-      '.cw-qr{width:200px;height:200px;border-radius:var(--dsw-radius-md);background:#fff;padding:8px;box-sizing:border-box;}',
+      // The code is centred in its own surface instead of hanging off the left
+      // edge: a 200px block sharing an edge with 13px text reads as unplaced.
+      '.cw-qr-wrap{display:flex;flex-direction:column;align-items:center;gap:12px;padding:8px 0 4px;}',
+      '.cw-qr{width:200px;height:200px;border-radius:var(--dsw-radius-lg);background:var(--dsw-static-neutral-00);padding:10px;box-sizing:border-box;box-shadow:var(--dsw-elevation-soft);}',
       // Matches the primitives' own field rhythm: the same vertical padding and
       // hairline the `SettingsValueField` above it draws, so the two controls
       // read as one form rather than a control beside a hand-rolled widget.
