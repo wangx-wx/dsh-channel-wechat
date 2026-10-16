@@ -34,6 +34,7 @@ window.__ModuleLoader__.load({
     var primitives = require('@deepseek-ai/dsh-client-ui-primitives');
     var Button = primitives.Button;
     var Input = primitives.Input;
+    var SegmentedControl = primitives.SegmentedControl;
     var SettingsForm = primitives.SettingsForm;
     var SettingsValueField = primitives.SettingsValueField;
     var SettingsFormModel = primitives.SettingsFormModel;
@@ -360,25 +361,34 @@ window.__ModuleLoader__.load({
             onEdit: function (text) { props.edit('cwd', text); },
             onReset: function () { props.resetField('cwd'); },
           }),
-          // No select ships in the primitives, so the enum is a plain one. The
-          // empty option is the reset gesture, not a value.
+          // The enum uses the primitives' own segmented control rather than a
+          // bare `<select>`: it is what the official settings pages use, it
+          // carries the tablist keyboard semantics, and it needs no styling of
+          // ours to match the rest of the page. The empty value is the reset
+          // gesture, not a value.
           h('div', { className: 'cw-field' },
-            h('label', { className: 'cw-label', htmlFor: 'cw-cards' }, t('cards')),
-            h('select', {
+            // A `span`, not a `label`: the segmented control is a tablist that
+            // carries its own accessible name (`label` below), and a `<label>`
+            // pointing at no control would be the only unnamed element here.
+            h('div', { className: 'cw-head' },
+              h('span', { className: 'cw-label' }, t('cards')),
+            ),
+            h(SegmentedControl, {
               id: 'cw-cards',
-              className: 'cw-select',
+              className: 'cw-segments',
+              label: t('cards'),
               disabled: disabled,
               value: state.cards.text,
-              'aria-invalid': state.cards.invalid,
-              onChange: function (event) {
-                if (event.target.value === '') props.resetField('cards');
-                else props.edit('cards', event.target.value);
+              options: [
+                { value: '', label: t('cardsInherit') },
+                { value: 'wechat', label: t('cardsWechat') },
+                { value: 'both', label: t('cardsBoth') },
+              ],
+              onChange: function (next) {
+                if (next === '') props.resetField('cards');
+                else props.edit('cards', next);
               },
-            },
-              h('option', { value: '' }, t('cardsInherit')),
-              h('option', { value: 'wechat' }, t('cardsWechat')),
-              h('option', { value: 'both' }, t('cardsBoth')),
-            ),
+            }),
             h('p', { className: 'cw-hint' }, t('cardsHint')),
           ),
         ),
@@ -404,16 +414,22 @@ window.__ModuleLoader__.load({
     var CSS = [
       '.cw-root{display:flex;flex-direction:column;gap:20px;}',
       '.cw-section{display:flex;flex-direction:column;gap:8px;}',
-      '.cw-h3{font-size:13px;font-weight:600;margin:0;color:var(--dsw-alias-text-secondary);}',
-      '.cw-muted{margin:0;color:var(--dsw-alias-text-secondary);font-size:13px;line-height:1.6;}',
-      '.cw-ok{margin:0;color:var(--dsw-alias-text-success);font-size:13px;}',
-      '.cw-err{margin:0;color:var(--dsw-alias-text-danger);font-size:13px;}',
-      '.cw-hint{margin:4px 0 0;color:var(--dsw-alias-text-secondary);font-size:12px;line-height:1.5;}',
+      '.cw-h3{font-size:13px;font-weight:600;margin:0;color:var(--dsw-alias-label-secondary);}',
+      '.cw-muted{margin:0;color:var(--dsw-alias-label-secondary);font-size:13px;line-height:1.6;}',
+      '.cw-ok{margin:0;color:var(--dsw-alias-state-success-primary);font-size:13px;}',
+      '.cw-err{margin:0;color:var(--dsw-alias-state-error-primary);font-size:13px;}',
+      '.cw-hint{margin:4px 0 0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5;}',
       '.cw-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}',
       '.cw-qr{width:200px;height:200px;border-radius:var(--dsw-radius-md);background:#fff;padding:8px;box-sizing:border-box;}',
-      '.cw-field{display:flex;flex-direction:column;gap:4px;}',
-      '.cw-label{font-size:13px;font-weight:500;}',
-      '.cw-select{font:inherit;padding:6px 8px;border-radius:var(--dsw-radius-sm);border:1px solid var(--dsw-alias-border-secondary);background:var(--dsw-alias-bg-primary);color:inherit;}',
+      // Matches the primitives' own field rhythm: the same vertical padding and
+      // hairline the `SettingsValueField` above it draws, so the two controls
+      // read as one form rather than a control beside a hand-rolled widget.
+      '.cw-field{display:flex;flex-direction:column;gap:6px;padding:12px 0;border-top:0.5px solid var(--dsw-alias-border-l2);}',
+      '.cw-head{display:flex;align-items:center;gap:8px;}',
+      '.cw-label{flex:1;min-width:0;font-size:13px;font-weight:500;line-height:1.5;color:var(--dsw-alias-label-primary);}',
+      // The segmented control sizes to its labels; left-aligned it sits under the
+      // input above instead of stretching across the panel.
+      '.cw-segments{align-self:flex-start;}',
     ].join('');
 
     /**

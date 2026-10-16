@@ -46,6 +46,30 @@ function borrowReact(): NodeRequire | undefined {
 const reactRequire = borrowReact()
 const REACT_AVAILABLE = reactRequire !== undefined
 
+/**
+ * Every custom property the shipped theme defines.
+ *
+ * Read from the checkout's `ui-theme` stylesheets rather than from the built
+ * bundle so a token added to the source is seen without a rebuild. A missing
+ * style directory means the checkout has no theme to check against, and the
+ * suite skips instead of failing for a missing tool.
+ *
+ * @returns the defined `--dsw-*` names, or undefined when none can be read.
+ */
+function themeTokens(): Set<string> | undefined {
+  const styles = join(DSH_CHECKOUT, 'packages', 'client', 'ui-theme', 'src', 'styles')
+  if (!existsSync(styles)) return undefined
+  const names = new Set<string>()
+  for (const entry of readdirSync(styles)) {
+    if (!entry.endsWith('.css')) continue
+    const source = readFileSync(join(styles, entry), 'utf8')
+    for (const match of source.matchAll(/(--dsw-[a-z0-9-]+)\s*:/gu)) names.add(match[1]!)
+  }
+  return names.size === 0 ? undefined : names
+}
+
+const THEME_TOKENS = themeTokens()
+
 /** What one run of the bundle observed. */
 interface Probe {
   /** The id the bundle registered under. */
@@ -81,6 +105,7 @@ function runBundle(options: { value?: Record<string, unknown>; served?: boolean;
   const primitives = {
     Button: function Button() { return null },
     Input: function Input() { return null },
+    SegmentedControl: function SegmentedControl() { return null },
     SettingsForm: function SettingsForm() { return null },
     SettingsValueField: function SettingsValueField() { return null },
     // The real model is exercised through its observable contract: the spec list
@@ -314,5 +339,33 @@ describe.skipIf(!REACT_AVAILABLE)('the browser half as a script', () => {
 
     // The form effect is the one that returns a disposer closing over the model.
     expect(probe.effects).toContain('channel-wechat: form subscription')
+  })
+
+  it.skipIf(THEME_TOKENS === undefined)('uses only theme variables the theme actually defines', () => {
+    // A `var()` naming a token no stylesheet declares is not an error anywhere:
+    // it resolves to nothing, the property is dropped, and the element silently
+    // falls back to browser defaults. That is exactly how this page shipped a
+    // grey paragraph, a green line and a red line with no colour at all, and a
+    // hand-rolled select with no border - all of it invisible to every other
+    // test here, which asserts shape rather than style. The names are checked
+    // against the theme rather than hard-coded so a rename in the theme shows up
+    // here instead of at a user's screen.
+    const used = new Set<string>()
+    for (const style of runBundle().styles) {
+      for (const match of style.text.matchAll(/var\((--dsw-[a-z0-9-]+)/gu)) used.add(match[1]!)
+    }
+
+    expect(used.size).toBeGreaterThan(0)
+    expect([...used].filter(name => !THEME_TOKENS!.has(name)).sort()).toEqual([])
+  })
+
+  it('renders the enum as the primitives segmented control, not a bare select', () => {
+    // The enum has to go through `SegmentedControl` for the same silent reason:
+    // a hand-rolled control cannot be wrong at runtime, only wrong to look at,
+    // so nothing else in this suite would notice a regression to a `<select>`.
+    const source = readFileSync(join(REPO_ROOT, 'lib/client.js'), 'utf8')
+
+    expect(source).toContain('SegmentedControl')
+    expect(source).not.toContain('cw-select')
   })
 })
