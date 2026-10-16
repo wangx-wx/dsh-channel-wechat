@@ -37,7 +37,6 @@ window.__ModuleLoader__.load({
     var SettingsForm = primitives.SettingsForm;
     var SettingsValueField = primitives.SettingsValueField;
     var SettingsFormModel = primitives.SettingsFormModel;
-    var settingsTextField = primitives.settingsTextField;
 
     /** The settings entry id: the `id` our patch row declares. */
     var NS = 'channel-wechat';
@@ -64,8 +63,6 @@ window.__ModuleLoader__.load({
     /** Copy for the page, in the two languages the client selects between. */
     var DICT = {
       zh: {
-        title: '微信通道',
-        summary: '把微信接入 DeepSeek Harness：连接账号、设置工作目录。',
         connection: '连接',
         connectedAs: '已连接到 {account}',
         notConnected: '尚未连接微信',
@@ -78,8 +75,6 @@ window.__ModuleLoader__.load({
         scanned: '已扫描，请在手机上确认',
         needVerify: '请输入手机上显示的验证码',
         submit: '提交',
-        connected: '已连接，可以关闭此页面',
-        alreadyConnected: '此 Harness 已连接过微信',
         failed: '连接失败',
         config: '设置',
         cwd: '工作目录',
@@ -99,8 +94,6 @@ window.__ModuleLoader__.load({
         saving: '保存中…',
       },
       en: {
-        title: 'WeChat channel',
-        summary: 'Connect WeChat to DeepSeek Harness: sign in and set the working directory.',
         connection: 'Connection',
         connectedAs: 'Connected as {account}',
         notConnected: 'Not connected to WeChat',
@@ -113,8 +106,6 @@ window.__ModuleLoader__.load({
         scanned: 'Scanned; confirm on your phone',
         needVerify: 'Enter the code shown on your phone',
         submit: 'Submit',
-        connected: 'Connected; you can close this page',
-        alreadyConnected: 'This Harness has already connected to WeChat',
         failed: 'Connection failed',
         config: 'Settings',
         cwd: 'Working directory',
@@ -152,8 +143,6 @@ window.__ModuleLoader__.load({
       waiting: 'waiting',
       scanned: 'scanned',
       'need-verifycode': 'needVerify',
-      connected: 'connected',
-      'already-connected': 'alreadyConnected',
       failed: 'failed',
     };
 
