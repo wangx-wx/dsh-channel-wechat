@@ -334,13 +334,9 @@ window.__ModuleLoader__.load({
       // cannot land separately.
       var state = props.useWechatConfig(function (snapshot) { return snapshot; });
 
-      if (!state.available) {
-        return h('section', { className: 'cw-section' },
-          h('h3', { className: 'cw-h3' }, t('config')),
-          h('p', { className: 'cw-muted' }, t('unavailable')),
-        );
-      }
-
+      // The unavailable case is not handled here: `SettingsForm` renders the
+      // `unavailable` line itself from `state.available`, and duplicating that
+      // here would be two places to keep the same rule.
       var disabled = !state.writable;
       return h('section', { className: 'cw-section' },
         h('h3', { className: 'cw-h3' }, t('config')),
