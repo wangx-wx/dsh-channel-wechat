@@ -4,7 +4,8 @@
 
 把微信（腾讯 iLink / ClawBot）接入 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的**通道插件**。
 
-> 状态：**v0.1.2 已发布到 npm**。登录与配置现在都在 GUI 插件页里完成；插件在 profile 中只占一行。
+> 状态：**v0.1.3 已发布到 npm**。登录与配置都在 GUI 插件页里完成；插件在 profile 中只占一行。
+> 插件页现在还能选**默认模型**与**微信会话权限**（三档，完全权限带风险确认，只作用于微信会话）。
 > 出站文件已**真机验证**；`svr_id` 引用与 `message_id` 精度为**已知记录项**（见 [plan-v1 §Q45](./docs/plan-v1.md)）。
 
 ---

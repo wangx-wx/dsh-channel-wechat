@@ -72,7 +72,7 @@ npm publish --dry-run
 
 | 项 | 期望 |
 |---|---|
-| `lib/` 四个文件 | 必须在（`prepack: tsdown` 保证） |
+| `lib/` 三个文件 | 必须在：`index.js`、`index.d.ts`、`client.js`（`prepack: tsdown` + `copy-client` 保证） |
 | `LICENSE` | 在 |
 | `THIRD_PARTY_NOTICES.md` | 在（MIT 署名义务） |
 | `cordis.patch.yml` | 在（bundle 层入口） |
