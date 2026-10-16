@@ -149,7 +149,8 @@ The design documents are written in Chinese.
 | [docs/design.md](./docs/design.md) | Early design draft (v0.3, partly superseded by plan-v1) |
 | [docs/事实核查.md](./docs/事实核查.md) | Protocol fact-checking and corrected conclusions |
 | [docs/recon/](./docs/recon/) | **13 reconnaissance reports**: protocol, build, DSH contracts, comparable implementations |
-| [开发日志.md](./开发日志.md) | Decision log in reverse chronological order |
+| [docs/dev-log/](./docs/dev-log/) | Development log: decisions and changes in reverse chronological order, one per version |
+| [spec/](./spec/) | Archived specs, dated in ascending order; superseded ones are marked in place |
 
 ## Milestones
 
