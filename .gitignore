@@ -11,3 +11,6 @@ docs/recon/_analysis/
 
 # Packed tarballs (`npm pack` writes them to the repo root)
 *.tgz
+
+# npm's cache when the user-level one is not writable (see docs/release.md).
+.npm-cache/
