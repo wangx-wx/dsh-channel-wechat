@@ -186,6 +186,7 @@ The design documents are written in Chinese.
 | **M5** ✅ | Approval + question cards | WeChat approves/rejects/answers; with `cards: wechat` the GUI shows no duplicate |
 | **M6** ✅ | GUI login and configuration | Scan-to-login / sign-out on the plugin's page; `cwd` and `cards` editable there |
 | **M8** ✅ | GUI page and one row | **v0.1.2**: sign-in / sign-out / settings on the plugin's page; one row per profile |
+| **M9** ✅ | Model and permission settings | Pick the **default model** and the **WeChat session permission** (three presets, the widest behind a risk confirmation) on the plugin's page |
 | **M7** ✅ | Release | **v0.1.1** first verified installing and loading in a fresh profile |
 
 ## Where data lives
@@ -218,6 +219,28 @@ only moves to a different session directory, so old conversations accumulate
 | `message_id` is typed `number` but the server sends a uint64 | Affects one number in one error log line | Above 2^53, and once a quote cache exists |
 
 Tradeoffs and measurements: [plan-v1 §Q45](./docs/plan-v1.md).
+
+### Known boundary: WeChat can widen its own permission
+
+`/permission` is a DSH command, and this plugin forwards **every non-local command** to the
+harness (the local ones are only `stop`/`status`/`new`/`cwd`/`help`/`reconnect`). So sending
+
+```
+/permission danger-full-access
+```
+
+from WeChat turns the current session's approvals off - that preset bundles `approval: never`,
+which is settled before this plugin's approval cards are reached, so **the cards stop appearing**.
+
+- **Persistence**: it writes the session's own durable event, so it survives a restart; it applies
+  to that one conversation only, and `/new` starts again from the default.
+- **Why it is not changed**: this channel is **single-party by design** (Q37 in
+  `docs/invariants.md`: a WeChat message inherits the authority of any other local input, and the
+  operator is the user). If it ever serves a group or an untrusted source, that assumption must be
+  overturned.
+- The page's "WeChat session permission" applies to sessions created **after** the change and never
+  rewrites an existing one, so a temporary choice made inside a conversation is respected.
+
 
 ### Development
 
