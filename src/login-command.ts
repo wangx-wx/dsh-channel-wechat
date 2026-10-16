@@ -1,5 +1,5 @@
 /**
- * What a command-line action does once the startup provider has parsed it.
+ * What a command-line action does once the app argument has been claimed.
  *
  * Kept separate from the command-line parsing and free of any Cordis context:
  * the action's job is a sequence of side effects (print, store, exit), and
@@ -10,7 +10,7 @@
  */
 
 import type { WechatAccount } from './credentials.ts'
-import type { WechatStartupValues } from './startup.ts'
+import type { WechatStartupValues } from './cmdline.ts'
 import type { ApiTransport } from './wechat/api.ts'
 import { runQrLogin } from './wechat/login-runner.ts'
 

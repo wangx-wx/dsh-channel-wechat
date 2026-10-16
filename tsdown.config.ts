@@ -1,17 +1,15 @@
 import type { UserConfig } from 'tsdown'
 
 /**
- * Host-half build. The client half (M6) gets its own entry and the lazy-CJS
- * wrapper from recon/13; this config must not grow that responsibility early.
+ * Host-half build. The browser half is hand-written JavaScript copied verbatim
+ * by `scripts/copy-client.mjs`, because the loader's lazy-CJS wrapper is the
+ * whole artifact and needs no bundling.
  *
  * Every @deepseek-ai/* import stays a runtime require: the profile host owns a
  * single cordis instance, and bundling a copy would break service identity.
  */
 const config: UserConfig = {
-  // `startup` is a separate entry because the profile loader must resolve it
-  // by subpath: it declares `inject`, and only a row naming it gets the
-  // launcher-provided command line.
-  entry: { index: 'src/index.ts', startup: 'src/startup.ts' },
+  entry: { index: 'src/index.ts' },
   outDir: 'lib',
   format: 'esm',
   platform: 'node',
@@ -19,12 +17,10 @@ const config: UserConfig = {
   // The published manifest names lib/index.js; keep the emitted extension
   // fixed so the entry path cannot drift with the package's "type" field.
   fixedExtension: false,
-  // The `./startup` subpath declares a `types` face, so one has to exist in the
-  // artifact that ships. It used to point at `src/startup.ts`, which `files[]`
-  // does not carry: the declaration resolved while developing and silently
-  // degraded to `any` for anyone who installed the package.
   dts: true,
   sourcemap: false,
+  // The browser half is copied in after this runs; cleaning it here is what
+  // keeps a stale one from surviving a build that no longer ships it.
   clean: true,
   // The bundle inlines the vendored qrcode-generator, whose MIT header lives in
   // `src/vendor/qrcode.mjs` and would otherwise be dropped from the published

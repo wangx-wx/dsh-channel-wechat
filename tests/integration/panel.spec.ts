@@ -22,9 +22,9 @@ import CommandRuntime from '@deepseek-ai/dsh-commands'
 import CredentialsLocal from '@deepseek-ai/dsh-credentials-local'
 import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { apply as applyChannel, inject as channelInject } from '../../src/index.ts'
+import { inject as channelInject } from '../../src/index.ts'
+import { mountChannel } from '../support/config.ts'
 import { loadAccount } from '../../src/credentials.ts'
-import { apply as applyStartup } from '../../src/startup.ts'
 
 /** One mounted profile, disposed after its test. */
 const mounted: Context[] = []
@@ -130,13 +130,12 @@ async function bootWithPanel() {
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(CommandRuntime)
 
-  await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
   // The row waits on the profile's model selection as well as the rest; a
   // mount without it never activates, so nothing below would observe anything.
   ctx.provide('agentDefaultModel', {
     currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
   })
-  await ctx.plugin({ name: 'channel-wechat', inject: [...channelInject], apply: applyChannel }, { cwd: '/work' })
+  await mountChannel(ctx, [...channelInject], { cwd: '/work' })
 
   // The host's own rows publish here, after this plugin is already active.
   ctx.provide('connection', service)

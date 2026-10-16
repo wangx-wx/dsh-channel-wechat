@@ -17,9 +17,9 @@ import AgentRegistry from '@deepseek-ai/dsh-agent'
 import CommandRuntime from '@deepseek-ai/dsh-commands'
 import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { apply as applyChannel, inject as channelInject } from '../../src/index.ts'
+import { inject as channelInject } from '../../src/index.ts'
+import { mountChannel } from '../support/config.ts'
 import { loadAccount } from '../../src/credentials.ts'
-import { apply as applyStartup } from '../../src/startup.ts'
 import { saveAccount } from '../../src/credentials.ts'
 import { PeerSessionStore } from '../../src/channel/peer-session-store.ts'
 
@@ -89,8 +89,7 @@ async function bootProfile(args: string[], status: Record<string, unknown>): Pro
     ready: { commit() {}, await: async () => {} },
   } as never)
   await ctx.plugin(CredentialsLocal as never, {} as never)
-  await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
-  await ctx.plugin({ name: 'channel-wechat', inject: ['wechatStartup', 'credentials'], apply: applyChannel }, { cwd: '/work' })
+  await mountChannel(ctx, ['cmdlineArgs', 'credentials'], { cwd: '/work' })
 
   const accountId = typeof status['ilink_bot_id'] === 'string' ? status['ilink_bot_id'] : undefined
   const booted: Booted = {
@@ -227,12 +226,7 @@ describe('a profile boot with the login action', () => {
       get: (id: string) => live.get(id),
     })
     await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
-    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
-    await ctx.plugin({
-      name: 'channel-wechat',
-      inject: ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'],
-      apply: applyChannel,
-    }, { cwd: '/work' })
+      await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
 
     try {
       await until(async () => sentTexts.length > 0, 3_000)
@@ -305,12 +299,7 @@ describe('a profile boot with the login action', () => {
       get: (id: string) => live.get(id),
     })
     await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
-    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
-    await ctx.plugin({
-      name: 'channel-wechat',
-      inject: ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'],
-      apply: applyChannel,
-    }, { cwd: '/work' })
+      await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
 
     try {
       await until(async () => asked.length > 0, 3_000)
@@ -375,13 +364,8 @@ describe('a profile boot with the login action', () => {
       get: (id: string) => live.get(id),
     })
     await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
-    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
-    // The profile supplies the directory; the plugin must record it.
-    await ctx.plugin({
-      name: 'channel-wechat',
-      inject: ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'],
-      apply: applyChannel,
-    }, { cwd: '/work' })
+      // The profile supplies the directory; the plugin must record it.
+    await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
 
     try {
       await until(async () => asked.length > 0, 3_000)
@@ -466,12 +450,7 @@ describe('a profile boot with the login action', () => {
       get: () => undefined,
     })
     await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
-    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
-    await ctx.plugin({
-      name: 'channel-wechat',
-      inject: ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'],
-      apply: applyChannel,
-    }, { cwd: '/work' })
+      await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
 
     try {
       await until(async () => mounted.length > 0, 3_000)
@@ -535,12 +514,7 @@ describe('a profile boot with the login action', () => {
       get: (id: string) => live.get(id),
     })
     await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
-    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
-    await ctx.plugin({
-      name: 'channel-wechat',
-      inject: ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'],
-      apply: applyChannel,
-    }, { cwd: '/work' })
+      await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
 
     let stored = -1
     try {
@@ -639,12 +613,7 @@ describe('a profile boot with the login action', () => {
       get: (id: string) => live.get(id),
     })
     await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
-    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
-    await ctx.plugin({
-      name: 'channel-wechat',
-      inject: ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'],
-      apply: applyChannel,
-    }, { cwd: '/work' })
+      await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
 
     let card = ''
     let outcome: string | undefined
@@ -790,12 +759,7 @@ describe('a profile boot with the login action', () => {
       get: (id: string) => live.get(id),
     })
     await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
-    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
-    await ctx.plugin({
-      name: 'channel-wechat',
-      inject: ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'],
-      apply: applyChannel,
-    }, { cwd: '/work' })
+      await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
 
     try {
       await until(async () => delivered.length > 0, 5_000)
@@ -896,12 +860,7 @@ describe('a profile boot with the login action', () => {
       return new Response(JSON.stringify({ ret: 0 }), { status: 200 })
     }) as unknown as typeof fetch)
 
-    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
-    await ctx.plugin({
-      name: 'channel-wechat',
-      inject: ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'],
-      apply: applyChannel,
-    }, { cwd: dir })
+      await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: dir })
 
     try {
       // The mapping from session to peer is built when a message arrives, which
@@ -1016,12 +975,7 @@ describe('a profile boot with the login action', () => {
       get: (id: string) => live.get(id),
     })
     await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
-    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
-    await ctx.plugin({
-      name: 'channel-wechat',
-      inject: ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'],
-      apply: applyChannel,
-    }, { cwd: '/work' })
+      await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
 
     try {
       await until(async () => logged.some(line => line.includes('引用的消息内容未能读取')), 5_000)
@@ -1094,12 +1048,7 @@ describe('a profile boot with the login action', () => {
       list: () => [],
     })
     await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
-    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
-    await ctx.plugin({
-      name: 'channel-wechat',
-      inject: ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'],
-      apply: applyChannel,
-    }, { cwd: '/work' })
+      await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
 
     try {
       await until(async () => forwarded.length > 0, 3_000)
@@ -1181,12 +1130,7 @@ describe('a profile boot with the login action', () => {
     })
 
     await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
-    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
-    await ctx.plugin({
-      name: 'channel-wechat',
-      inject: ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'],
-      apply: applyChannel,
-    }, { cwd: '/work' })
+      await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
 
     try {
       // The resumed handle appears once the message is delivered, which is the
@@ -1210,14 +1154,18 @@ describe('a profile boot with the login action', () => {
 })
 
 describe('the row\'s declared dependencies', () => {
-  it('waits for the parsed invocation and the credentials store', () => {
-    // All four are load-bearing: without `wechatStartup` the row cannot know
-    // what was asked, without `credentials` it would activate before the store
-    // it writes through exists, without `agents` the channel would reach for an
-    // unmounted registry and start polling with nowhere to deliver, and without
-    // `commands` the harness's own command surface would be unreachable over
-    // WeChat.
-    expect(channelInject).toEqual(['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'])
+  it('waits for the command line and the services the channel delivers through', () => {
+    // `cmdlineArgs` is load-bearing: the row claims its own app argument
+    // (`login`/`logout`/`status`) itself, since the separate startup row was
+    // folded in. `credentials` is the store it writes a login through; `agents`
+    // is what it creates sessions on, and without it the channel would poll with
+    // nowhere to deliver; `commands` is the harness's own command surface, which
+    // WeChat forwards to rather than keeping a list of its own.
+    //
+    // `cmdlineArgs` is safe to require because every launcher provides it before
+    // the tree mounts - unlike a service some deployment legitimately omits,
+    // which would park this row in PENDING forever.
+    expect(channelInject).toEqual(['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'])
   })
 })
 
@@ -1250,8 +1198,7 @@ describe('a profile boot with no action', () => {
       currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
     })
     await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
-    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
-    await ctx.plugin({ name: 'channel-wechat', inject: ['wechatStartup', 'credentials', 'agents'], apply: applyChannel }, { cwd: '/work' })
+      await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents'], { cwd: '/work' })
 
     // The loop runs detached, so give it a moment to issue its first poll.
     await new Promise(resolve => setTimeout(resolve, 150))
@@ -1267,7 +1214,6 @@ describe('a profile boot with no action', () => {
     // would throw if anything reached for the QR endpoint.
     const { ctx } = await bootProfile([], { status: 'confirmed', bot_token: 't', ilink_bot_id: 'bot-9' })
 
-    expect(ctx.get('wechatStartup')).toEqual({ action: 'none' })
     // Nothing reached the wire: the stub records every call, and a login would
     // have fetched a QR code first.
     const calls = (globalThis.fetch as unknown as { mock?: { calls: unknown[] } }).mock?.calls ?? []
@@ -1305,8 +1251,7 @@ describe('a profile boot with no action', () => {
       currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
     })
     await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
-    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
-    await ctx.plugin({ name: 'channel-wechat', inject: ['wechatStartup', 'credentials', 'agents'], apply: applyChannel }, { cwd: '/work' })
+      await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents'], { cwd: '/work' })
 
     // `polling as` is reported once the loop's first poll succeeds, so waiting
     // for the file to contain it waits for the real run rather than for a timer.
@@ -1365,8 +1310,7 @@ describe('a profile boot with no action', () => {
     ctx.provide('webServer', { port: 19387, host: '127.0.0.1' })
     // No account: the state a first-time user is in, and the state in which
     // `polling as` never runs to create the file.
-    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
-    await ctx.plugin({ name: 'channel-wechat', inject: ['wechatStartup', 'credentials', 'agents'], apply: applyChannel }, { cwd: '/work' })
+      await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents'], { cwd: '/work' })
 
     const logDir = join(home, 'channel-wechat', 'log')
     await until(async () => {
@@ -1409,8 +1353,7 @@ describe('a profile boot with no action', () => {
     await ctx.plugin(AgentRegistry)
     await ctx.plugin(CommandRuntime)
     await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
-    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: applyStartup })
-    await ctx.plugin({ name: 'channel-wechat', inject: ['wechatStartup', 'credentials', 'agents'], apply: applyChannel }, { cwd: '/work' })
+      await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents'], { cwd: '/work' })
 
     const logDir = join(home, 'channel-wechat', 'log')
     await until(async () => {

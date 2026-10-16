@@ -1,13 +1,13 @@
 # This bundle's rows. `dsh.bundle.patch` points here, so the profile loader
 # composes them over whatever the profile already had.
 #
-# The startup row comes first: it claims the app argument (`login`/`logout`/
-# `status`) and publishes `wechatStartup`, which later rows read through
-# `!!js`. An argument no row claims is ignored in silence, which is why this
-# row has to exist for `dsh <profile> login` to do anything at all.
+# One row. It used to be two: a `dsh-channel-wechat/startup` row claimed the app
+# argument (`login`/`logout`/`status`) and published `wechatStartup` for this row
+# to read. That split existed because only a row declaring `inject` is handed the
+# launcher's command line - but `cmdlineArgs` is provided by every launcher before
+# the tree mounts, so this row declares it directly and the profile shows one
+# plugin instead of two.
 - insert:
-    - id: channel-wechat-startup
-      name: dsh-channel-wechat/startup
     - id: channel-wechat
       name: dsh-channel-wechat
       config:
@@ -20,7 +20,9 @@
         # provider is called - a user-visible "message sent, no reply".
         #
         # `process.cwd()` is the launcher's own directory, which is what the
-        # shipped headless runner resolves by default.
+        # shipped headless runner resolves by default. Editable from the plugin's
+        # own page in the GUI; a value saved there replaces this expression with
+        # a literal path, and clearing the field restores the expression.
         cwd: !!js process.cwd()
         # Where an interaction card can be answered.
         #
