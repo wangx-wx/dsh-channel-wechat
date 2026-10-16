@@ -8,9 +8,6 @@ importers:
 
   .:
     dependencies:
-      '@deepseek-ai/schemastery':
-        specifier: ^3.18.4
-        version: 3.18.4
       commander:
         specifier: ^15.0.0
         version: 15.0.0
@@ -51,6 +48,9 @@ importers:
       '@deepseek-ai/dsh-session':
         specifier: 0.2.0-rc.1
         version: 0.2.0-rc.1(@deepseek-ai/cordis@4.0.4)(@deepseek-ai/dsh-scope@0.2.0-rc.1(@deepseek-ai/cordis@4.0.4)(@deepseek-ai/dsh-invariants@0.2.0-rc.1(@deepseek-ai/cordis@4.0.4)))
+      '@deepseek-ai/schemastery':
+        specifier: ^3.18.4
+        version: 3.18.4
       '@types/node':
         specifier: ^24.10.1
         version: 24.19.1
