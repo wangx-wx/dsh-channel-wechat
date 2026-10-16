@@ -269,8 +269,8 @@ window.__ModuleLoader__.load({
             : h('p', { className: 'cw-muted' }, t('notConnected')),
 
           // While an attempt is live the status line, the code and its caption
-          // form one centred group: a centred 200px block under a left-aligned
-          // line reads as two unrelated things.
+          // form one left-aligned group, on the same edge as the status text
+          // above them: the state change then moves nothing sideways.
           live
             ? h('div', { className: 'cw-qr-wrap' },
               h('p', { className: 'cw-muted' }, status.message || t(PHASE_KEY[phase] || 'waiting')),
@@ -443,10 +443,13 @@ window.__ModuleLoader__.load({
       // the hint would ride up over the control it describes.
       '.cw-hint{margin:0;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5;}',
       '.cw-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}',
-      // The code is centred in its own surface instead of hanging off the left
-      // edge: a 200px block sharing an edge with 13px text reads as unplaced.
-      '.cw-qr-wrap{display:flex;flex-direction:column;align-items:center;gap:12px;padding:8px 0 4px;}',
-      '.cw-qr{width:200px;height:200px;border-radius:var(--dsw-radius-lg);background:var(--dsw-static-neutral-00);padding:10px;box-sizing:border-box;box-shadow:var(--dsw-elevation-soft);}',
+      // Left-aligned with the status line and the card's own padding, so the
+      // scan instruction sits on the same edge as everything else in the card
+      // instead of jumping to the middle when the state changes.
+      '.cw-qr-wrap{display:flex;flex-direction:column;align-items:flex-start;gap:12px;padding:8px 0 4px;}',
+      // A step up from the 200px first shipped: still a small code block beside
+      // the card's text, but big enough that the modules resolve at arm's length.
+      '.cw-qr{width:224px;height:224px;border-radius:var(--dsw-radius-lg);background:var(--dsw-static-neutral-00);padding:10px;box-sizing:border-box;box-shadow:var(--dsw-elevation-soft);}',
       // Matches the primitives' own field rhythm: the same vertical padding and
       // hairline the `SettingsValueField` above it draws, so the two controls
       // read as one form rather than a control beside a hand-rolled widget.
