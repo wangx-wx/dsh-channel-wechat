@@ -2,7 +2,7 @@
 
 日期：2026-10-16
 分支：`dev_wechat_gui_20261016`
-状态：开发中
+状态：**已完成**（未发版）
 
 ## 1. 背景（用户提出的三个问题）
 
@@ -94,12 +94,13 @@ error: too many arguments. Expected 0 arguments but got 1: login.   [exit=1]
 
 | # | 验收 | 怎么验 |
 |---|---|---|
-| A1 | 真实 web profile 启动后，`/plugins/dsh-channel-wechat/client.js` 能取到且含 `__ModuleLoader__.load` | 集成测试，真实 launcher + 隔离 home |
-| A2 | 插件详情页的配置表单绑定的正是 `channel-wechat` 行的 volatile 字段 | 进程内断言 descriptor 含 cwd/cards |
-| A3 | 登录路由在真实 apply 后可达，且状态接口返回 JSON 而非 HTML | 集成测试 |
-| A4 | `cordis.patch.yml` 只剩一行，且 `--dump-config` 只多出我们一个条目 | patch-layer 集成测试 |
-| A5 | 有 `cmdlineArgs` 时 `dsh <profile> login` 的解析仍成立 | 单测（沿用现有 startup 用例） |
-| A6 | `@deepseek-ai/*` 仍不进 `dependencies` | manifest 单测 |
+| A1 | 真实 web profile 启动后，包名出现在 `__DSH_BOOT__`，且 graph 给的 URL 能取回含 `__ModuleLoader__.load` 的 JS | `tests/integration/client-half.spec.ts`（真实 launcher + 隔离 home + token 换 cookie） |
+| A2 | 插件页能**执行**：注册在 `plugins.bundle.config`、key = 包名、`hooks` 隔间正确、字段 spec 正确 | `tests/integration/client-half-runs.spec.ts`（真 React；三条变异各自被捕获） |
+| A3 | `cwd`/`cards` 标了 `.volatile()`，`cwd` required 无默认 | `tests/unit/config-schema.spec.ts`（删 volatile → 失败） |
+| A4 | 状态接口报告**已存储**的登录；退出登录真的删除凭证并停轮询 | `tests/unit/login-routes.spec.ts` + `tests/integration/panel.spec.ts`（真实 apply 接线） |
+| A5 | `cordis.patch.yml` 只剩一行；`--dump-config` 只有一条我们的条目 | `tests/integration/patch-layer.spec.ts` |
+| A6 | 有 `cmdlineArgs` 时 `login`/`status` 仍被认领，`--help` 不启动服务 | `tests/unit/cmdline.spec.ts` |
+| A7 | `@deepseek-ai/*` 仍不进 `dependencies` | `tests/unit/manifest.spec.ts` |
 
 ## 5. 明确不做
 

@@ -18,15 +18,20 @@ dsh plugin --profile <你的 profile> add dsh-channel-wechat
 
 ### 装完怎么用
 
-1. 启动后日志里会打印一个登录地址：
-   ```
-   [channel-wechat] 微信登录：用手机微信打开 http://127.0.0.1:<端口>/api/channel-wechat/login 扫码连接
-   ```
-2. 用**手机微信**扫码确认，**无需重启**：凭证即刻写入，长轮询开始
-3. 之后直接在微信里给这个 bot 发消息即可，DSH 的回复会回到微信
+1. 打开 GUI，进入侧边栏 **Plugins**（插件）→ 点开 **dsh-channel-wechat** 这张卡片
+2. 卡片里点 **登录微信**，页内会显示二维码
+3. 用**手机微信**扫码确认（需要验证码时页内输入），**无需重启**：凭证即刻写入，长轮询开始
+4. 之后直接在微信里给这个 bot 发消息即可，DSH 的回复会回到微信
 
-⚠️ **装之前先定 `cwd`**：配置项 `cwd` 决定所有微信会话的工作目录，**会话创建时写入且不可变**。
-不设的话取启动器的 `process.cwd()`，**桌面端那是 `~/.dsh/profiles/desktop`**——不该让 agent 在里面干活。在 profile 的 `cordis.patch.yml` 里指定：
+同一个页面下方就是本插件的设置（`cwd` / `cards`），改完点保存即可生效，不必再手改 YAML。
+
+> 没有 GUI（headless 之类不挂 web app 的 profile）时，仍可用 `dsh <profile> login` 在终端
+> 打印二维码。注意：**挂了 web app 的 profile（web / desktop）上这条命令用不了**——web app
+> 自己的参数解析器会先拒绝这个位置参数，boot 在到达本插件前就结束了（原因见下方「登录」一节）。
+
+⚠️ **`cwd` 要设对**：它决定所有微信会话的工作目录，**会话创建时写入且不可变**。
+不设的话取启动器的 `process.cwd()`，**桌面端那是 `~/.dsh/profiles/desktop`**——不该让 agent
+在里面干活。现在可以在插件的设置页里直接改（只影响之后新建的会话），也可以继续写 profile：
 
 ```yaml
 - id: channel-wechat
@@ -70,28 +75,33 @@ allowBuilds:
               ├─ agent.followup() 原生注入会话
               ├─ session/event → sendmessage 回发
               ├─ 审批卡 + 提问卡（微信与 GUI 双端）
-              └─ 登录面板（web / 桌面端）
+              └─ 插件页（GUI）：登录 / 退出登录 / 配置
 ```
 
 - **协议层移植腾讯官方实现**（`@tencent-weixin/openclaw-weixin`，MIT），保真度与测试基线俱佳
 - **DSH 集成层全新写**，严格遵循官方契约（类型安全，非鸭子类型）
 - **会话与工作目录**：目录由 profile 的 `cwd` 配置决定（会话创建时写入，之后不可变）。`/cwd` 命令已注册但**尚未实现**，目前会明确回复「尚未实现」而不是静默失败
 - **解耦长轮询与处理**：长任务期间仍收消息，`/stop` 可打断
+- **GUI 里就能登录与配置**：插件带一个客户端半边（手写 lazy-CJS，无构建步骤），
+  注册进 Plugins 页的 `plugins.bundle.config` 槽位
 
 ## 登录
 
-启动后插件会在日志里打印一个可直接打开的地址：
+**首选入口是 GUI**：侧边栏 **Plugins** → **dsh-channel-wechat** → **登录微信**。
+页内显示二维码，扫码确认后**无需重启**：凭证即刻写入 `ctx.credentials`，
+通道在同进程内开始轮询。同页还有「退出登录」，会先停掉轮询再删除凭证。
 
+没有 GUI 时（不挂 web app 的 profile），终端里跑：
+
+```bash
+dsh <profile> login     # 终端打印二维码
+dsh <profile> status    # 看已存了什么
+dsh <profile> logout    # 退出登录
 ```
-[channel-wechat] 微信登录：用手机微信打开 http://127.0.0.1:19387/api/channel-wechat/login 扫码连接
-```
 
-用**手机微信**打开它扫码，确认后**无需重启**：凭证即刻写入 `ctx.credentials`，
-通道在同进程内开始轮询。
+### 为什么 web / desktop 上用不了 `dsh <profile> login`
 
-### 为什么不是 `dsh <profile> login`
-
-因为**在挂了 web app 的 profile（web / desktop）上做不到**，这不是本插件的选择：
+因为**在挂了 web app 的 profile 上做不到**，这不是本插件的选择：
 
 DSH 的启动器把**同一份完整参数列表**交给 profile 里**每个** app，各自解析。
 `dsh-web-app` 的 program **只声明 flag、没有 positional**，所以 `login` 会被它判定为
@@ -102,7 +112,13 @@ DSH 的启动器把**同一份完整参数列表**交给 profile 里**每个** a
 两个同类插件也都不走这条路：`dsh-wechat` 没有 CLI，只用 HTTP 页面；`dsh-weixin` 的 CLI 是
 **独立可执行文件**，且 README 把面板列为首选。
 
-CLI 的 `login`/`logout`/`status` 仍然保留，但仅在**不挂 web app** 的 profile 上有效。
+### 为什么只有一个插件条目
+
+早期版本在 profile 里是**两行**：一行 `dsh-channel-wechat/startup` 负责解析 `login` 这类
+app 参数（只有声明 `inject` 的行才会拿到命令行），另一行是通道本身。
+
+现在合成一行：`cmdlineArgs` 由**每个**启动器在 tree 挂载前提供，所以主行可以直接声明它。
+这样 GUI 上只有一张卡片，而 CLI 能力在不挂 web app 的 profile 上照旧。
 
 ## 与同类插件的差异
 
@@ -121,6 +137,8 @@ CLI 的 `login`/`logout`/`status` 仍然保留，但仅在**不挂 web app** 的
 | [docs/plan-v1.md](./docs/plan-v1.md) | **实施方案（定稿）**：决策台账、架构、里程碑、风险 |
 | [docs/design.md](./docs/design.md) | 早期设计稿（v0.3，部分已由 plan-v1 取代） |
 | [docs/事实核查.md](./docs/事实核查.md) | 协议性质核查与结论修正 |
+| [docs/invariants.md](./docs/invariants.md) | **不变量的详细依据**：为什么、违反后果、证据在哪 |
+| [spec/](./spec/) | **需求规格归档**，按日期递增 |
 | [docs/recon/](./docs/recon/) | **13 份侦察报告**：协议、构建、DSH 契约、同类实现评估 |
 | [docs/dev-log/](./docs/dev-log/) | 开发日志：按时间倒序的决策与变更记录（每版本一份） |
 
@@ -134,8 +152,9 @@ CLI 的 `login`/`logout`/`status` 仍然保留，但仅在**不挂 web app** 的
 | **M3** ✅ | 命令 + `/stop` | 原生命令有回执；能打断 |
 | **M4** ✅ | 媒体双向 + 引用 | 发图 ✅ / 引用 ✅ / **出站文件 ✅ 真机已验证** |
 | **M5** ✅ | 审批卡 + 提问卡 | 微信批准/拒绝/回答提问；`cards: wechat` 时 GUI 不重复弹卡 |
-| **M6** 🔶 | 面板登录 | web 端实测扫码登录、扫码即启动；设置页卡片待做 |
+| **M6** ✅ | GUI 登录与配置 | 插件页内扫码登录 / 退出登录；`cwd`、`cards` 可在页内编辑 |
 | **M7** ✅ | 发布 | **v0.1.1 已发布到 npm**；`dsh plugin add dsh-channel-wechat` 经全新 profile 实测装好并加载 |
+| **M8** 🔶 | 单条目 + GUI 页（未发版） | 插件在 profile 里只占一行；真实 profile 实测客户端半边进 boot 图并取回 |
 
 ## 数据落在哪里
 

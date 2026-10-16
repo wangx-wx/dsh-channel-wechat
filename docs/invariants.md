@@ -152,17 +152,52 @@ Q52 的 `name mismatch`（都只写 stderr），以及**登录地址**——它�
 
 **依据**：plan-v1 §Q46、§Q51；`src/channel/report.ts`、`src/channel/log-file.ts`。
 
-### `startup.ts` 只认领已知动作词，永不报错
+### `cmdline` 只认领已知动作词，永不报错
 
-**规则**：`parseCmdline` + `allowUnknownOption` + `allowExcessArguments`，只把已知动词
-（`login`/`logout`/`status`）当作动作，其余一律视为「普通启动」。
+**规则**：`claimAppArgument`（`src/cmdline.ts`）用 `parseCmdline` + `allowUnknownOption` +
+`allowExcessArguments`，只把已知动词（`login`/`logout`/`status`）当作动作，其余一律视为「普通启动」。
+它返回 `undefined` 表示 commander 自己处理了这次调用（`--help`/`--version`），调用方**不得**启动服务。
 
-**为什么**：启动器把**同一份完整参数列表**交给 profile 里**每个** app，各自解析。别的 app 的 flag 值
-（如桌面端的 `--port 19387` 里的 `19387`）在形状上与一个动作词无法区分。调 `program.error()`
+**为什么不能报错**：启动器把**同一份完整参数列表**交给 profile 里**每个** app，各自解析。别的 app 的
+flag 值（如桌面端的 `--port 19387` 里的 `19387`）在形状上与一个动作词无法区分。调 `program.error()`
 会请求**进程退出**，在到达本插件之前就**中止整个 boot**——实测 `--no-open --port 19387` 会崩。
 误拼的动作词变成「照常启动服务」，是更小的代价。
 
-**依据**：plan-v1 §Q28 与 `src/startup.ts` 的注释；`docs/recon/02`。
+**为什么有 `undefined` 这一支**：早期是**两行**——`startup` 行发布服务，主行 `!!js` 读它；`--help`
+时 startup 行不运行、不发布服务，主行自然 dormant。合并成一行后这个保护必须显式写出来，
+否则打印帮助也会开始轮询。有测试钉住（`tests/unit/cmdline.spec.ts`）。
+
+**依据**：plan-v1 §Q28；`src/cmdline.ts`；`docs/recon/02`。
+
+### 客户端半边：槽位名、key、`hooks` 三处错了都不报错
+
+**规则**：客户端半边注册在 `plugins.bundle.config`，`key` 是**包名**，业务面放在保留的
+`hooks` 隔间里（`src/client/client.js`）。
+
+**违反的后果，三件都是静默的**：
+
+| 漏掉的东西 | 后果 |
+|---|---|
+| 用 `plugins.item` | 那是官方设置页占用的槽位；注册成功，页面渲染在错误的组里 |
+| `key` 与包名不一致 | 注册成功，**永远不渲染**，无任何报错 |
+| 业务对象不放进 `hooks` | 渲染器只从该隔间合成 `use<Name>`；组件调用 hook 时在**浏览器里**抛错 |
+
+`plugins.bundle.config` 是**已安装 bundle** 自己的配置位；`plugins.item` 是官方插件页的位。
+
+**依据**：`packages/client/ui-plugin-manager/src/client/slot-contract.ts` 的槽位注释；
+`tests/integration/client-half-runs.spec.ts`（三条变异各自被捕获）。
+
+### 配置字段必须 `volatile` 才会出现在 GUI 表单里
+
+**规则**：要出现在插件页表单里的字段，schema 必须标 `.volatile()`，代码用 `.get()` 读。
+
+**为什么**：`dsh-settings` 用 `volatileForm()` 投影表单，只保留 volatile 字段；**非 volatile 字段
+是「缺席」，不是「只读」**——`projectForm` 会把它从值里也删掉，写入被拒
+（`Config field "x" is not volatile`）。一个 volatile 字段都没有的 entry 连 `describe()` 都不出现。
+
+**代价**：GUI 写入会把 bundle 层的 `!!js process.cwd()` 固化成字面量路径（清空该字段可恢复）。
+
+**依据**：`packages/settings/settings/src/schema.ts`；`tests/unit/config-schema.spec.ts`。
 
 ---
 
@@ -200,8 +235,11 @@ Q52 的 `name mismatch`（都只写 stderr），以及**登录地址**——它�
 - `tsdown` 的 `neverBundle` 同样排除 `@deepseek-ai/*` 与 `commander`：保留单例身份，打包一份副本
   会破坏服务标识。`src/vendor/qrcode.mjs` 的 MIT 头靠构建期 `banner` 保留，删了 banner 就是
   **剥掉许可证要求的署名**（0.1.0 真的发生过）。
-- `dts: true` 是必需的：`exports["./startup"]` 声明了 `types` 面，而它必须指向**产物**。
+- `dts: true` 是必需的：`exports` 里带 `types` 面的子路径，其声明必须指向**产物**。
   曾指向 `src/startup.ts`——开发时能解析，装到别人机器上**静默退化成 `any`**。
+  （`./startup` 子路径已随两行合并删除；规则本身对其它子路径仍然成立。）
+- **客户端半边靠 `scripts/copy-client.mjs` 拷贝**，`tsdown` 只构建宿主半边。手写 JS 就是
+  浏览器要加载的最终产物，过一遍 ESM/target 处理只会改坏它。`files[]` 里的 `lib/` 覆盖它。
 
 **依据**：`docs/release.md` 附「两个历史陷阱」；plan-v1 §Q48、§Q50；`src/index.ts` / `tsdown.config.ts`。
 
