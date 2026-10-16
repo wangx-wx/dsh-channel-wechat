@@ -30,6 +30,8 @@ import { createReporter, type Report } from './channel/report.ts'
 import { createLogFileSink, logDirPath } from './channel/log-file.ts'
 import { createPanel } from './channel/panel.ts'
 import { startChannelFromStore } from './channel/runtime.ts'
+import { resolveModelSelection, resolvePermission } from './channel/session-policy.ts'
+import { buildModelOptions } from './channel/model-catalog.ts'
 import type { Channel } from './channel/channel.ts'
 import { CardService } from './bridge/cards-service.ts'
 import { prepareMedia as prepareMediaBlocks } from './bridge/media.ts'
@@ -89,6 +91,29 @@ export interface Config {
    * because the schema supplies the default.
    */
   cards: Volatile<'wechat' | 'both'>
+  /**
+   * Provider for the sessions this channel creates, or empty for the profile's
+   * own default.
+   *
+   * Two flat fields rather than one nested `{ provider, model }` object because
+   * the settings form model writes single-segment paths
+   * (`form-model.ts`: `path: [field]`), so a nested object would render a
+   * control whose save could not address it.
+   *
+   * Empty means "do not override": the plugin then passes the profile's current
+   * default selection, which is what a user who never opened this page expects.
+   */
+  provider: Volatile<string>
+  /** Model for the sessions this channel creates; empty follows the profile default. */
+  model: Volatile<string>
+  /**
+   * Permission preset for the sessions this channel creates.
+   *
+   * Scoped to this channel: applied per session through
+   * `ctx.permissionPresets.set`, never written to the profile's global default,
+   * so the GUI's own sessions are unaffected.
+   */
+  permission: Volatile<'read-only' | 'workspace-write' | 'danger-full-access'>
 }
 
 /**
@@ -106,6 +131,16 @@ export const Config = z.object({
   // answer a card, and requiring the key would make every existing profile fail
   // to load for a choice it does not have to make.
   cards: z.union([z.const('wechat'), z.const('both')]).default('wechat').volatile(),
+  // Empty is a value, not a missing key: it is how the page spells "follow the
+  // profile's default", and it keeps the two fields independent so a user can
+  // clear the pair without the schema refusing the intermediate state.
+  provider: z.string().default('').volatile(),
+  model: z.string().default('').volatile(),
+  // Defaulted to the preset that keeps this plugin's approval cards in play.
+  // `danger-full-access` is offered but must never be the default: it bundles
+  // `approval: never`, which is settled before the waterfall our cards join.
+  permission: z.union([z.const('read-only'), z.const('workspace-write'), z.const('danger-full-access')])
+    .default('workspace-write').volatile(),
 })
 
 /**
@@ -227,6 +262,11 @@ async function mountLoginPanel(ctx: Context, config: Config): Promise<void> {
       for (const account of await listAccounts(ctx)) await forgetAccount(ctx, account.accountId)
     },
     onError: (error: unknown) => { reporterFor(ctx)('login panel failed to connect', error) },
+    // Read on every request rather than cached, so a provider configured after
+    // the page opened shows up on the next open. Read through `get` for the same
+    // reason `permissionPresets` is: a deployment without an LLM registry is a
+    // supported composition, and `inject` would park the panel on it.
+    ...(contextLlm(ctx) === undefined ? {} : { listModels: async () => await buildModelOptions(contextLlm(ctx)!) }),
   }))
 
   // Reported rather than `console.log`, so the one line a first-time user needs
@@ -379,6 +419,10 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
   // delivers the media label instead of the image.
   const prepareMedia = buildMediaPreparer(ctx, modelSelectionOf(ctx), report)
 
+  // Read once per run, like `cwd`: a change made in the page applies to the
+  // sessions created from here on.
+  const applyPermission = permissionApplierOf(ctx, resolvePermission(config.permission.get()), report)
+
   await startChannelFromStore({
     listAccounts: async () => (account === undefined ? [] : [account]),
     api: createApiClient(),
@@ -393,10 +437,20 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
     // calls `Channel.attach` itself can see that - only the production wiring
     // subscribing is the thing being asserted.
     sessionEvents: ctx,
-    // Every session gets the profile's selected model. `ctx.agents` applies no
-    // default of its own, so a session created without this has no model at all
-    // and the first turn fails on the system prompt's `{{model}}` reference.
-    sessionOptions: modelSelectionOf(ctx),
+    // Read per run rather than captured once, so a selection changed in the page
+    // applies to the sessions started after it - the same rule as `cwd`, and for
+    // the same reason: a session records these at creation.
+    //
+    // `ctx.agents` applies no default of its own, so a session created without
+    // this has no model at all and the first turn fails on the system prompt's
+    // `{{model}}` reference - which is why the fallback is passed rather than
+    // skipped. The channel's own config wins when it is set; an unset pair falls
+    // through to the profile's default, so a user who never opened the page keeps
+    // the behaviour this plugin had before these fields existed.
+    sessionOptions: resolveModelSelection(
+      { provider: config.provider.get(), model: config.model.get() },
+      modelSelectionOf(ctx),
+    ),
     // Recorded on every session this run creates. The web app's system prompt
     // reads it through `{{cwd}}`, and a session header cannot be edited later, so
     // a session created without one fails every turn for its whole life.
@@ -416,6 +470,7 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
     ...(presets === undefined ? {} : { presets }),
     generations,
     cards,
+    ...(applyPermission === undefined ? {} : { applyPermission }),
     ...(prepareMedia === undefined ? {} : { prepareMedia }),
     onChannel: channel => { channelRef.current = channel },
     // Resolved before the run so a restart resumes where the last one stopped
@@ -533,6 +588,23 @@ interface AttachmentStoreLike {
 /** The slice of the LLM runtime this module uses. */
 interface LlmLike {
   resolveModelInfo: (provider: string, model: string) => Promise<{ inputModalities?: readonly string[] } | undefined>
+  /** Provider routes with a registered adapter. */
+  listProviders: () => readonly { readonly id: string; readonly name: string }[]
+  /** One provider's models. */
+  listModels: (provider: string) => Promise<readonly { readonly id: string; readonly name: string }[]>
+}
+
+/**
+ * The LLM registry, when this deployment composes one.
+ *
+ * Read through `get` rather than declared in `inject`: a deployment that
+ * registers no adapter is a supported composition, and `inject` would park this
+ * row on it.
+ * @param ctx - the plugin's cordis context.
+ * @returns the registry, or undefined when there is none.
+ */
+function contextLlm(ctx: Context): LlmLike | undefined {
+  return ctx.get('llm') as LlmLike | undefined
 }
 
 /**
@@ -547,6 +619,63 @@ interface LlmLike {
 function modelSelectionOf(ctx: Context): { provider: string; model: string } {
   const selection = ctx.agentDefaultModel.currentSelection()
   return { provider: selection.provider, model: selection.model }
+}
+
+/**
+ * The slice of `ctx.permissionPresets` this module uses.
+ *
+ * Structural and read through `get` rather than injected. The service throws at
+ * construction when the mounted executor does not confine
+ * (`permission-presets/src/index.ts`: "the mounted bash executor does not
+ * confine (no sandboxMode)"), so a deployment can legitimately compose no
+ * permission service - and declaring it in `inject` would park this whole row
+ * there, which the headless bundle must not do.
+ */
+interface PermissionPresetsLike {
+  /** Record a preset on one session. */
+  set: (session: unknown, name: string) => void
+}
+
+/**
+ * Build the callback that puts a freshly created session on this channel's
+ * configured permission preset.
+ *
+ * The preset is recorded on the session, not on the profile: `set` appends the
+ * session's own durable knob events, so the GUI's sessions - and the profile's
+ * global default - are untouched. That is the difference between this and
+ * writing `permission.defaultPreset`, which would apply to every session created
+ * afterwards anywhere.
+ *
+ * A failure is reported and swallowed rather than thrown: it happens inside
+ * session creation, where a throw would abort the creation of a session the user
+ * is waiting on, leaving them with no reply at all. The composition's own
+ * default is a safe place to land, and the report says which one was used.
+ *
+ * @param ctx - the plugin's cordis context.
+ * @param preset - the preset this channel's config selects.
+ * @param report - the diagnostic sink.
+ * @returns the callback, or undefined when this deployment serves no permissions.
+ */
+export function permissionApplierOf(
+  ctx: Context,
+  preset: string,
+  report: Report,
+): ((handle: { agent: { session?: unknown } }) => void) | undefined {
+  const permissions = ctx.get('permissionPresets') as PermissionPresetsLike | undefined
+  if (permissions === undefined) return undefined
+  return handle => {
+    const session = handle.agent.session
+    // A handle without a session cannot carry a permission; the real registry
+    // always supplies one, and the synthetic handles in tests are not sessions.
+    if (session === undefined) return
+    try {
+      permissions.set(session, preset)
+    } catch (error: unknown) {
+      report('permission preset not applied; the session keeps its default', {
+        preset, error: String(error),
+      })
+    }
+  }
 }
 
 /**

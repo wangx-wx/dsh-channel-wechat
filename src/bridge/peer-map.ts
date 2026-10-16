@@ -93,7 +93,17 @@ export interface AgentRegistryLike {
 /** An owned agent plus its disposer, as `ctx.agents` returns it. */
 export interface AgentHandleLike {
   /** The agent itself; the surface messages are delivered through. */
-  readonly agent: { readonly id: SessionId }
+  readonly agent: {
+    readonly id: SessionId
+    /**
+     * The durable session, when the real registry supplies one.
+     *
+     * Optional because several tests build handles structurally. The permission
+     * preset is recorded on the session, so it is the only thing here that needs
+     * it - and a handle without one simply skips that step.
+     */
+    readonly session?: unknown
+  }
   /** Stop the loop, unregister the agent, and release the write lease. */
   dispose(): Promise<void>
 }
@@ -136,6 +146,14 @@ export interface PeerMapOptions {
    * start - the same broken promise in a slower form.
    */
   generations?: PeerGenerationsLike
+  /**
+   * Record this channel's configured permission preset on a freshly created
+   * session.
+   *
+   * Called at creation only. See the field's own note for why a resume must not
+   * re-apply it.
+   */
+  applyPermission?: (handle: AgentHandleLike) => void
 }
 
 /**
@@ -224,6 +242,20 @@ export class PeerMap {
   private readonly presets: AgentPresetsLike | undefined
   private readonly generations: PeerGenerationsLike | undefined
   /**
+   * Records this channel's configured permission preset on a session it just
+   * created.
+   *
+   * Applied at **creation only**, never on resume. A resume loads a session whose
+   * knobs are already recorded - including a preset the user changed from WeChat
+   * with `/permission` mid-conversation - and `permissionPresets` already
+   * restores those (`pinInitialPermission`). Re-applying the config here would
+   * silently undo the user's own in-session choice on the next restart.
+   *
+   * Absent when the deployment composes no permission service, in which case the
+   * session keeps the composition's own default.
+   */
+  private readonly applyPermission: ((handle: AgentHandleLike) => void) | undefined
+  /**
    * The generation each peer is currently addressing.
    *
    * Held once resolved rather than re-read per message, so a `/new` that lands
@@ -257,6 +289,7 @@ export class PeerMap {
     this.cwd = options.cwd
     this.presets = options.presets
     this.generations = options.generations
+    this.applyPermission = options.applyPermission
   }
 
   /**
@@ -286,9 +319,14 @@ export class PeerMap {
     const agentOptions = this.sessionOptions === undefined
       ? {}
       : { agentOptions: { provider: this.sessionOptions.provider, model: this.sessionOptions.model } }
-    const handle = await this.sessionExists(sessionId)
+    const resumed = await this.sessionExists(sessionId)
+    const handle = resumed
       ? await this.resumeSession(sessionId, agentOptions)
       : await this.createNewSession(sessionId, agentOptions)
+    // Only on creation: a resumed session's permission knobs are already durable,
+    // and may hold a preset the user changed with `/permission`. See
+    // {@link PeerMapOptions.applyPermission}.
+    if (!resumed) this.applyPermission?.(handle)
     this.entries.set(peerId, { handle })
     return handle
   }

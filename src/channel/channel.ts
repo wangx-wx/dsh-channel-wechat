@@ -143,6 +143,13 @@ export interface ChannelOptions {
    */
   generations?: PeerGenerationsLike
   /**
+   * Record this channel's configured permission preset on a session it creates.
+   *
+   * Creation-only, so a resumed session keeps whatever knobs it recorded -
+   * including a preset the user changed from WeChat with `/permission`.
+   */
+  applyPermission?: (handle: AgentHandleLike) => void
+  /**
    * The interaction cards this channel answers.
    *
    * Without it a card reply is delivered to the model as ordinary text and a
@@ -213,6 +220,7 @@ export class Channel {
       ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
       ...(options.presets === undefined ? {} : { presets: options.presets }),
       ...(options.generations === undefined ? {} : { generations: options.generations }),
+      ...(options.applyPermission === undefined ? {} : { applyPermission: options.applyPermission }),
     })
     this.replies = new ReplyQueue({
       send: options.send,

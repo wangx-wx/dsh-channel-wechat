@@ -15,6 +15,7 @@
  */
 
 import type { LoginSession } from './login-session.ts'
+import type { ModelCatalog } from './model-catalog.ts'
 import { renderQrSvg } from '../wechat/qr.ts'
 
 /** What the routes read and drive. */
@@ -40,6 +41,14 @@ export interface LoginRoutesOptions {
    * rather than pretending to have logged out.
    */
   logout?: () => Promise<void>
+  /**
+   * Read the models this deployment can run, for the page's model selector.
+   *
+   * Absent when the deployment composes no LLM registry, in which case the route
+   * reports that rather than returning an empty list - an empty selector and an
+   * absent one look the same on screen, and only one is the user's mistake.
+   */
+  listModels?: () => Promise<ModelCatalog>
 }
 
 /** The route set, shaped for `ctx.connection.fetch.register`. */
@@ -56,6 +65,8 @@ export interface LoginRoutes {
   verifyCode: (request: Request) => Promise<Response>
   /** POST to forget the stored login and stop polling. */
   logout: () => Promise<Response>
+  /** GET the models this deployment can run. */
+  models: () => Promise<Response>
 }
 
 /** JSON response that no cache may hold, so a poll always sees fresh state. */
@@ -144,6 +155,16 @@ export function createLoginRoutes(options: LoginRoutesOptions): LoginRoutes {
       }
       await options.logout()
       return json({ phase: session.snapshot().phase })
+    },
+
+    async models(): Promise<Response> {
+      if (options.listModels === undefined) {
+        // An empty list would read as "this deployment has no models", which is a
+        // different and misleading claim from "this deployment has no LLM
+        // registry to ask".
+        return json({ error: '此部署未提供模型列表' }, 501)
+      }
+      return json(await options.listModels())
     },
   }
 }

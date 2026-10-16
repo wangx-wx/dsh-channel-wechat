@@ -122,6 +122,12 @@ export async function mountPanelRoutes(ctx: Context, createPanel: () => Panel): 
           requestBody: 'buffered',
           fetch: () => panel.routes.logout(),
         }),
+        connection.fetch.register({
+          path: `${PANEL_PREFIX}/models`,
+          methods: ['GET'],
+          requestBody: 'buffered',
+          fetch: () => panel.routes.models(),
+        }),
       ]
       return () => { for (const dispose of disposers) dispose() }
     })

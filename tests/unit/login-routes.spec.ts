@@ -239,3 +239,43 @@ describe('signing out', () => {
     expect(await response.json()).toMatchObject({ error: expect.any(String) as unknown as string })
   })
 })
+
+describe('the model list the selector is built from', () => {
+  it('answers with the catalogue the host built', async () => {
+    const catalog = {
+      options: [{ provider: 'p', model: 'm', label: 'M', providerLabel: 'P' }],
+      failures: [{ provider: 'q', message: 'no credentials' }],
+    }
+    const listModels = vi.fn(async () => catalog)
+    const routes = createLoginRoutes({ session: stubSession({ phase: 'idle' }), listModels })
+
+    const response = await routes.models()
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual(catalog)
+    expect(listModels).toHaveBeenCalledOnce()
+  })
+
+  it('refuses rather than answering an empty list when the host cannot', async () => {
+    // An empty list and an absent registry look identical in the selector, and
+    // only one of them is the user's own configuration problem. The 501 says
+    // which, the same way the logout route does.
+    const routes = createLoginRoutes({ session: stubSession({ phase: 'idle' }) })
+
+    const response = await routes.models()
+
+    expect(response.status).toBe(501)
+    expect(await response.json()).toMatchObject({ error: expect.any(String) as unknown as string })
+  })
+
+  it('never caches, so a provider added later shows up', async () => {
+    // The catalogue is read on every request for this reason; a cached response
+    // would keep offering a provider the user has since reconfigured.
+    const routes = createLoginRoutes({
+      session: stubSession({ phase: 'idle' }),
+      listModels: async () => ({ options: [], failures: [] }),
+    })
+
+    expect((await routes.models()).headers.get('Cache-Control')).toBe('no-store')
+  })
+})

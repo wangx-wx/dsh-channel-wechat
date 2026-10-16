@@ -30,10 +30,13 @@ function field(name: string) {
 
 describe('the fields the GUI form is built from', () => {
   it('marks every editable field volatile', () => {
-    // Both are on the page. Dropping either flag removes that field from the
-    // form with no error anywhere.
+    // All are on the page. Dropping any flag removes that field from the form
+    // with no error anywhere.
     expect(field('cwd')?.meta.volatile).toBe(true)
     expect(field('cards')?.meta.volatile).toBe(true)
+    expect(field('provider')?.meta.volatile).toBe(true)
+    expect(field('model')?.meta.volatile).toBe(true)
+    expect(field('permission')?.meta.volatile).toBe(true)
   })
 
   it('keeps `cwd` required and defaultless', () => {
@@ -50,5 +53,23 @@ describe('the fields the GUI form is built from', () => {
     // A profile written before this key existed has to keep booting, which is
     // why the field is defaulted rather than required.
     expect(field('cards')?.meta.default).toBe('wechat')
+  })
+
+  it('defaults the model pair to empty, which means "follow the profile"', () => {
+    // Empty is a value rather than a missing key: it is how the page spells
+    // "do not override", and it is what a profile predating these fields gets.
+    expect(field('provider')?.meta.default).toBe('')
+    expect(field('model')?.meta.default).toBe('')
+    // Neither is required, so clearing the pair is a legal state the schema
+    // accepts - which is what makes the page's reset gesture work.
+    expect(field('provider')?.meta.required).toBeFalsy()
+    expect(field('model')?.meta.required).toBeFalsy()
+  })
+
+  it('defaults the permission to the preset that keeps approval cards working', () => {
+    // `danger-full-access` bundles `approval: never`, which the approval service
+    // settles before the waterfall this plugin's cards join. Defaulting to it
+    // would silently disable the confirmation mechanism this plugin depends on.
+    expect(field('permission')?.meta.default).toBe('workspace-write')
   })
 })
