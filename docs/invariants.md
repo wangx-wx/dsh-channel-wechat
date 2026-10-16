@@ -199,6 +199,47 @@ flag 值（如桌面端的 `--port 19387` 里的 `19387`）在形状上与一个
 
 **依据**：`packages/settings/settings/src/schema.ts`；`tests/unit/config-schema.spec.ts`。
 
+### 权限预设只在会话**创建时**应用，不在 resume 时应用
+
+**规则**：`applyPermission` 只在 `PeerMap.createSession` 判定为新建时调用；`resumeSession` 返回后
+**不得**再写权限。
+
+**为什么**：权限是会话的 **durable 事件**（`permission/preset` + `sandbox/mode` + `approval/policy`），
+`permissionPresets` 挂载时会用 `pinInitialPermission` 恢复它们。用户可以在微信里用 `/permission`
+**临时**改本会话的权限；resume 时再套用配置会**静默撤销用户自己的选择**——症状是下一次重启后
+Agent 又开始请求本该不需要的批准（或反过来），而配置页看起来毫无问题。
+
+**代价**：改插件页的权限只影响**之后新建**的会话；已有会话保持它记录的样子。这是刻意的，
+与 `cwd` 的不可变语义一致。
+
+**依据**：`src/bridge/peer-map.ts`（`if (!resumed) this.applyPermission?.(handle)`）；
+`packages/interaction/permission-presets/src/index.ts` 的 `pinInitialPermission`；
+`tests/unit/peer-map.spec.ts`「does NOT re-apply the preset when resuming」。
+
+### 权限服务用 `ctx.get()`，不写进 `inject`
+
+**规则**：`permissionPresets` 通过 `ctx.get('permissionPresets')` 读取，**不要**加进 `export const inject`。
+
+**为什么**：该服务在**构造时**就会 throw——「the mounted bash executor does not confine
+(no sandboxMode)」。headless 那类组合没有沙箱执行器，因此**合法地**没有权限服务。写进 `inject`
+会让整行 parking：频道永不启动，而 profile 看起来正常。
+
+**依据**：`permission-presets/src/index.ts` 的构造器校验；`src/index.ts` 的 `permissionApplierOf`；
+`tests/unit/permission-applier.spec.ts`。
+
+### `danger-full-access` 会关掉本插件的审批卡
+
+**规则**：提供该预设时**必须**先弹风险确认；**绝不能**把它设为默认值。
+
+**为什么**：该预设自带 `approval: never`，而 `never` 在 approval 服务**内部、waterfall 之前**就返回
+`rejected`——本插件 `prepend: true` 的微信审批卡**根本不会被调用**。宿主侧 `permissionPresets.set`
+**没有**风险确认（官方页那个「Enable Full access?」勾选框是纯客户端 UI），所以一个跳过确认的插件
+可以静默放宽会话权限。
+
+**依据**：`packages/interaction/user-approval/src/index.ts`（`never` 的判定位置）；
+`permission-presets/src/index.ts`（预设定义）；`src/channel/session-policy.ts` 的 `DEFAULT_PERMISSION`；
+`tests/integration/client-half-form.spec.ts`（驱动真实组件，两个变异均被捕获）。
+
 ---
 
 ## 二、打包与依赖（会以发布事故的形式惩罚）

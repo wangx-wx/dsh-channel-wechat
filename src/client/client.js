@@ -34,6 +34,8 @@ window.__ModuleLoader__.load({
     var primitives = require('@deepseek-ai/dsh-client-ui-primitives');
     var Button = primitives.Button;
     var Input = primitives.Input;
+    var Menu = primitives.Menu;
+    var RiskConfirmation = primitives.RiskConfirmation;
     var SegmentedControl = primitives.SegmentedControl;
     var SettingsForm = primitives.SettingsForm;
     var SettingsValueField = primitives.SettingsValueField;
@@ -59,6 +61,7 @@ window.__ModuleLoader__.load({
       begin: 'api/channel-wechat/begin',
       verifyCode: 'api/channel-wechat/verify-code',
       logout: 'api/channel-wechat/logout',
+      models: 'api/channel-wechat/models',
     };
 
     /** Copy for the page, in the two languages the client selects between. */
@@ -88,6 +91,23 @@ window.__ModuleLoader__.load({
         cardsInherit: '继承默认',
         cardsWechat: '仅微信',
         cardsBoth: '两端',
+        model: '默认模型',
+        modelHint: '微信会话使用的模型。留空表示跟随配置文件的默认模型；修改只影响之后新建的会话。',
+        modelInherit: '跟随默认',
+        modelLoading: '正在读取模型列表…',
+        modelFailed: '读取模型列表失败。',
+        modelEmpty: '当前环境没有可用模型。',
+        permission: '微信会话权限',
+        permissionHint: '微信会话能改动哪些文件。「完全权限」会关闭审批卡，请谨慎选择。',
+        permissionReadOnly: '仅查看',
+        permissionWorkspace: '工作区内修改',
+        permissionFull: '完全权限',
+        permissionFullTitle: '确认启用完全权限？',
+        permissionFullBody: '完全权限会关闭微信的审批卡确认，并允许直接执行文件修改与外部命令。仅在你信任这个微信号时使用。',
+        permissionFullAck: '我已了解风险，并愿意继续',
+        permissionFullCancel: '取消',
+        permissionFullConfirm: '启用完全权限',
+        close: '关闭',
         unavailable: '此部署未提供设置服务。',
         readOnly: '当前连接的设置文档为只读。',
         saveFailed: '保存未被接受。',
@@ -119,6 +139,23 @@ window.__ModuleLoader__.load({
         cardsInherit: 'Use default',
         cardsWechat: 'WeChat only',
         cardsBoth: 'Both',
+        model: 'Default model',
+        modelHint: 'The model WeChat sessions run. Empty follows the profile default. A change applies only to sessions created afterwards.',
+        modelInherit: 'Follow the default',
+        modelLoading: 'Reading the model list…',
+        modelFailed: 'Could not read the model list.',
+        modelEmpty: 'This deployment has no available models.',
+        permission: 'WeChat session permission',
+        permissionHint: 'What WeChat sessions may change. Full access turns the approval cards off — choose it deliberately.',
+        permissionReadOnly: 'View only',
+        permissionWorkspace: 'Write in workspace',
+        permissionFull: 'Full access',
+        permissionFullTitle: 'Enable Full access?',
+        permissionFullBody: 'Full access turns off the WeChat approval cards and lets the agent change files and run external commands directly. Use it only when you trust this WeChat account.',
+        permissionFullAck: 'I understand the risks and want to continue',
+        permissionFullCancel: 'Cancel',
+        permissionFullConfirm: 'Enable Full access',
+        close: 'Close',
         unavailable: 'This deployment serves no settings.',
         readOnly: 'The connected settings document is read-only.',
         saveFailed: 'The save was not accepted.',
@@ -195,7 +232,88 @@ window.__ModuleLoader__.load({
       };
     }
 
-    /** The connection half: status, QR, verify code, sign-in and sign-out. */
+    /**
+     * A plain string field.
+     *
+     * An empty draft clears the key, which is the same reset gesture the path
+     * field uses: for the model pair it means "follow the profile default", which
+     * is a real state rather than a missing value.
+     *
+     * @param field - the section field name.
+     * @returns the field's conversion spec.
+     */
+    function settingsTextValueField(field) {
+      return {
+        field: field,
+        format: function (value) { return typeof value === 'string' ? value : ''; },
+        parse: function (text) {
+          var trimmed = text.trim();
+          if (trimmed === '') return { kind: 'clear' };
+          return { kind: 'set', value: trimmed };
+        },
+      };
+    }
+
+    /**
+     * The menu row id for one provider/model pair.
+     *
+     * JSON rather than a `provider/model` string: a model id may itself contain a
+     * slash (`meta-llama/Llama-3`), so splitting on the first one decodes the
+     * wrong pair. The official selector's own note is that a row id is an opaque
+     * key resolved by lookup and never parsed - JSON is how this page keeps that
+     * promise while staying a single string.
+     *
+     * @param provider - the provider route.
+     * @param model - the model id.
+     * @returns the row id for the menu.
+     */
+    function modelRowId(provider, model) {
+      return JSON.stringify([provider, model]);
+    }
+
+    /**
+     * Decode a row id this page produced.
+     *
+     * Returns undefined for anything else, so a stale or foreign id is refused
+     * rather than decoded into a pair that was never offered.
+     *
+     * @param id - the row id from the menu.
+     * @returns the pair, or undefined when the id is not one of ours.
+     */
+    function decodeModelRowId(id) {
+      var parsed;
+      try {
+        parsed = JSON.parse(id);
+      } catch (error) {
+        return undefined;
+      }
+      if (!Array.isArray(parsed) || parsed.length !== 2) return undefined;
+      if (typeof parsed[0] !== 'string' || typeof parsed[1] !== 'string') return undefined;
+      return { provider: parsed[0], model: parsed[1] };
+    }
+
+    /**
+     * Whether choosing `next` needs the explicit risk confirmation first.
+     *
+     * Only the widest preset does, and only when it is not already the value:
+     * re-picking the preset already in force changes nothing, and asking for an
+     * acknowledgement to confirm a no-op trains the user to click through the
+     * dialog that matters.
+     *
+     * The check is a named function rather than an inline condition because it is
+     * the one place that decides whether the approval cards get turned off, and
+     * an inverted comparison there would fail silently.
+     *
+     * @param next - the preset being chosen.
+     * @param current - the preset currently in force.
+     * @returns whether the confirmation must be shown first.
+     */
+    function needsFullAccessConfirmation(next, current) {
+      return next === 'danger-full-access' && current !== 'danger-full-access';
+    }
+
+    /**
+     * The connection half: status, QR, verify code, sign-in and sign-out. */
     function Connection(props) {
       var t = props.t;
       var useState = React.useState;
@@ -337,6 +455,210 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /**
+     * The model picker: a dropdown over the models this deployment can run.
+     *
+     * The catalogue comes from the Host rather than from a list here, because a
+     * hardcoded list goes stale and would offer models no adapter serves. It is
+     * read once when the page mounts and never cached across opens: a provider
+     * configured later has to show up, which is also why the Host route is
+     * `no-store`.
+     *
+     * `Menu` is the primitives' own anchored dropdown, the same control the
+     * official permission selector is built from, so this needs no styling of its
+     * own to match the rest of the page.
+     */
+    function ModelField(props) {
+      var t = props.t;
+      var useState = React.useState;
+      var useEffect = React.useEffect;
+      var catalogState = useState({ status: 'loading', options: [], failures: [] });
+      var catalog = catalogState[0];
+      var setCatalog = catalogState[1];
+      var openState = useState(false);
+      var open = openState[0];
+      var setOpen = openState[1];
+
+      useEffect(function () {
+        var stopped = false;
+        fetch(ROUTES.models, { cache: 'no-store' })
+          .then(function (response) {
+            // A 501 is the Host saying it serves no catalogue at all, which is a
+            // different thing from "no models are configured" and is reported as
+            // such rather than shown as an empty list.
+            if (!response.ok) throw new Error(String(response.status));
+            return response.json();
+          })
+          .then(function (body) {
+            if (stopped) return;
+            setCatalog({ status: 'ready', options: body.options || [], failures: body.failures || [] });
+          })
+          .catch(function () {
+            if (!stopped) setCatalog({ status: 'failed', options: [], failures: [] });
+          });
+        return function () { stopped = true; };
+      }, []);
+
+      // The configured pair is the value; a stored pair the catalogue no longer
+      // offers still renders, so the user can see what is set instead of a
+      // control that silently reads "follow the default".
+      var current = props.provider === '' || props.model === ''
+        ? null
+        : { provider: props.provider, model: props.model };
+      var rowId = current === null ? null : modelRowId(current.provider, current.model);
+      var currentLabel = t('modelInherit');
+      if (current !== null) {
+        var match = null;
+        for (var index = 0; index < catalog.options.length; index += 1) {
+          var option = catalog.options[index];
+          if (option.provider === current.provider && option.model === current.model) { match = option; break; }
+        }
+        currentLabel = match === null
+          ? current.provider + ' / ' + current.model
+          : match.providerLabel + ' · ' + match.label;
+      }
+
+      // The "follow the default" row is a selectable item carrying an empty id,
+      // not a heading: choosing it is the reset gesture, and a heading cannot be
+      // chosen. `onSelect` therefore receives `''` for it.
+      var items = [{
+        id: '',
+        label: t('modelInherit'),
+      }];
+      for (var i = 0; i < catalog.options.length; i += 1) {
+        var row = catalog.options[i];
+        items.push({
+          id: modelRowId(row.provider, row.model),
+          label: row.providerLabel + ' · ' + row.label,
+        });
+      }
+      // A stored pair the catalogue does not offer is offered back, so selecting
+      // the row that is already set does not look like a no-op the user cannot
+      // undo.
+      if (rowId !== null && !catalog.options.some(function (option) {
+        return option.provider === current.provider && option.model === current.model;
+      })) {
+        items.push({ id: rowId, label: current.provider + ' / ' + current.model });
+      }
+      var note = t('modelHint');
+      if (catalog.status === 'loading') note = t('modelLoading');
+      else if (catalog.status === 'failed') note = t('modelFailed');
+      else if (catalog.options.length === 0) note = t('modelEmpty');
+
+      return h('div', { className: 'cw-field' },
+        h('div', { className: 'cw-head' },
+          h('span', { className: 'cw-label' }, t('model')),
+        ),
+        h(Menu, {
+          open: open,
+          className: 'cw-menu',
+          selectedId: rowId === null ? undefined : rowId,
+          align: 'start',
+          portal: true,
+          onClose: function () { setOpen(false); },
+          onSelect: function (id) {
+            setOpen(false);
+            // The "follow the default" row carries an empty id: choosing it is
+            // the reset gesture, which clears both keys together.
+            if (id === '') {
+              props.onClear();
+              return;
+            }
+            var pair = decodeModelRowId(id);
+            // An id this page did not produce is refused rather than guessed at.
+            if (pair === undefined) return;
+            props.onPick(pair.provider, pair.model);
+          },
+          items: catalog.status === 'ready' && catalog.options.length > 0
+            ? items
+            : [{ id: '', label: note }],
+          anchor: h(Button, {
+            variant: 'outline',
+            size: 'sm',
+            disabled: props.disabled || catalog.status === 'loading',
+            'aria-haspopup': 'menu',
+            'aria-expanded': open,
+            onClick: function () { setOpen(!open); },
+          }, currentLabel),
+        }),
+        h('p', { className: 'cw-hint' }, note),
+        catalog.failures.length > 0
+          ? h('p', { className: 'cw-hint' }, catalog.failures.map(function (failure) {
+            return failure.provider;
+          }).join(', ') + ' · ' + t('modelFailed'))
+          : null,
+      );
+    }
+
+    /**
+     * The permission selector: the three presets, with an explicit risk
+     * confirmation before the widest one.
+     *
+     * The confirmation is not decoration. `danger-full-access` bundles
+     * `approval: never`, which the approval service settles *before* the
+     * waterfall this plugin's WeChat approval cards join - so choosing it turns
+     * those cards off entirely. The official page guards the same value the same
+     * way, and the Host does not: `permissionPresets.set` has no risk gate of its
+     * own, so a plugin that skipped this dialog could widen a session silently.
+     */
+    function PermissionField(props) {
+      var t = props.t;
+      var useState = React.useState;
+      var confirmingState = useState(false);
+      var confirming = confirmingState[0];
+      var setConfirming = confirmingState[1];
+      var acknowledgedState = useState(false);
+      var acknowledged = acknowledgedState[0];
+      var setAcknowledged = acknowledgedState[1];
+
+      function choose(next) {
+        if (needsFullAccessConfirmation(next, props.value)) {
+          setAcknowledged(false);
+          setConfirming(true);
+          return;
+        }
+        props.onPick(next);
+      }
+
+      return h('div', { className: 'cw-field' },
+        h('div', { className: 'cw-head' },
+          h('span', { className: 'cw-label' }, t('permission')),
+        ),
+        h(SegmentedControl, {
+          id: 'cw-permission',
+          className: 'cw-segments',
+          label: t('permission'),
+          disabled: props.disabled,
+          value: props.value,
+          options: [
+            { value: 'read-only', label: t('permissionReadOnly') },
+            { value: 'workspace-write', label: t('permissionWorkspace') },
+            { value: 'danger-full-access', label: t('permissionFull') },
+          ],
+          onChange: choose,
+        }),
+        h('p', { className: 'cw-hint' }, t('permissionHint')),
+        h(RiskConfirmation, {
+          open: confirming,
+          title: t('permissionFullTitle'),
+          description: t('permissionFullBody'),
+          acknowledgeLabel: t('permissionFullAck'),
+          cancelLabel: t('permissionFullCancel'),
+          closeLabel: t('close'),
+          confirmLabel: t('permissionFullConfirm'),
+          acknowledged: acknowledged,
+          disabled: props.disabled,
+          onAcknowledgedChange: setAcknowledged,
+          onCancel: function () { setAcknowledged(false); setConfirming(false); },
+          onConfirm: function () {
+            setAcknowledged(false);
+            setConfirming(false);
+            props.onPick('danger-full-access');
+          },
+        }),
+      );
+    }
+
     /** The configuration half: this plugin's own volatile fields. */
     function Config(props) {
       var t = props.t;
@@ -402,6 +724,26 @@ window.__ModuleLoader__.load({
               }),
               h('p', { className: 'cw-hint' }, t('cardsHint')),
             ),
+            h(PermissionField, {
+              t: t,
+              value: state.permission.text,
+              disabled: disabled,
+              onPick: function (next) { props.edit('permission', next); },
+            }),
+            h(ModelField, {
+              t: t,
+              provider: state.provider.text,
+              model: state.model.text,
+              disabled: disabled,
+              onPick: function (provider, model) {
+                props.edit('provider', provider);
+                props.edit('model', model);
+              },
+              onClear: function () {
+                props.resetField('provider');
+                props.resetField('model');
+              },
+            }),
           ),
         ),
       );
@@ -464,6 +806,9 @@ window.__ModuleLoader__.load({
       // drift by a pixel the moment either changed.
       '.cw-segments{align-self:flex-start;}',
       '.cw-segments [role="tab"]{height:24px;padding:0 12px;font-size:12px;line-height:18px;}',
+      // The model trigger sits under its label on the same left edge as the
+      // segmented controls, so the three fields read as one column.
+      '.cw-field .cw-menu{align-self:flex-start;}',
     ].join('');
 
     /**
@@ -478,6 +823,9 @@ window.__ModuleLoader__.load({
       var model = new SettingsFormModel(ctx.configForms.get(NS), [
         settingsPathField('cwd'),
         settingsEnumField('cards', ['wechat', 'both']),
+        settingsEnumField('permission', ['read-only', 'workspace-write', 'danger-full-access']),
+        settingsTextValueField('provider'),
+        settingsTextValueField('model'),
       ]);
       var store = model.bind(function () {
         var shell = model.shell();
@@ -485,6 +833,9 @@ window.__ModuleLoader__.load({
         // beside them, which is what `{...state.cwd}` spreads in the component.
         shell.cwd = model.field('cwd');
         shell.cards = model.field('cards');
+        shell.permission = model.field('permission');
+        shell.provider = model.field('provider');
+        shell.model = model.field('model');
         return shell;
       });
       return { model: model, store: store };

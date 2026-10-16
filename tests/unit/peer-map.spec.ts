@@ -36,7 +36,10 @@ function fakeRegistry(options: {
 
   const makeHandle = (sessionId: string) => {
     const handle = {
-      agent: { id: sessionId },
+      // The session is what a permission preset is recorded on, so the fake
+      // carries one: a handle without it would make the permission assertions
+      // below pass vacuously.
+      agent: { id: sessionId, session: { id: sessionId } },
       dispose: async () => {
         disposed.push(sessionId)
         live.delete(sessionId)
@@ -440,5 +443,52 @@ describe('unknown peers', () => {
     const map = new PeerMap({ registry: fakeRegistry().registry as never })
 
     expect(map.has('never-seen')).toBe(false)
+  })
+})
+
+describe('the permission preset a new session records', () => {
+  it('applies the preset to a session it creates', async () => {
+    const f = fakeRegistry()
+    const applied: { session: unknown; preset: string }[] = []
+    const map = new PeerMap({
+      registry: f.registry as never,
+      applyPermission: handle => { applied.push({ session: handle.agent.session, preset: 'read-only' }) },
+    })
+
+    const handle = await map.sessionFor('user-7')
+
+    expect(applied).toEqual([{ session: handle.agent.session, preset: 'read-only' }])
+  })
+
+  it('does NOT re-apply the preset when resuming an existing session', async () => {
+    // This is the whole reason the callback is creation-only. A resumed session
+    // already carries its own durable knobs - including a preset the user changed
+    // from WeChat with `/permission` mid-conversation - and the permission
+    // service restores those. Re-applying the config here would silently undo the
+    // user's own choice on the next restart, which is invisible until they notice
+    // the agent asking for approval it should not.
+    const f = fakeRegistry({ existingSessions: [sessionIdFor('user-7', 0)] })
+    const applied: unknown[] = []
+    const map = new PeerMap({
+      registry: f.registry as never,
+      // The map takes its own existence probe; the fake registry's option only
+      // decides which ids a resume is allowed to find.
+      sessionExists: async () => true,
+      applyPermission: handle => { applied.push(handle.agent.session) },
+    })
+
+    await map.sessionFor('user-7')
+
+    expect(f.resumed).toHaveLength(1)
+    expect(applied).toEqual([])
+  })
+
+  it('applies nothing when the deployment configures no callback', async () => {
+    // A deployment with no permission service must keep working; the absent
+    // callback is how that is expressed, not an error.
+    const f = fakeRegistry()
+    const map = new PeerMap({ registry: f.registry as never })
+
+    await expect(map.sessionFor('user-7')).resolves.toBeDefined()
   })
 })

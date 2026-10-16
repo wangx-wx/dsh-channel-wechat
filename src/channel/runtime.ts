@@ -10,7 +10,7 @@
  */
 
 import type { WechatAccount } from '../credentials.ts'
-import type { AgentPresetsLike, AgentRegistryLike, PeerGenerationsLike } from '../bridge/peer-map.ts'
+import type { AgentHandleLike, AgentPresetsLike, AgentRegistryLike, PeerGenerationsLike } from '../bridge/peer-map.ts'
 import type { MessageApi } from '../wechat/api.ts'
 import { LOGIN_BASE_URL } from '../wechat/login-runner.ts'
 import { Channel, type CardAnswererLike, type SessionEventsLike } from './channel.ts'
@@ -92,6 +92,12 @@ export interface RuntimeOptions {
    * restart instead of resuming the conversation the user ended.
    */
   generations?: PeerGenerationsLike
+  /**
+   * Record this channel's configured permission preset on a session it creates.
+   *
+   * Creation-only, so a resumed session keeps whatever knobs it recorded.
+   */
+  applyPermission?: (handle: AgentHandleLike) => void
   /**
    * The interaction cards this channel answers.
    *
@@ -261,6 +267,7 @@ export async function startChannelFromStore(options: RuntimeOptions): Promise<vo
     cwd: options.cwd,
     ...(options.presets === undefined ? {} : { presets: options.presets }),
     ...(options.generations === undefined ? {} : { generations: options.generations }),
+    ...(options.applyPermission === undefined ? {} : { applyPermission: options.applyPermission }),
     ...(options.cards === undefined ? {} : { cards: options.cards }),
     ...(options.prepareMedia === undefined ? {} : { prepareMedia: options.prepareMedia }),
     // Built here rather than passed in: this module already owns the account's

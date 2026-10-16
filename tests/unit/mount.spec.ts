@@ -53,7 +53,8 @@ function stubPanel() {
   const begin = async (): Promise<Response> => new Response('{}')
   const verifyCode = async (): Promise<Response> => new Response('{}')
   const logout = async (): Promise<Response> => new Response('{}')
-  return { session: {} as never, routes: { page, status, qrImage, begin, verifyCode, logout } }
+  const models = async (): Promise<Response> => new Response('{}')
+  return { session: {} as never, routes: { page, status, qrImage, begin, verifyCode, logout, models } }
 }
 
 const contexts: Context[] = []
@@ -116,6 +117,21 @@ describe('mounting the login panel', () => {
       // route that can never be reached.
       expect(route.methods.length).toBeGreaterThan(0)
     }
+  })
+
+  it('serves the model list the selector reads', async () => {
+    // Registered like the others, so it is inside the fence and removed when the
+    // plugin unloads. A route that existed only on the page's assumption would
+    // 404 and leave an empty selector.
+    const ctx = new Context()
+    contexts.push(ctx)
+    const { routes, service } = fakeConnection()
+    ctx.provide('connection', service)
+
+    await mountPanelRoutes(ctx, stubPanel)
+
+    expect(routes.some(route => route.path === '/api/channel-wechat/models' && route.methods.includes('GET')))
+      .toBe(true)
   })
 
   it('serves the page at a URL the console can print', async () => {

@@ -15,6 +15,7 @@
 
 import type { ApiTransport } from '../wechat/api.ts'
 import type { LoginCredentials } from '../wechat/login-machine.ts'
+import type { ModelCatalog } from './model-catalog.ts'
 import { createLoginRoutes, type LoginRoutes } from './login-routes.ts'
 import { createLoginSession, type LoginSession } from './login-session.ts'
 
@@ -35,6 +36,8 @@ export interface PanelOptions {
   listAccounts?: () => Promise<readonly { accountId: string }[]>
   /** Forget every stored login and stop polling. */
   logout?: () => Promise<void>
+  /** Read the models this deployment can run, for the page's selector. */
+  listModels?: () => Promise<ModelCatalog>
   /** Observe a failure from the write or the start. */
   onError?: (error: unknown) => void
   /** Pause between polls; tests inject their own. */
@@ -88,6 +91,7 @@ export function createPanel(options: PanelOptions): Panel {
       session,
       ...(options.listAccounts === undefined ? {} : { listAccounts: options.listAccounts }),
       ...(options.logout === undefined ? {} : { logout: options.logout }),
+      ...(options.listModels === undefined ? {} : { listModels: options.listModels }),
     }),
   }
 }
