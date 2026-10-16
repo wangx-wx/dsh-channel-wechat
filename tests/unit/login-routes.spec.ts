@@ -171,3 +171,71 @@ describe('starting and answering a login', () => {
     expect(session.submitVerifyCode).not.toHaveBeenCalled()
   })
 })
+
+describe('the stored login the GUI page shows', () => {
+  it('reports an account an earlier session connected', async () => {
+    // The in-flight attempt only knows a login it made itself. The page that
+    // matters most is the one opened after a previous session, when the boot has
+    // already connected the stored account and the attempt has not started - so
+    // without this the page would report "not connected" over a live channel.
+    const routes = createLoginRoutes({
+      session: stubSession({ phase: 'idle' }),
+      listAccounts: async () => [{ accountId: 'bot-9' }],
+    })
+
+    const body = await (await routes.status()).json() as { storedAccountId?: string }
+
+    expect(body.storedAccountId).toBe('bot-9')
+  })
+
+  it('omits the account while none is stored', async () => {
+    // Absent rather than null: the page asks whether an account exists, and a
+    // present `null` reads as one.
+    const routes = createLoginRoutes({
+      session: stubSession({ phase: 'idle' }),
+      listAccounts: async () => [],
+    })
+
+    const body = await (await routes.status()).json() as Record<string, unknown>
+
+    expect(Object.hasOwn(body, 'storedAccountId')).toBe(false)
+  })
+
+  it('reads the store on every request instead of caching it', async () => {
+    // Signing out from another tab has to show up on the next poll; a cached
+    // answer would keep claiming a login that no longer exists.
+    let stored: { accountId: string }[] = [{ accountId: 'bot-9' }]
+    const routes = createLoginRoutes({
+      session: stubSession({ phase: 'idle' }),
+      listAccounts: async () => stored,
+    })
+
+    expect((await (await routes.status()).json() as { storedAccountId?: string }).storedAccountId).toBe('bot-9')
+    stored = []
+    expect((await (await routes.status()).json() as Record<string, unknown>).storedAccountId).toBeUndefined()
+  })
+})
+
+describe('signing out', () => {
+  it('forgets the login when the host can', async () => {
+    const logout = vi.fn(async () => {})
+    const routes = createLoginRoutes({ session: stubSession({ phase: 'idle' }), logout })
+
+    const response = await routes.logout()
+
+    expect(response.status).toBe(200)
+    expect(logout).toHaveBeenCalledOnce()
+  })
+
+  it('refuses rather than pretending when the host cannot', async () => {
+    // Answering 200 without forgetting anything would leave the page showing
+    // "signed out" over a channel that keeps polling - the user acting on a
+    // state that is not true.
+    const routes = createLoginRoutes({ session: stubSession({ phase: 'idle' }) })
+
+    const response = await routes.logout()
+
+    expect(response.status).toBe(501)
+    expect(await response.json()).toMatchObject({ error: expect.any(String) as unknown as string })
+  })
+})

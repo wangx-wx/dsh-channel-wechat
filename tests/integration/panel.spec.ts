@@ -24,7 +24,7 @@ import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { inject as channelInject } from '../../src/index.ts'
 import { mountChannel } from '../support/config.ts'
-import { loadAccount } from '../../src/credentials.ts'
+import { loadAccount, saveAccount } from '../../src/credentials.ts'
 
 /** One mounted profile, disposed after its test. */
 const mounted: Context[] = []
@@ -212,5 +212,50 @@ describe('the panel as the plugin wires it', () => {
     const calls = (globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls
     const updateCall = calls.find(entry => String(entry[0]).includes('getupdates'))
     expect(String(updateCall?.[1] === undefined ? '' : JSON.stringify(updateCall[1]))).toContain('tok-1')
+  })
+
+  it('reports a login that was stored before this process started', async () => {
+    // The wiring the units cannot see: the *stored* login comes from the
+    // credentials store through `listAccounts`, which `index.ts` has to pass to
+    // the panel. A unit test injects its own `listAccounts`, so only this proves
+    // the production call site supplies one - and without it the page reports
+    // "not connected" over a channel that is working.
+    const { ctx, routes } = await bootWithPanel()
+    await until(() => routes.has('/api/channel-wechat/status'))
+    await saveAccount(ctx, { botToken: 'tok-stored', accountId: 'stored-bot@im.bot' })
+
+    const body = await (await call(routes, '/api/channel-wechat/status')).json() as { storedAccountId?: string }
+
+    expect(body.storedAccountId).toBe('stored-bot@im.bot')
+  })
+
+  it('stops polling and forgets the login when the page signs out', async () => {
+    // The same wiring question for signing out, plus the ordering that makes it
+    // safe: the poll has to stop before the credentials go, or a loop would keep
+    // authenticating with a token that is no longer stored. A unit test can pass
+    // either half on its own.
+    const { ctx, routes } = await bootWithPanel()
+    await until(() => routes.has('/api/channel-wechat/logout'))
+
+    // Connect first, so there is a live run to stop and a token to forget.
+    await call(routes, '/api/channel-wechat/begin', { method: 'POST' })
+    await until(async () => (await loadAccount(ctx, LIVE_ACCOUNT_ID)) !== undefined)
+
+    const response = await call(routes, '/api/channel-wechat/logout', { method: 'POST' })
+    expect(response.status).toBe(200)
+
+    // The store is empty...
+    expect(await loadAccount(ctx, LIVE_ACCOUNT_ID)).toBeUndefined()
+    // ...and the status document agrees, which is what the page draws from.
+    const body = await (await call(routes, '/api/channel-wechat/status')).json() as Record<string, unknown>
+    expect(body.storedAccountId).toBeUndefined()
+
+    // ...and the poll is gone: a live loop would keep issuing getupdates with the
+    // token that was just forgotten.
+    const calls = (globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls
+    const before = calls.filter(entry => String(entry[0]).includes('getupdates')).length
+    await new Promise(resolve => setTimeout(resolve, 150))
+    const after = calls.filter(entry => String(entry[0]).includes('getupdates')).length
+    expect(after).toBe(before)
   })
 })

@@ -215,6 +215,17 @@ async function mountLoginPanel(ctx: Context, config: Config): Promise<void> {
     // the panel owns that ordering. A start that beat the write would poll as
     // the previous account or as none.
     startChannel: () => startChannel(ctx, config, { force: true }),
+    // The GUI page shows the *stored* login, which the attempt cannot report
+    // before it starts: a page opened after a previous session would otherwise
+    // say "not connected" over a channel that is polling.
+    listAccounts: () => listAccounts(ctx),
+    logout: async () => {
+      // Order matters: stop the live poll first, so nothing is delivered between
+      // forgetting the credentials and the loop noticing. A surviving loop would
+      // keep authenticating with a token that is no longer stored.
+      channelRun(ctx, config).stop()
+      for (const account of await listAccounts(ctx)) await forgetAccount(ctx, account.accountId)
+    },
     onError: (error: unknown) => { reporterFor(ctx)('login panel failed to connect', error) },
   }))
 

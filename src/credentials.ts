@@ -43,6 +43,8 @@ interface CredentialsService {
     key: CredentialKey,
     mutate: (current: unknown) => Promise<unknown>,
   ) => Promise<unknown>
+  /** Remove one record; removing an absent record is a no-op. */
+  deleteRecord: (key: CredentialKey) => Promise<void>
   readRecord: (key: CredentialKey) => Promise<unknown>
   listRecords: () => Promise<readonly { key: string }[]>
 }
@@ -171,11 +173,19 @@ export async function loadAccount(ctx: Context, accountId: string): Promise<Wech
 
 /**
  * Forget one account's login.
+ *
+ * `deleteRecord` rather than `modifyRecord(..., async () => undefined)`. That was
+ * the first shape here, and it is wrong in a way no type catches: the contract
+ * says returning `undefined` from the mutator **leaves the record untouched**
+ * ("or `undefined` to leave it"), so "forget" removed nothing while reporting
+ * success. The store still held the token, and the next ordinary start polled as
+ * the account the user had just signed out of.
+ *
  * @param ctx - plugin context carrying the credentials service.
  * @param accountId - the account to remove.
  */
 export async function forgetAccount(ctx: Context, accountId: string): Promise<void> {
-  await credentialsOf(ctx).modifyRecord(accountKey(accountId), async () => undefined)
+  await credentialsOf(ctx).deleteRecord(accountKey(accountId))
 }
 
 /**

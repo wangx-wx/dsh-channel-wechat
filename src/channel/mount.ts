@@ -116,6 +116,12 @@ export async function mountPanelRoutes(ctx: Context, createPanel: () => Panel): 
           requestBody: 'buffered',
           fetch: (request: Request) => panel.routes.verifyCode(request),
         }),
+        connection.fetch.register({
+          path: `${PANEL_PREFIX}/logout`,
+          methods: ['POST'],
+          requestBody: 'buffered',
+          fetch: () => panel.routes.logout(),
+        }),
       ]
       return () => { for (const dispose of disposers) dispose() }
     })
