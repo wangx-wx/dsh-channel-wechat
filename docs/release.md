@@ -119,6 +119,37 @@ Temporary package placeholder for staged publishing
 > 本机 npm 为 **11.13.0，没有 `stage` 子命令**（`npm stage publish/list/approve`
 > 需要 **11.15.0+**），无法主动查暂存状态。**`npm view` 是可靠的观测点。**
 
+### 2026-10-17 补充：**已存在的包**升级时，症状不同
+
+发布 `0.1.3`（包已存在）时，**没有** `0.0.0-stage` 占位，而是出现了一组更容易误判的症状。
+实测时间线：
+
+| 时刻 | 事件 |
+|---|---|
+| 15:13:44 | `PUT` → **202 Accepted**，npm 打印 `+ dsh-channel-wechat@0.1.3` |
+| 15:16 | 公开 `GET /dsh-channel-wechat` → `latest` 仍是 `0.1.2`，`0.1.3` **404** |
+| 15:16 | 重试 `npm publish` → **`409 Cannot publish over previously staged version "0.1.3"`** |
+| 15:22:14 | `npm stage list`（npx npm@latest）→ `No staged packages found` |
+| ≈15:23 | `latest` 变为 `0.1.3`，`0.1.3` 的 **200** |
+
+**三个反直觉之处，下次直接照此判断：**
+
+1. **`202` + `+ name@version` 不等于已经可见。** 与 `0.1.0` 那次一样，202 是「已收下、审核/传播中」。
+2. **`409 Cannot publish over previously staged version` 是「已上传成功」的证据，不是失败。**
+   它说明注册表已经收下了这个版本，只是还没公开。**看到 409 就去静候，绝对不要换版本号重发。**
+3. **认证 `GET /<pkg>/<version>` 会先于公开可见返回 `200`。** 这是判断「传上去了没有」最可靠的探针：
+   ```bash
+   # 带上 token 查单版本：200 = 已上传（可能尚未公开），404 = 确实没有
+   curl -s -o /dev/null -w "%{http_code}\n" -H "Authorization: Bearer $TOKEN" \
+     https://registry.npmjs.org/dsh-channel-wechat/<版本>
+   ```
+   比 `npm view` 可靠：`npm view` 会命中本地缓存，看起来像「没发出去」。
+
+**传播耗时**：包已存在时本次约 **9 分钟**（新包名那次约 2 分钟）。耐心即可。
+
+> ⚠️ 排查期间我**重复执行了一次 `npm publish`**（换来那个 409）。事后看这个 409 反而成了判据，
+> 但流程上它是错的——**`202` 之后只应观测，不应重发**。记此以自警。
+
 ### 怎么确认已经上线
 
 ```bash
