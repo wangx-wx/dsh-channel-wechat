@@ -306,12 +306,14 @@ window.__ModuleLoader__.load({
           ? h('div', { className: 'cw-row' },
             h(Button, {
               variant: 'primary',
+              size: 'sm',
               disabled: busy,
               onClick: function () { post(ROUTES.begin, null); },
             }, account ? t('reconnect') : t('connect')),
             account
               ? h(Button, {
                 variant: 'outline',
+                size: 'sm',
                 disabled: busy,
                 onClick: function () {
                   if (!window.confirm(t('logoutConfirm'))) return;
@@ -428,8 +430,13 @@ window.__ModuleLoader__.load({
       '.cw-head{display:flex;align-items:center;gap:8px;}',
       '.cw-label{flex:1;min-width:0;font-size:13px;font-weight:500;line-height:1.5;color:var(--dsw-alias-label-primary);}',
       // The segmented control sizes to its labels; left-aligned it sits under the
-      // input above instead of stretching across the panel.
+      // input above instead of stretching across the panel. Only the tab is
+      // resized, never the track: the sliding indicator derives its own height
+      // from the control's padding and its own width from the segment count, so
+      // shrinking the track would need that arithmetic duplicated here and would
+      // drift by a pixel the moment either changed.
       '.cw-segments{align-self:flex-start;}',
+      '.cw-segments [role="tab"]{height:24px;padding:0 12px;font-size:12px;line-height:18px;}',
     ].join('');
 
     /**
