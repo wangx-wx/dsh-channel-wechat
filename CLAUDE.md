@@ -86,7 +86,7 @@ vendor/   内联的 qrcode-generator；MIT 头靠 tsdown 的 banner 保留，见
 - **变异验证是惯例**：改坏实现后测试必须失败，否则那个测试没在测它声称的东西。
 - 断言失败要有形状：宁可启动失败也不静默降级。
 
-## 开发规范（用户约定，2026-10-16 起）
+## 开发规范
 
 1. **提交**：完成一个任务、测试通过后**先提交**。格式 `type(scope): desc`，type 取 `feat` / `fix` /
    `docs` / `style` / `refactor` / `test` / `chore` / `perf`。（历史提交是英文散文式描述，不追溯改写。）
