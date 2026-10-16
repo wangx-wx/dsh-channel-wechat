@@ -131,6 +131,15 @@ export function setProfileBundles(harness: TestHarness, bundles: readonly string
 export interface RunningProfile {
   /** The port the app actually bound; `--port 0` asks the OS for a free one. */
   readonly port: number
+  /**
+   * The launch token the app printed in its URL.
+   *
+   * The browser fence only accepts it on `GET /`, which is what exchanges it for
+   * the signed cookie every `/api` and `/plugins` request needs. A test that
+   * fetches those routes has to perform that exchange first, exactly as a browser
+   * does, or it sees 401 and concludes the route is missing.
+   */
+  readonly token: string
   /** Kill the app and wait for it to exit. */
   readonly stop: () => Promise<void>
 }
@@ -174,12 +183,35 @@ export async function startProfile(harness: Pick<TestHarness, 'home'>, args: rea
   const deadline = Date.now() + 120_000
   while (Date.now() < deadline) {
     // The line the web app prints once it is listening, which carries the port
-    // it actually bound - `--port 0` makes the requested value useless.
-    const match = /^dsh web: http:\/\/127\.0\.0\.1:(\d+)\//mu.exec(output)
-    if (match) return { port: Number(match[1]), stop }
+    // it actually bound - `--port 0` makes the requested value useless - and the
+    // launch token, which the browser exchanges for its session cookie.
+    const match = /^dsh web: http:\/\/127\.0\.0\.1:(\d+)\/\?token=(\S+)$/mu.exec(output)
+    if (match) return { port: Number(match[1]), token: match[2]!, stop }
     if (exited) throw new Error(`profile ${PROFILE_NAME} exited with ${String(exited.code)} before serving:\n${output.slice(-2000)}`)
     await new Promise(resolve => setTimeout(resolve, 50))
   }
   await stop()
   throw new Error(`profile ${PROFILE_NAME} never reported a listening port:\n${output.slice(-2000)}`)
+}
+
+/**
+ * Exchange the launch token for the browser session cookie, as a browser does.
+ *
+ * The fence accepts the token only on `GET /`; anything else - including
+ * `/plugins` and `/api` - answers 401 without the signed cookie it writes. A
+ * test that skipped this would read a 401 as "the route does not exist".
+ *
+ * @param profile - the running app to authenticate against.
+ * @returns the `Cookie` header value to send on later requests.
+ */
+export async function authenticate(profile: Pick<RunningProfile, 'port' | 'token'>): Promise<string> {
+  const url = `http://127.0.0.1:${String(profile.port)}/?token=${profile.token}`
+  const response = await fetch(url, { redirect: 'manual' })
+  // Redirected to the clean URL, which is what drops the token from history.
+  if (response.status !== 303 && response.status !== 302) {
+    throw new Error(`token exchange answered ${String(response.status)}, expected a redirect`)
+  }
+  const header = response.headers.get('set-cookie')
+  if (header === null) throw new Error('token exchange set no cookie')
+  return header.split(';')[0]!
 }

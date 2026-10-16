@@ -26,6 +26,15 @@ export interface PanelOptions {
   saveAccount: (credentials: LoginCredentials) => Promise<void>
   /** Begin polling as the stored account. */
   startChannel: () => void | Promise<void>
+  /**
+   * Read the stored logins.
+   *
+   * The attempt only knows a login it made itself, so a page opened after a
+   * previous session would report "not connected" over a working channel.
+   */
+  listAccounts?: () => Promise<readonly { accountId: string }[]>
+  /** Forget every stored login and stop polling. */
+  logout?: () => Promise<void>
   /** Observe a failure from the write or the start. */
   onError?: (error: unknown) => void
   /** Pause between polls; tests inject their own. */
@@ -73,5 +82,12 @@ export function createPanel(options: PanelOptions): Panel {
     },
   })
 
-  return { session, routes: createLoginRoutes({ session }) }
+  return {
+    session,
+    routes: createLoginRoutes({
+      session,
+      ...(options.listAccounts === undefined ? {} : { listAccounts: options.listAccounts }),
+      ...(options.logout === undefined ? {} : { logout: options.logout }),
+    }),
+  }
 }

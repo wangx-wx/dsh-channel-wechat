@@ -22,7 +22,7 @@ const manifest = JSON.parse(readFileSync(new URL('../../package.json', import.me
   scripts?: Record<string, string>
   peerDependencies?: Record<string, string>
   dependencies?: Record<string, string>
-  dsh?: { bundle?: { patch?: string | string[] } }
+  dsh?: { bundle?: { patch?: string | string[] }; client?: { platform?: string; inject?: string[] } }
 }
 
 /** The dsh runtime versions a released plugin must stay installable under. */
@@ -98,9 +98,8 @@ describe('package manifest', () => {
   })
 
   it('declares every exported subpath in a form the loader can resolve', () => {
-    // A subpath the patch rows name (`dsh-channel-wechat/startup`) has to be
-    // resolvable, and its type face has to point at something that ships or
-    // `tsc` falls back to `any` for every consumer.
+    // Every subpath has to be resolvable, and a type face has to point at
+    // something that ships or `tsc` falls back to `any` for every consumer.
     const entries = Object.entries(manifest.exports ?? {})
     expect(entries.length).toBeGreaterThan(0)
     for (const [subpath, target] of entries) {
@@ -109,8 +108,20 @@ describe('package manifest', () => {
       const main = typeof resolved === 'string' ? resolved : resolved.default
       expect(main, `${subpath} must declare a runtime target`).toBeTypeOf('string')
     }
-    const startup = manifest.exports?.['./startup']
-    expect(startup, 'the startup row names this subpath').toBeDefined()
+  })
+
+  it('declares the browser half the client module system serves', () => {
+    // `dsh.client` and `exports["./client"]` are two halves of one contract, and
+    // a mismatch between them is silent: the host starts, the channel works, and
+    // the login button simply never appears. The client system scans Loader rows
+    // for `dsh.client`, then resolves `exports["./client"]` to serve it - so both
+    // have to be present, `platform` has to be the one it selects, and the path
+    // has to be a plain string.
+    expect(manifest.dsh?.client?.platform).toBe('web')
+    expect(manifest.exports?.['./client']).toBeTypeOf('string')
+    // A path the build does not emit fails *activation*, not install, so it is
+    // pinned to a file that exists rather than to a remembered string.
+    expect(existsSync(new URL(`../../${String(manifest.exports?.['./client'])}`, import.meta.url))).toBe(true)
   })
 
   it('declares a root export as a plain path string', () => {

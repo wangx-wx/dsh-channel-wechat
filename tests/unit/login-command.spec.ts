@@ -1,7 +1,7 @@
 /**
  * What the command-line action actually does.
  *
- * The startup provider parses the argument; this turns it into work — run the
+ * The command line is claimed elsewhere; this turns the claim into work — run the
  * QR login, print the code, store the credentials, and ask the launcher to
  * exit. The observable contract is the printed text, the stored account, and
  * the exit code, which is what a user and a script both see.
@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest'
 import { runStartupAction } from '../../src/login-command.ts'
 import type { ApiTransport } from '../../src/wechat/api.ts'
-import type { WechatStartupValues } from '../../src/startup.ts'
+import type { WechatStartupValues } from '../../src/cmdline.ts'
 
 /** An API whose QR poll confirms immediately with the given account. */
 function confirmingApi(account: { botToken: string; accountId: string; baseUrl?: string }): ApiTransport {

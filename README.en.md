@@ -22,19 +22,28 @@ the profile's `bundles` layer.
 
 ### Using it
 
-1. On startup the log prints a login address:
-   ```
-   [channel-wechat] WeChat login: open http://127.0.0.1:<port>/api/channel-wechat/login in mobile WeChat and scan
-   ```
-2. Scan it with **mobile WeChat** and confirm — **no restart needed**; credentials
-   are stored and long-polling starts.
-3. Message that bot in WeChat from then on; DSH's replies come back to WeChat.
+1. Open the GUI, go to **Plugins** in the sidebar, and open the
+   **dsh-channel-wechat** card.
+2. Click **Sign in to WeChat**; the QR code appears on the page.
+3. Scan it with **mobile WeChat** and confirm (enter the verify code in the page
+   if asked) — **no restart needed**; credentials are stored and long-polling
+   starts.
+4. Message that bot in WeChat from then on; DSH's replies come back to WeChat.
 
-⚠️ **Decide `cwd` before installing.** The `cwd` config sets the working directory
-of every WeChat session, and it is **written at session creation and immutable**.
-Unset, it takes the launcher's `process.cwd()` — which on desktop is
-`~/.dsh/profiles/desktop`, not somewhere an agent should work. Set it in the
-profile's `cordis.patch.yml`:
+The same page carries this plugin's settings (`cwd`, `cards`); saving applies
+them, so there is no YAML to hand-edit.
+
+> Without a GUI (a profile that mounts no web app, such as headless),
+> `dsh <profile> login` still prints the QR code to the terminal. Note that
+> **it cannot work on a profile that mounts the web app** (web / desktop): that
+> app's own argument parser rejects the positional before this plugin is
+> reached, so the boot ends first. See "Login" below.
+
+⚠️ **Get `cwd` right.** It sets the working directory of every WeChat session,
+and it is **written at session creation and immutable**. Unset, it takes the
+launcher's `process.cwd()` — which on desktop is `~/.dsh/profiles/desktop`, not
+somewhere an agent should work. The plugin's settings page edits it (affecting
+only sessions created afterwards); the profile still works too:
 
 ```yaml
 - id: channel-wechat
@@ -83,7 +92,7 @@ WeChat user ⇄ Tencent iLink ⇄ 【this plugin (inside the DSH process)】
                 ├─ agent.followup() injects the turn natively
                 ├─ session/event → sendmessage for replies
                 ├─ approval and question cards (WeChat and GUI)
-                └─ login panel (web / desktop)
+                └─ plugin page (GUI): sign in / sign out / settings
 ```
 
 - **Protocol layer ported from Tencent's official implementation**
@@ -99,17 +108,21 @@ WeChat user ⇄ Tencent iLink ⇄ 【this plugin (inside the DSH process)】
 
 ## Login
 
-On startup the plugin prints an address you can open directly:
+**The GUI is the primary entry point**: sidebar **Plugins** →
+**dsh-channel-wechat** → **Sign in to WeChat**. The QR code renders on the page,
+and confirming it needs no restart: the credential is written to
+`ctx.credentials` immediately and the channel begins polling in the same process.
+The same page has **Sign out**, which stops polling before deleting the credential.
 
+Without a GUI (a profile that mounts no web app), use the terminal:
+
+```bash
+dsh <profile> login     # prints the QR code
+dsh <profile> status    # shows what is stored
+dsh <profile> logout    # signs out
 ```
-[channel-wechat] 微信登录：用手机微信打开 http://127.0.0.1:19387/api/channel-wechat/login 扫码连接
-```
 
-Open it with **WeChat on your phone** and scan. No restart is needed: the
-credential is written to `ctx.credentials` immediately and the channel begins
-polling in the same process.
-
-### Why not `dsh <profile> login`
+### Why `dsh <profile> login` cannot work on web / desktop
 
 Because it is **impossible on a profile that mounts the web app** (web /
 desktop). This is not this plugin's choice:
@@ -126,8 +139,15 @@ Two comparable plugins avoid this road as well: `dsh-wechat` has no CLI at all
 and only offers an HTTP page; `dsh-weixin`'s CLI is a **separate executable**, and
 its README lists the panel as the preferred path.
 
-The CLI's `login`/`logout`/`status` are still present, but only work on a profile
-that does **not** mount the web app.
+### Why there is one plugin entry
+
+Earlier versions put **two rows** in the profile: a
+`dsh-channel-wechat/startup` row that parsed the `login`-style app argument (only
+a row declaring `inject` is handed the command line), and the channel row itself.
+
+They are one row now: every launcher provides `cmdlineArgs` before the tree
+mounts, so the main row declares it directly. The GUI shows one card, and the CLI
+still works on a profile that mounts no web app.
 
 ## Differences from comparable plugins
 
@@ -146,6 +166,7 @@ The design documents are written in Chinese.
 | Document | Contents |
 |---|---|
 | [docs/plan-v1.md](./docs/plan-v1.md) | **Implementation plan (final)**: decision log, architecture, milestones, risks |
+| [docs/invariants.md](./docs/invariants.md) | **Why the invariants hold**: consequence of breaking each, and where the evidence is |
 | [docs/design.md](./docs/design.md) | Early design draft (v0.3, partly superseded by plan-v1) |
 | [docs/事实核查.md](./docs/事实核查.md) | Protocol fact-checking and corrected conclusions |
 | [docs/recon/](./docs/recon/) | **13 reconnaissance reports**: protocol, build, DSH contracts, comparable implementations |
@@ -161,7 +182,7 @@ The design documents are written in Chinese.
 | **M3** ✅ | Commands + `/stop` | Native commands get a receipt; interrupts work |
 | **M4** ✅ | Media both ways + quotes | images ✅ / quotes ✅ / **outbound files ✅ verified on a real device** |
 | **M5** ✅ | Approval + question cards | WeChat approves/rejects/answers; with `cards: wechat` the GUI shows no duplicate |
-| **M6** 🔶 | Login panel | Scan-to-login verified on web, login starts the channel; settings-page card pending |
+| **M6** ✅ | GUI login and configuration | Scan-to-login / sign-out on the plugin's page; `cwd` and `cards` editable there |
 | **M7** ✅ | Release | **v0.1.1 is on npm**; `dsh plugin add dsh-channel-wechat` verified installing and loading in a fresh profile |
 
 ## Where data lives

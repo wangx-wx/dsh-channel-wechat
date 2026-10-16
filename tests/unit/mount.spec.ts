@@ -52,7 +52,8 @@ function stubPanel() {
   const qrImage = async (): Promise<Response> => new Response('svg')
   const begin = async (): Promise<Response> => new Response('{}')
   const verifyCode = async (): Promise<Response> => new Response('{}')
-  return { session: {} as never, routes: { page, status, qrImage, begin, verifyCode } }
+  const logout = async (): Promise<Response> => new Response('{}')
+  return { session: {} as never, routes: { page, status, qrImage, begin, verifyCode, logout } }
 }
 
 const contexts: Context[] = []

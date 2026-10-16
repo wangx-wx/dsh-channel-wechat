@@ -10,7 +10,7 @@
  */
 
 import { isAbsolute } from 'node:path'
-import type { Context } from '@deepseek-ai/cordis'
+import type { Context, Volatile } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 // Type-only, for the `ctx.agentDefaultModel` declaration it merges into
 // `Context`. The service is provided by the profile, not by this plugin, so
@@ -18,7 +18,7 @@ import z from '@deepseek-ai/schemastery'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { loadAccount, listAccounts, saveAccount, forgetAccount } from './credentials.ts'
 import { runStartupAction } from './login-command.ts'
-import { WECHAT_STARTUP_SERVICE, type WechatStartupValues } from './startup.ts'
+import { claimAppArgument } from './cmdline.ts'
 import { createApiClient } from './wechat/api.ts'
 import type { AgentPresetsLike } from './bridge/peer-map.ts'
 import { createNativeCommandExecutor, createNativeCommandLister, type CommandRuntimeLike } from './bridge/native-commands.ts'
@@ -55,6 +55,11 @@ export const name = 'channel-wechat'
 /**
  * Plugin configuration.
  *
+ * Both fields are `volatile`, which is what makes them editable from the GUI:
+ * the settings service projects only volatile fields into a form, and a
+ * non-volatile field is *absent* from that projection rather than read-only. The
+ * channel therefore reads them through `.get()`.
+ *
  * `cwd` is required and has no default on purpose. A session's working
  * directory is immutable once recorded, and the web app's system prompt reads
  * it through `{{cwd}}`; a prompt variable with no value fails the turn before
@@ -63,8 +68,14 @@ export const name = 'channel-wechat'
  * directory into sessions that cannot be moved afterwards.
  */
 export interface Config {
-  /** Absolute working directory every session this plugin creates records. */
-  cwd: string
+  /**
+   * Absolute working directory every session this plugin creates records.
+   *
+   * Live so the GUI can change it for the sessions created after the change;
+   * sessions already created keep the directory they recorded, because a
+   * session's `cwd` cannot be rewritten.
+   */
+  cwd: Volatile<string>
   /**
    * How this channel answers DSH's interaction cards.
    *
@@ -73,29 +84,41 @@ export interface Config {
    * wins - but this channel cannot withdraw the GUI card once WeChat has
    * answered, so the GUI card then lingers until the turn ends.
    *
-   * Optional because the schema defaults it: a profile that predates this key
-   * must keep loading.
+   * Defaulted rather than required: a profile that predates this key must keep
+   * loading. Volatile, so the GUI can change it; the value is always present
+   * because the schema supplies the default.
    */
-  cards?: 'wechat' | 'both'
+  cards: Volatile<'wechat' | 'both'>
 }
 
-/** Runtime schema for {@link Config}; `cwd` must be an absolute path. */
-export const Config: z<Config> = z.object({
+/**
+ * Runtime schema for {@link Config}; `cwd` must be an absolute path.
+ *
+ * Left un-annotated so its inferred output type is the resolved one cordis hands
+ * the plugin (references, not raw values); annotating it with `Config` makes the
+ * schema's own builder signatures disagree under `exactOptionalPropertyTypes`.
+ */
+export const Config = z.object({
   // Absolute on purpose: the session boundary rejects a relative `cwd`, and
   // failing at the profile boundary names the offending value.
-  cwd: z.string().required(),
+  cwd: z.string().required().volatile(),
   // Defaulted rather than required: the common deployment wants one place to
   // answer a card, and requiring the key would make every existing profile fail
   // to load for a choice it does not have to make.
-  cards: z.union([z.const('wechat'), z.const('both')]).default('wechat'),
+  cards: z.union([z.const('wechat'), z.const('both')]).default('wechat').volatile(),
 })
 
 /**
- * Host services this plugin needs. `wechatStartup` is the parsed invocation,
- * `credentials` is where a login is persisted, and `agents` is what the channel
- * creates its sessions through; the loader parks this row until all five exist.
- * `commands` is the harness's own command surface, which WeChat forwards to
- * rather than maintaining a list of its own.
+ * Host services this plugin needs. `credentials` is where a login is persisted
+ * and `agents` is what the channel creates its sessions through; the loader
+ * parks this row until all of them exist. `commands` is the harness's own
+ * command surface, which WeChat forwards to rather than maintaining a list of
+ * its own.
+ *
+ * `cmdlineArgs` is here rather than in a separate row because claiming the app
+ * argument (`login`/`logout`/`status`) is this plugin's job, and every launcher
+ * provides that service before the tree mounts - so declaring it cannot park
+ * the row the way a service no deployment provides would.
  *
  * `agentDefaultModel` is required rather than looked up on demand because
  * `ctx.agents` does not apply a default selection itself - every caller reads
@@ -107,22 +130,29 @@ export const Config: z<Config> = z.object({
  * The user sees their message arrive and no reply, so the row waits for the
  * service instead of coming up able to lose every turn.
  */
-export const inject = ['wechatStartup', 'credentials', 'agents', 'commands', 'agentDefaultModel'] as const
+export const inject = ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'] as const
 
 /**
- * Act on the invocation the startup row parsed.
+ * Claim this invocation's app argument and act on it.
  * @param ctx - the plugin's cordis context.
  */
 export function apply(ctx: Context, config: Config): void {
-  const startup = ctx.get(WECHAT_STARTUP_SERVICE) as WechatStartupValues | undefined
-  if (startup === undefined) return
+  // Read once per activation for the validation below, and once per run by the
+  // channel. The start of a run is what the GUI's edit applies to: sessions
+  // record `cwd` when they are created and cannot be moved afterwards.
+  const cwd = config.cwd.get()
 
   // Validated here rather than trusted from the schema, because a profile can
   // supply an absolute-looking value that the session boundary would still
   // reject later, once the failure is far from its cause.
-  if (!isAbsolute(config.cwd)) {
-    throw new Error(`channel-wechat: cwd must be an absolute path, got ${JSON.stringify(config.cwd)}`)
+  if (!isAbsolute(cwd)) {
+    throw new Error(`channel-wechat: cwd must be an absolute path, got ${JSON.stringify(cwd)}`)
   }
+
+  const startup = claimAppArgument(ctx)
+  // Commander handled the invocation itself (`--help`, `--version`) and asked
+  // the launcher to exit, so there is no server to start and no action to run.
+  if (startup === undefined) return
 
   // An ordinary start begins polling as whatever account the login action
   // stored; exiting here would kill the server the user asked for.
@@ -185,6 +215,17 @@ async function mountLoginPanel(ctx: Context, config: Config): Promise<void> {
     // the panel owns that ordering. A start that beat the write would poll as
     // the previous account or as none.
     startChannel: () => startChannel(ctx, config, { force: true }),
+    // The GUI page shows the *stored* login, which the attempt cannot report
+    // before it starts: a page opened after a previous session would otherwise
+    // say "not connected" over a channel that is polling.
+    listAccounts: () => listAccounts(ctx),
+    logout: async () => {
+      // Order matters: stop the live poll first, so nothing is delivered between
+      // forgetting the credentials and the loop noticing. A surviving loop would
+      // keep authenticating with a token that is no longer stored.
+      channelRun(ctx, config).stop()
+      for (const account of await listAccounts(ctx)) await forgetAccount(ctx, account.accountId)
+    },
     onError: (error: unknown) => { reporterFor(ctx)('login panel failed to connect', error) },
   }))
 
@@ -316,7 +357,7 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
   const channelRef: { current: Channel | undefined } = { current: undefined }
   const cards = new CardService({
     context: ctx,
-    shareWithGui: (config.cards ?? 'wechat') === 'both',
+    shareWithGui: config.cards.get() === 'both',
     peerOfSession: sessionId => channelRef.current?.peerOfSession(sessionId),
     send: async (peerId, text) => { await channelRef.current?.sendToPeer(peerId, text) },
     // Finite so an ignored card cannot hold its turn open for the life of the
@@ -359,7 +400,11 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
     // Recorded on every session this run creates. The web app's system prompt
     // reads it through `{{cwd}}`, and a session header cannot be edited later, so
     // a session created without one fails every turn for its whole life.
-    cwd: config.cwd,
+    // Read at the start of this run rather than captured at activation, so a
+    // change made in the GUI applies to the sessions created from here on.
+    // Sessions already created keep the directory they recorded: a session's
+    // `cwd` is immutable, which is why the panel says so.
+    cwd: config.cwd.get(),
     // The profile's preset registry, when it has one. A surface that keeps its
     // model-facing tools behind presets (the web app) leaves a session that
     // mounts none with no tools at all, and the model then emits raw tool-call

@@ -26,12 +26,9 @@
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
+    "./client": "./lib/client.js",
     "./package.json": "./package.json",
-    "./cordis.patch.yml": "./cordis.patch.yml",
-    "./startup": {
-      "types": "./lib/startup.d.ts",
-      "default": "./lib/startup.js"
-    }
+    "./cordis.patch.yml": "./cordis.patch.yml"
   },
   "files": [
     "lib/",
@@ -39,8 +36,8 @@
     "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
-    "build": "tsdown",
-    "prepack": "tsdown",
+    "build": "tsdown && node scripts/copy-client.mjs",
+    "prepack": "tsdown && node scripts/copy-client.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --project unit",
     "test:integration": "vitest run --project integration",
@@ -49,6 +46,12 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
     }
   },
   "peerDependencies": {

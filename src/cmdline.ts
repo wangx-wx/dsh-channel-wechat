@@ -1,10 +1,16 @@
 /**
- * The command-line entry for this channel.
+ * Claiming this channel's app argument from the shared command line.
  *
  * `dsh <profile> login` reaches the profile as an app argument. An argument no
  * plugin claims is ignored silently — the profile boots normally and nothing
- * happens — so this module exists to claim it, and the rows that act on it read
- * the value published here.
+ * happens — so this module exists to claim it, and the channel reads the value
+ * this returns.
+ *
+ * This used to be a separate Loader row (`dsh-channel-wechat/startup`) because
+ * only a row that declares `inject` is handed the launcher's command line. It
+ * is folded into the main row now: `cmdlineArgs` is provided by every launcher
+ * before the tree mounts, so declaring it cannot park the row, and the profile
+ * shows one plugin instead of two.
  *
  * Only a known action word is claimed, and nothing is ever rejected. Every app
  * in a profile receives the same argument list, so arguments belonging to
@@ -12,21 +18,12 @@
  * request a process exit and abort the whole boot. That is not hypothetical —
  * the desktop host's `--no-open --port 19387` crashed it.
  *
- * @module dsh-channel-wechat/startup
+ * @module dsh-channel-wechat/cmdline
  */
 
 import { Command } from 'commander'
 import type { Context } from '@deepseek-ai/cordis'
 import { parseCmdline } from '@deepseek-ai/dsh-cmdline'
-
-/** Stable Cordis plugin name. */
-export const name = 'channel-wechat-startup'
-
-/** The launcher must have supplied the command line before this can run. */
-export const inject = ['cmdlineArgs']
-
-/** Service published here and injected by the rows that act on it. */
-export const WECHAT_STARTUP_SERVICE = 'wechatStartup'
 
 /** What this invocation asked for. */
 export interface WechatStartupValues {
@@ -65,10 +62,22 @@ Examples:
 }
 
 /**
- * Parse and publish this invocation's request as an ordinary Cordis service.
- * @param ctx - plugin context carrying the command line.
+ * Parse and claim this invocation's request.
+ *
+ * Reads through `ctx.get('cmdlineArgs')` rather than a property, because the
+ * value is what the launcher provided and `parseCmdline` owns requesting the
+ * exit on help or a rejected invocation.
+ *
+ * @param ctx - the channel's cordis context, which must carry `cmdlineArgs`.
+ * @returns the claimed action, `{ action: 'none' }` for an ordinary start, or
+ *   `undefined` when commander handled the invocation itself (`--help`,
+ *   `--version`) and asked the launcher to exit. The caller must not start the
+ *   channel in that last case: the old two-row split got this for free, because
+ *   a startup row that never ran published no service for the main row to read.
  */
-export function apply(ctx: Context): void {
+export function claimAppArgument(ctx: Context): WechatStartupValues | undefined {
+  // Set only by the action, which commander runs on a successful parse alone.
+  let startup: WechatStartupValues | undefined
   const program = wechatCommand()
   program.action(() => {
     // The command line is shared: every app in the profile receives the same
@@ -84,11 +93,11 @@ export function apply(ctx: Context): void {
     // which is the lesser cost.
     const action = program.args.find(argument => (ACTIONS as readonly string[]).includes(argument))
     const json = program.opts<{ json?: boolean }>().json === true
-
-    ctx.provide(WECHAT_STARTUP_SERVICE, {
+    startup = {
       action: (action ?? 'none') as WechatStartupValues['action'],
       ...(json ? { json } : {}),
-    } satisfies WechatStartupValues)
+    }
   })
   parseCmdline(ctx, program)
+  return startup
 }

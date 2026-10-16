@@ -14,7 +14,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { isCredentialKeySegment } from '@deepseek-ai/dsh-credentials'
 import CredentialsLocal from '@deepseek-ai/dsh-credentials-local'
 import { afterEach, describe, expect, it } from 'vitest'
-import { listAccounts, loadAccount, saveAccount, WECHAT_CREDENTIAL_SCOPE } from '../../src/credentials.ts'
+import { forgetAccount, listAccounts, loadAccount, saveAccount, WECHAT_CREDENTIAL_SCOPE } from '../../src/credentials.ts'
 
 /** One isolated harness home plus its mounted provider. */
 interface Bench {
@@ -294,5 +294,44 @@ describe('absence', () => {
     const { home } = await mount()
 
     expect(existsSync(join(home, '.credentials.yaml'))).toBe(false)
+  })
+})
+
+describe('forgetting a login', () => {
+  it('removes the account from the store', async () => {
+    // This test exists because the first implementation used the mutator seam
+    // with a callback returning `undefined`, which the contract defines as
+    // "leave the record untouched" rather than "delete it". So `logout` reported
+    // success while the token stayed in the store, and the next ordinary start
+    // polled as the account the user had just signed out of. Nothing in the type
+    // system distinguishes the two, and there was no test here at all.
+    const { ctx } = await mount()
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    expect(await loadAccount(ctx, 'bot-9')).toBeDefined()
+
+    await forgetAccount(ctx, 'bot-9')
+
+    expect(await loadAccount(ctx, 'bot-9')).toBeUndefined()
+    expect(await listAccounts(ctx)).toEqual([])
+  })
+
+  it('leaves other accounts alone', async () => {
+    // One account per key: removing one must not empty the store.
+    const { ctx } = await mount()
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await saveAccount(ctx, { botToken: 'tok-2', accountId: 'bot-8' })
+
+    await forgetAccount(ctx, 'bot-9')
+
+    expect(await loadAccount(ctx, 'bot-9')).toBeUndefined()
+    expect((await loadAccount(ctx, 'bot-8'))?.botToken).toBe('tok-2')
+  })
+
+  it('is a no-op for an account that is not stored', async () => {
+    // Reaching here from a double logout must not throw: the caller is a route
+    // that answers a button, and an absent record is already the desired state.
+    const { ctx } = await mount()
+
+    await expect(forgetAccount(ctx, 'never-seen')).resolves.toBeUndefined()
   })
 })

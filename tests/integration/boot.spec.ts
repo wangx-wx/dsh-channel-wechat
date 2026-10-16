@@ -18,8 +18,18 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { createTestHarness, linkRepoAsBundle, REPO_ROOT, setProfileBundles, type TestHarness } from '../support/harness.ts'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { REPO_ROOT } from '../support/harness.ts'
+
+/** Poll until a condition holds, so a detached action can make progress. */
+async function until(check: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (check()) return
+    await new Promise(resolve => setTimeout(resolve, 20))
+  }
+  throw new Error('condition never held')
+}
 
 /**
  * Cordis FiberState values. The enum is `const`, so it is inlined at compile
@@ -49,7 +59,6 @@ describe('plugin mounts in a real cordis context', () => {
     // absence of a mount order.
     provideCmdline(ctx, { args: [], exit: () => {}, ready: { commit() {}, await: async () => {} } } as never)
     ctx.provide('credentials', {})
-    ctx.provide('wechatStartup', { action: 'none' })
     ctx.provide('agents', {})
     ctx.provide('commands', {})
     // The row also waits on the profile's model selection, because a session
@@ -101,31 +110,46 @@ describe('plugin mounts in a real cordis context', () => {
   })
 })
 
-describe('the startup row activates in a real profile', () => {
-  let harness: TestHarness
-
-  beforeAll(() => {
-    harness = createTestHarness()
-    const packageName = linkRepoAsBundle(harness)
-    setProfileBundles(harness, ['@deepseek-ai/dsh-base', packageName])
-  })
-
-  afterAll(() => harness?.cleanup())
-
-  it('publishes the login request when the app argument says login', async () => {
+describe('the row claims its own app argument', () => {
+  it('acts on `login` instead of starting the server', async () => {
     // Everything above proves the row composed and the module resolves. This
     // proves the launcher's app argument actually reaches it: an unclaimed
     // argument is ignored in silence, so a boot that looks successful is the
-    // failure mode being ruled out.
-    const module = await import('dsh-channel-wechat/startup')
+    // failure mode being ruled out. The claim used to live in its own row and be
+    // published as a service; it is now the main row's own first step, so this
+    // asserts on the effect a login has - an exit request - rather than on a
+    // service value.
+    const module = await import(builtEntry())
     const ctx = new Context()
+    const exits: number[] = []
     provideCmdline(ctx, {
       args: ['login'],
-      exit: () => {},
+      exit: (code: number) => void exits.push(code),
       ready: { commit: () => {}, await: async () => {} },
     } as never)
-    await ctx.plugin({ name: 'channel-wechat-startup', inject: ['cmdlineArgs'], apply: module.apply })
+    ctx.provide('credentials', {})
+    ctx.provide('agents', {})
+    ctx.provide('commands', {})
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
+    })
+    // A wire that fails immediately. The real QR flow polls for up to eight
+    // minutes, so a live network would make this test hang rather than assert;
+    // what is under test is that the row *read the argument at all* and left the
+    // ordinary-start branch, and a failed login still exits - with a non-zero
+    // code, which is the difference between "acted on login" and "started the
+    // server".
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('no wire in this test') }) as unknown as typeof fetch)
+    try {
+      await ctx.plugin(module, { cwd: '/work' })
+      // The action runs detached (it owns process lifetime), so the exit request
+      // arrives after `apply` returns rather than during it.
+      await until(() => exits.length > 0, 5_000)
+    } finally {
+      await ctx.fiber.dispose()
+      vi.unstubAllGlobals()
+    }
 
-    expect(ctx.get(module.WECHAT_STARTUP_SERVICE)).toEqual({ action: 'login' })
-  })
+    expect(exits).toEqual([1])
+  }, 30_000)
 })

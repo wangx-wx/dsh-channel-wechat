@@ -21,6 +21,25 @@ import { renderQrSvg } from '../wechat/qr.ts'
 export interface LoginRoutesOptions {
   /** The attempt the page watches. */
   session: LoginSession
+  /**
+   * Read the stored logins, for a page that has to show one it did not just
+   * create.
+   *
+   * The in-flight attempt knows only about a login made through this page. A
+   * page that opened after a previous session would otherwise report "not
+   * connected" over a working channel - the state a user is most likely to see,
+   * because the boot has usually already connected whatever was stored.
+   *
+   * @returns the stored accounts, most recent first.
+   */
+  listAccounts?: () => Promise<readonly { accountId: string }[]>
+  /**
+   * Forget every stored login and stop polling.
+   *
+   * Absent on a host that cannot do it, in which case the route reports that
+   * rather than pretending to have logged out.
+   */
+  logout?: () => Promise<void>
 }
 
 /** The route set, shaped for `ctx.connection.fetch.register`. */
@@ -35,6 +54,8 @@ export interface LoginRoutes {
   begin: () => Promise<Response>
   /** POST the verify code the phone displayed. */
   verifyCode: (request: Request) => Promise<Response>
+  /** POST to forget the stored login and stop polling. */
+  logout: () => Promise<Response>
 }
 
 /** JSON response that no cache may hold, so a poll always sees fresh state. */
@@ -63,6 +84,11 @@ export function createLoginRoutes(options: LoginRoutesOptions): LoginRoutes {
 
     async status(): Promise<Response> {
       const snapshot = session.snapshot()
+      // Read on every request rather than cached: a logout from another tab must
+      // show up on the next poll, and the store is the authority on what is
+      // connected.
+      const stored = options.listAccounts === undefined ? [] : await options.listAccounts()
+      const account = stored[0]
       // A URL that is absent is left out rather than sent as null: the page
       // shows the image when one is present, and null would read as present.
       return json({
@@ -70,6 +96,9 @@ export function createLoginRoutes(options: LoginRoutesOptions): LoginRoutes {
         ...(snapshot.qrcodeUrl === undefined ? {} : { qrcodeUrl: snapshot.qrcodeUrl }),
         ...(snapshot.message === undefined ? {} : { message: snapshot.message }),
         ...(snapshot.accountId === undefined ? {} : { accountId: snapshot.accountId }),
+        // Who is connected right now, which the attempt itself cannot answer
+        // before it starts. The page shows the login form while this is absent.
+        ...(account === undefined ? {} : { storedAccountId: account.accountId }),
       })
     },
 
@@ -104,6 +133,16 @@ export function createLoginRoutes(options: LoginRoutesOptions): LoginRoutes {
         return json({ error: '验证码为空' }, 400)
       }
       session.submitVerifyCode(code)
+      return json({ phase: session.snapshot().phase })
+    },
+
+    async logout(): Promise<Response> {
+      if (options.logout === undefined) {
+        // A host that cannot forget the login must not answer as though it had:
+        // the page would show "已退出" over a channel that keeps polling.
+        return json({ error: '此部署无法退出登录' }, 501)
+      }
+      await options.logout()
       return json({ phase: session.snapshot().phase })
     },
   }

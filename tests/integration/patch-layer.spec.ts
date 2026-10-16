@@ -6,8 +6,10 @@
  * launcher's composition to pin the row's identity.
  */
 
+import { existsSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { createTestHarness, linkRepoAsBundle, runDsh, setProfileBundles, type TestHarness } from '../support/harness.ts'
+import { createTestHarness, linkRepoAsBundle, REPO_ROOT, runDsh, setProfileBundles, type TestHarness } from '../support/harness.ts'
 
 describe('bundle patch layer', () => {
   let harness: TestHarness
@@ -21,29 +23,43 @@ describe('bundle patch layer', () => {
 
   afterAll(() => harness?.cleanup())
 
-  it('composes both of our rows into the profile tree', () => {
+  it('composes exactly one row for this plugin', () => {
     const result = runDsh(harness, ['--dump-config'])
     expect(result.status, result.stderr.slice(-2000)).toBe(0)
 
-    // Assert the exact (id, name) pairs rather than substrings: a package name
+    // Assert the exact (id, name) pair rather than substrings: a package name
     // like dsh-channel-wechat-TYPO contains the correct one, so a substring
     // check cannot disagree with a broken patch.
     const rows = parseRows(result.stdout)
     expect(rows).toContainEqual({ id: 'channel-wechat', name: packageName })
-    // The startup row is what makes `login` reach us at all; its absence would
-    // leave the app argument silently unclaimed.
-    expect(rows).toContainEqual({ id: 'channel-wechat-startup', name: `${packageName}/startup` })
+    // Exactly one row, which is the user-visible half of folding the startup
+    // row in: two rows showed up as two plugin cards in the GUI. Named
+    // explicitly so a re-introduced second row fails here with its name in the
+    // message rather than as an anonymous count mismatch.
+    expect(rows.filter(row => row.name.startsWith(packageName))).toEqual([
+      { id: 'channel-wechat', name: packageName },
+    ])
   })
 
-  it('resolves the startup subpath the row names', async () => {
-    // The composition only proves the row text; the loader still has to
-    // resolve `dsh-channel-wechat/startup` to a real module. A subpath export
-    // the build never emitted fails here rather than in a user's profile.
-    const startup = await import('dsh-channel-wechat/startup')
+  it('ships a client half the profile can serve', async () => {
+    // The browser half is what puts the login button in the GUI. A manifest that
+    // declares `dsh.client` but exports no `./client` fails the whole client
+    // activation loudly in a user's profile, so the two are pinned to each other
+    // here rather than to a remembered filename.
+    const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')) as {
+      exports?: Record<string, unknown>
+      dsh?: { client?: { platform?: string } }
+    }
+    expect(manifest.dsh?.client?.platform).toBe('web')
 
-    expect(typeof startup.apply).toBe('function')
-    expect(startup.WECHAT_STARTUP_SERVICE).toBe('wechatStartup')
-    expect(startup.inject).toEqual(['cmdlineArgs'])
+    const client = await import(`${packageName}/client`).catch(() => undefined)
+    // The bundle runs in a browser and registers itself on a global the Node
+    // loader does not have; importing it here is impossible. What this asserts
+    // is that the export resolves at all and that the file it names exists,
+    // which is the half a build can silently drop.
+    expect(manifest.exports?.['./client']).toBeTypeOf('string')
+    expect(existsSync(join(REPO_ROOT, String(manifest.exports?.['./client'])))).toBe(true)
+    void client
   })
 
   it('does not merely warn the layer away', () => {
