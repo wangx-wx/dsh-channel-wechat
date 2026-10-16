@@ -88,6 +88,8 @@ interface Probe {
   specs: { field: string; format: (value: unknown) => string; parse: (text: string) => unknown }[]
   /** Every mutation the form issued, with the revision it was fenced by. */
   mutations: { ops: readonly unknown[]; revision: number | undefined }[]
+  /** The component registered on the slot, so a test can drive it directly. */
+  component: ((props: Record<string, unknown>) => unknown) | undefined
 }
 
 /**
@@ -98,7 +100,7 @@ interface Probe {
  */
 function runBundle(options: { value?: Record<string, unknown>; served?: boolean; revision?: number } = {}): Probe {
   const source = readFileSync(join(REPO_ROOT, 'lib/client.js'), 'utf8')
-  const probe: Probe = { id: '', plugin: undefined, registrations: [], locales: [], effects: [], styles: [], specs: [], mutations: [] }
+  const probe: Probe = { id: '', plugin: undefined, registrations: [], locales: [], effects: [], styles: [], specs: [], mutations: [], component: undefined }
 
   // The primitives are stubbed; React is the real thing, so the component tree
   // the page builds is evaluated for real.
@@ -106,6 +108,8 @@ function runBundle(options: { value?: Record<string, unknown>; served?: boolean;
     Button: function Button() { return null },
     Input: function Input() { return null },
     SegmentedControl: function SegmentedControl() { return null },
+    Menu: function Menu() { return null },
+    RiskConfirmation: function RiskConfirmation() { return null },
     SettingsForm: function SettingsForm() { return null },
     SettingsValueField: function SettingsValueField() { return null },
     // The real model is exercised through its observable contract: the spec list
@@ -199,8 +203,9 @@ function runBundle(options: { value?: Record<string, unknown>; served?: boolean;
     // by the real composition, so the stub runs the callback directly.
     slots: {
       inject: (_name: string, register: () => () => void) => register(),
-      register: (options_: Record<string, unknown>) => {
+      register: (options_: Record<string, unknown>, component?: (props: Record<string, unknown>) => unknown) => {
         registrations.push({ name: String(options_['name']), options: options_ })
+        if (component !== undefined) probe.component = component
         return () => {}
       },
     },
@@ -259,10 +264,14 @@ describe.skipIf(!REACT_AVAILABLE)('the browser half as a script', () => {
     expect(probe.registrations[0]?.options['key']).toBe('dsh-channel-wechat')
   })
 
-  it('builds the two editable fields', () => {
+  it('builds every editable field the schema exposes', () => {
+    // The list is the contract between this page and the Config schema: a field
+    // here with no schema entry writes nothing, and a schema entry with no field
+    // is unreachable from the page. Both fail silently, so the set is pinned.
     const probe = runBundle()
 
-    expect(probe.specs.map(spec => spec.field).sort()).toEqual(['cards', 'cwd'])
+    expect(probe.specs.map(spec => spec.field).sort())
+      .toEqual(['cards', 'cwd', 'model', 'permission', 'provider'])
   })
 
   it('rejects a relative working directory before the write', () => {
@@ -290,6 +299,39 @@ describe.skipIf(!REACT_AVAILABLE)('the browser half as a script', () => {
     // A stored value the page does not offer renders as "use default" rather
     // than as a value the user cannot see.
     expect(cards.format('nonsense')).toBe('')
+  })
+
+  it('accepts only the three permission presets, including the widest', () => {
+    // Pinned to the schema's union. A value the page offers but the Host refuses
+    // would fail at save time with the draft already typed.
+    const probe = runBundle()
+    const permission = probe.specs.find(spec => spec.field === 'permission')!
+
+    for (const preset of ['read-only', 'workspace-write', 'danger-full-access']) {
+      expect(permission.parse(preset)).toEqual({ kind: 'set', value: preset })
+    }
+    expect(permission.parse('auto')).toBeUndefined()
+    expect(permission.parse('custom')).toBeUndefined()
+    expect(permission.parse('')).toEqual({ kind: 'clear' })
+    // Empty renders as nothing, so the control falls back to its first segment
+    // rather than showing a value the schema never held.
+    expect(permission.format('')).toBe('')
+  })
+
+  it('trims the model pair and treats an empty half as a reset', () => {
+    // The two fields are set and cleared together by the picker, but each carries
+    // its own draft, so each has to clear on its own empty text.
+    const probe = runBundle()
+    const provider = probe.specs.find(spec => spec.field === 'provider')!
+    const model = probe.specs.find(spec => spec.field === 'model')!
+
+    expect(provider.parse(' p ')).toEqual({ kind: 'set', value: 'p' })
+    expect(model.parse(' m ')).toEqual({ kind: 'set', value: 'm' })
+    expect(provider.parse('   ')).toEqual({ kind: 'clear' })
+    expect(model.parse('')).toEqual({ kind: 'clear' })
+    expect(provider.format('p')).toBe('p')
+    // A non-string renders empty rather than as "undefined" in the control.
+    expect(model.format(undefined)).toBe('')
   })
 
   it('registers its dictionaries and a style tag the loader can remove', () => {
