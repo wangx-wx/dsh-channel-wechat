@@ -123,7 +123,6 @@ CLI 的 `login`/`logout`/`status` 仍然保留，但仅在**不挂 web app** 的
 | [docs/事实核查.md](./docs/事实核查.md) | 协议性质核查与结论修正 |
 | [docs/recon/](./docs/recon/) | **13 份侦察报告**：协议、构建、DSH 契约、同类实现评估 |
 | [docs/dev-log/](./docs/dev-log/) | 开发日志：按时间倒序的决策与变更记录（每版本一份） |
-| [spec/](./spec/) | 规格归档：按日期递增，被推翻的规格在原文打标记 |
 
 ## 里程碑
 

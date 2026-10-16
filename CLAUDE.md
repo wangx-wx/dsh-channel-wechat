@@ -120,10 +120,11 @@ vendor/   内联的 qrcode-generator；MIT 头靠 tsdown 的 banner 保留，见
 1. **提交规范**：完成一个任务、测试通过后**先提交代码**。格式 `type(scope): desc`，
    type 取 `feat` / `fix` / `docs` / `style` / `refactor` / `test` / `chore` / `perf`。
    （历史提交是英文散文式描述，不追溯改写；新提交按此格式。）
-2. **规格归档**：讨论结果归档到 `spec/`，文件名按**日期递增**（`YYYYMMDD-<slug>.md`），
-   内容格式参考 `/to-spec`（Problem Statement / Solution / User Stories / Implementation Decisions /
-   Testing Decisions / Out of Scope / Further Notes）。**前期规格被推翻时，在原文上打标记**（标注 superseded
-   并指向取代它的文件），不要删除。
+2. **需求规格归档**：`spec/` **只放需求规格**（某个需求要做什么、为什么），文件名按**日期递增**
+   （`YYYYMMDD-<slug>.md`），格式参考 `/to-spec`（Problem Statement / Solution / User Stories /
+   Implementation Decisions / Testing Decisions / Out of Scope / Further Notes）。
+   **前期规格被推翻时，在原文上打标记**（标注 superseded 并指向取代它的文件），不要删除。
+   文档与开发规范**不进 `spec/`**——它们是约定，不是需求，写在 `CLAUDE.md` 这一节里。
 3. **开发日志**：归档到 `docs/dev-log/`，**每个版本提交一次**，记录详细的变更记录（含被推翻的判断与实测证据）。
 4. **开发流程**：确定需求 → **从 `origin/main` 切需求分支**（命名 `dev_<需求>_<yyMMdd>`）→ 更新或归档规格 →
    用 `/tdd` 开发并测试 → **每个小功能完成即提交** → 整体完成后**等用户确认**再合入 `main`；
@@ -143,6 +144,7 @@ vendor/   内联的 qrcode-generator；MIT 头靠 tsdown 的 banner 保留，见
 | `docs/design.md` / `docs/事实核查.md` | 早期设计稿与协议性质核查（部分已被 plan-v1 取代） |
 | `docs/protocol/protocol_zh_CN.md` | 腾讯协议文档副本 |
 | `README.md` / `README.en.md` | 用户面：安装、用法、已知问题、不做的事 |
+| `spec/` | **需求规格归档**，按日期递增。开发规范与文档约定不在这里 |
 | `docs/recon/_analysis/` | 第三方源码只读证据，**gitignore，不进仓库** |
 
 ## 已知问题（记录，未修；动手前先读 plan-v1 §Q45）

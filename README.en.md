@@ -150,7 +150,6 @@ The design documents are written in Chinese.
 | [docs/事实核查.md](./docs/事实核查.md) | Protocol fact-checking and corrected conclusions |
 | [docs/recon/](./docs/recon/) | **13 reconnaissance reports**: protocol, build, DSH contracts, comparable implementations |
 | [docs/dev-log/](./docs/dev-log/) | Development log: decisions and changes in reverse chronological order, one per version |
-| [spec/](./spec/) | Archived specs, dated in ascending order; superseded ones are marked in place |
 
 ## Milestones
 
