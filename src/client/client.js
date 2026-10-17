@@ -211,6 +211,36 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Whether `value` names one fixed location, in either spelling the Host
+     * accepts.
+     *
+     * The browser has no `node:path` and cannot know which platform the Host
+     * runs on, so this is the one place the page decides what "absolute" means.
+     * The rule is deliberately the Host's own (`dsh-util-workspace-path`'s
+     * `isAbsoluteWorkspacePath`, `packages/util/workspace-path/src/index.ts`):
+     * POSIX-absolute, a drive-qualified Windows path, or a complete UNC share.
+     *
+     * Two near misses are refused on purpose. `D:dsh-ws` is drive-RELATIVE - it
+     * resolves against that drive's current directory, which is process state.
+     * `\foo` passes `win32.isAbsolute` yet still resolves against the process's
+     * current drive, which is why the Host's own directory picker narrows it out
+     * (`directory-picker-browse`'s `fullyQualified`). Neither is a fixed
+     * location, so neither may be saved as a session's immutable cwd.
+     *
+     * @param value - the trimmed draft.
+     * @returns whether it is an absolute path in one of those spellings.
+     */
+    function isAbsolutePath(value) {
+      if (value.charAt(0) === '/') return true;
+      // `C:\...` or `C:/...` - the separator is required, so `C:` alone and
+      // `C:relative` (drive-relative) both fall through.
+      if (/^[A-Za-z]:[\\/]/.test(value)) return true;
+      // A complete `\\server\share` prefix. `\\` and `\\server` alone are
+      // incomplete and keep resolving against the current drive.
+      return /^\\\\[^\\/]+[\\/][^\\/]+/.test(value);
+    }
+
+    /**
      * A path field, which has to be absolute.
      *
      * The session boundary rejects a relative path, so an unusable draft is
@@ -227,7 +257,7 @@ window.__ModuleLoader__.load({
         parse: function (text) {
           var trimmed = text.trim();
           if (trimmed === '') return { kind: 'clear' };
-          return trimmed.charAt(0) === '/' ? { kind: 'set', value: trimmed } : undefined;
+          return isAbsolutePath(trimmed) ? { kind: 'set', value: trimmed } : undefined;
         },
       };
     }
