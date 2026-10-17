@@ -25,6 +25,24 @@ dsh plugin --profile <your-profile> add dsh-channel-wechat
 Then **restart DSH**. That is all — `add` builds it and registers the package in
 the profile's `bundles` layer.
 
+> **To get a just-published version, turn the observation window off explicitly.**
+> pnpm applies a supply-chain observation window (`minimumReleaseAge`, 24 hours by
+> default), so a version published minutes ago is **skipped** and you get the
+> previous one. Note that **`@latest` does not help**: the check runs after
+> version resolution, and `add pkg@latest` was measured to install the same old
+> version as `add pkg`. Use:
+>
+> ```bash
+> dsh plugin --profile <your-profile> add dsh-channel-wechat@latest --config.minimumReleaseAge=0
+> ```
+>
+> Measured on both pnpm 11.7.0 and 11.9.0: with the flag it installs the newest
+> (`0.1.3`), without it `0.1.1`. The flag works without `@latest` too. **The cost**
+> is that the version ships without an observation period — your call.
+>
+> **Restart fully after installing**, see the static module graph entry under
+> Known issues below.
+
 ### Using it
 
 1. Open the GUI, go to **Plugins** in the sidebar, and open the
@@ -220,8 +238,46 @@ only moves to a different session directory, so old conversations accumulate
 |---|---|---|
 | Quoting **your own message**: the client sends only `svr_id` | Shows `[引用] （引用的消息内容未能读取）`; quoting an agent message works | Needs a message cache before it can be restored |
 | `message_id` is typed `number` but the server sends a uint64 | Affects one number in one error log line | Above 2^53, and once a quote cache exists |
+| **No restart after install means no configuration section** | The login and configuration panel is missing entirely, **with no error anywhere** | The Host starts before the package lands on disk — the normal case for an install from the Plugins page |
 
 Tradeoffs and measurements: [plan-v1 §Q45](./docs/plan-v1.md).
+
+### In detail: installing requires a restart
+
+**Symptom.** The plugin is installed and the host half is entirely healthy
+(`/api/channel-wechat/status` answers 200, the log has the sign-in line, the
+`dsh-channel-wechat` card and its version are shown) — but **the configuration
+section on the plugin's page never appears**: no sign-in or QR, no `cwd`, model
+or permission. Nothing is logged or thrown.
+
+**This is not a defect in this plugin, and the version does not matter.** The
+cause is the host package `@deepseek-ai/dsh-client-modules`:
+
+- It composes each plugin's browser half (`lib/client.js`) into the boot graph.
+  Only when a package is in that graph does the browser run
+  `ctx.slots.register('plugins.bundle.config', …)` and render the section.
+- Its package-resolution result is **cached permanently**: a failure is recorded
+  as `null` and never invalidated until the process restarts.
+- So whenever **the package is absent from `node_modules` at the moment the Host
+  starts**, that row can never enter the graph:
+  `/plugins/??dsh-channel-wechat/client.js` answers 404 forever and the section
+  stays empty.
+
+That window is **the normal case for an install from the Plugins page** — the
+Host is already running when pnpm writes the package. Installing 0.1.1 or 0.1.3
+makes no difference, because the staleness is fixed at the first resolution, not
+by the version installed later.
+
+**How to tell.** Rule out "the page just needs a reload" first — **quit DSH
+completely and start it again**. If the section appears, this was it; if not,
+something else is going on.
+
+**Why this is recorded rather than fixed.** The fix belongs to the host's
+`dsh-client-modules` (its negative cache must be invalidatable), not to this
+repository. This plugin can only document the workaround.
+
+The workaround is one line: **after installing or upgrading a plugin, quit DSH
+completely and reopen it.**
 
 ### Known boundary: WeChat can widen its own permission
 
