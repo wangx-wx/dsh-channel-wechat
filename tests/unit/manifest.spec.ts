@@ -59,12 +59,13 @@ const shipped = (path: string): boolean => {
  * is not asserted here — claiming support we never exercised is how a plugin
  * comes to break on a version nobody tried.
  */
-const RUNTIME_VERSIONS = ['0.2.0-rc.2', '0.2.1-rc.1']
+const RUNTIME_VERSIONS = ['0.2.0-rc.2', '0.2.1-rc.1', '0.2.1-rc.2']
 
 /** How each {@link RUNTIME_VERSIONS} entry was measured, and what a run must show. */
 const RUNTIME_EVIDENCE: Record<string, { launcher: string; skipped: number }> = {
   '0.2.0-rc.2': { launcher: 'the packaged DeepSeek Harness.app', skipped: 0 },
   '0.2.1-rc.1': { launcher: 'npm @deepseek-ai/dsh@0.2.1-rc.1, checkout-shaped', skipped: 0 },
+  '0.2.1-rc.2': { launcher: 'the packaged DeepSeek Harness.app', skipped: 0 },
 }
 
 /** Every source file that ends up in the published bundle. */
