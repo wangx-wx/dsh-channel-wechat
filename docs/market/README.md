@@ -5,6 +5,7 @@
 
 - **索引 URL**：`https://wangx-wx.github.io/dsh-channel-wechat/market/index.json`
 - **托管**：GitHub Pages，源目录选仓库的 `/docs`，于是 `docs/market/index.json` 就是上面的地址。
+  `docs/.nojekyll` 让 Pages 跳过 Jekyll 处理（否则以下划线开头的路径会被吞掉）。
 - **内容**：只有 `dsh-channel-wechat` 一个插件，版本列表来自 npm 注册表。
 
 ## 为什么要自己发一份
