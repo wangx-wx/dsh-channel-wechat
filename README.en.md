@@ -5,7 +5,8 @@ English | [中文](./README.md)
 A **channel plugin** that connects WeChat (Tencent iLink / ClawBot) to
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
 
-> Status: **v0.1.3, published to npm**. Signing in and configuring happen on
+> Status: **v0.1.3, published to npm** (0.2.x from the next release; see
+> Versions and compatibility below). Signing in and configuring happen on
 > the plugin's page in the GUI, and the plugin takes one row in a profile. That
 > page also picks the **default model** and the **WeChat session permission**
 > (three presets, the widest behind a risk confirmation, all scoped to WeChat
@@ -13,6 +14,28 @@ A **channel plugin** that connects WeChat (Tencent iLink / ClawBot) to
 > Outbound files are **verified on a real device**; the `svr_id` quote shape and
 > `message_id` precision are **recorded known issues** (see
 > [plan-v1 §Q45](./docs/plan-v1.md)).
+
+### Versions and compatibility
+
+A plugin version is **`<DSH major>.<DSH minor>.<our own patch>`** (no `rc` or
+`alpha`): `0.2.x` pairs with the DSH `0.2` generation, `0.3.y` with `0.3`. **The
+patch number is entirely ours** — when DSH ships `0.2.2` we do not renumber;
+only a change of our own bumps it.
+
+**Whether an install is allowed is decided by the `engines.dsh` floor**,
+`>=0.2.0-rc.1`. There is deliberately **no upper bound**:
+
+| DSH version | Installable | Verified |
+|---|---|---|
+| `0.2.0-rc.2` (packaged desktop app) | ✅ | ✅ 84 integration tests |
+| `0.2.1-rc.1` (local checkout) | ✅ | ✅ 99 integration tests |
+| other `0.2.x` / `0.3.x` / `1.x` | ✅ | ⚠️ not individually measured |
+| older than `0.2.0-rc.1` | ⛔ refused at install with the reason | — |
+
+**"Installable" and "verified" are different claims.** The ceiling is left open
+because a ceiling would block every user as soon as DSH ships a new release and
+this plugin has not republished — for a channel plugin, being immediately
+unusable is worse than running on an unmeasured version.
 
 ---
 

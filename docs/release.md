@@ -54,12 +54,74 @@ pnpm typecheck
 node -p "require('./package.json').version"
 ```
 
-**版本号规则**：npm **不允许重复发布同一版本号**。改动无论大小，
-发布前都要 `npm version patch|minor|major` 递增并提交。
+## 版本号规则：主次跟随 DSH，补丁号全归我们
+
+**`<DSH 主>.<DSH 次>.<我们的补丁号>`，不带 `rc`/`alpha` 等预发布标记。**
+
+| 场景 | 版本号动作 |
+|---|---|
+| 修 bug / 加功能，DSH 主次版本不变 | **补丁号 +1**：`0.2.1` → `0.2.2` |
+| DSH 发了新的次版本（0.2.x → 0.3.0） | 主次跟随、补丁归零：→ `0.3.0` |
+| DSH 发了新的主版本 | 同上：→ `1.0.0` |
+
+关键一条：**`0.2.x` 里的 `x` 完全归我们，不追 DSH 的补丁号。**
+DSH 发 `0.2.2` 时我们**不跟着改号**，仍是 `0.2.x`；只有我们自己有改动才 +1。
+
+- 同一个 DSH 次版本下会有 `0.2.1`、`0.2.2`、`0.2.3`… 各自对应本插件的第 1、2、3 次改动。
+- 看到 `0.2.y` 就知道「配 DSH 0.2 那一代」；看到 `0.3.z` 就知道「配 DSH 0.3 那一代」。
+- **不追 DSH 的预发布号**。DSH 的 `0.2.1-rc.1`、`0.2.1-alpha.5` 对我们都属于「0.2 那一代」。
+  理由：DSH 大约 1–5 天一个预发布版，跟着编号会产出大量**内容为空**的版本。
+
+> **为什么不用四段号**（`0.2.1.1`）：那不是合法 semver，`npm publish` 直接拒绝。
+> 实测：`0.2.1.1` 非法；`0.2.1-1` 合法但属**预发布**（npm 不会更新 `latest` tag，用户装不到）；
+> `0.2.1+1` 合法但 build metadata **不参与排序**，等于没加。三个数位装不下四组信息，只能取其一。
+
+### 兼容下界由 `engines.dsh` 声明，不靠版本号猜
+
+`package.json` 里：
+
+```json
+"engines": { "dsh": ">=0.2.0-rc.1" }
+```
+
+DSH 一旦看到 `engines.dsh`，就**只用它判定兼容性**，`@deepseek-ai/dsh-*` 的 peer 范围**不再参与**
+（`packages/boot/app-boot/src/plugin-compatibility.ts:77-80`）。不满足时安装与激活会被拦下并给出原因。
+
+**刻意不写上界。** 加了天花板（例如 `<0.3.0-0`）意味着 DSH 每发一个新次版本、本插件没重发之前，
+用户就**装不上**。对一个通道插件来说，这比「在未实测版本上运行」更糟——不能用是立刻的，
+而契约风险只在某些调用上。所以这里只声明**下界**，上界交给「真跑过才敢说支持」的文档。
+
+写法上有一个坑，是实测出来的，**不要"简化"成 `^0.2.0`**：
+
+| 写法 | 问题 |
+|---|---|
+| `^0.2.0` | **不包含 `0.2.0-rc.2`**。caret 挂在 release 上会排除同号预发布版，而 `0.2.0-rc.2` 正是打包的桌面端版本。 |
+
+该下界经 `evaluatePluginCompatibility()` 实测：
+
+```
+0.1.7-rc.2     REFUSED         ← 早于下界，它没有本插件调用的那些 API
+0.2.0-rc.1     COMPATIBLE
+0.2.0-rc.2     COMPATIBLE      ← 打包桌面端，集成测试 84 项通过
+0.2.1-rc.1     COMPATIBLE      ← 本地 checkout，集成测试 99 项通过
+0.3.0-rc.1     COMPATIBLE      ← 未实测，放行
+1.0.0          COMPATIBLE      ← 未实测，放行
+```
+
+**"能装"与"已验证"是两件事。** `tests/unit/manifest.spec.ts` 的 `RUNTIME_VERSIONS` 才是已验证清单：
+目前 `0.2.0-rc.2` 与 `0.2.1-rc.1`。新增前先拿真实 launcher 跑一遍：
 
 ```bash
-# 例如升到 0.1.1（会改 package.json 并打 git tag）
-npm version patch -m "Release %s"
+DSH_CHECKOUT=<该版本的 checkout 或 app> pnpm test:integration
+```
+
+### 递增用 `npm version`
+
+npm **不允许重复发布同一版本号**，改动无论大小都要递增并提交：
+
+```bash
+npm version patch -m "Release %s"    # 补丁号 +1（最常用）
+npm version minor -m "Release %s"    # 跟随 DSH 新的次版本
 ```
 
 **先干跑一遍，看清会发出去什么**（`prepack` 会自动构建，所以 `lib/` 必然在内）：
@@ -184,7 +246,7 @@ npm config set registry https://registry.npmmirror.com
 ```
 $ dsh plugin --profile desktop add dsh-channel-wechat
 dependencies:
-+ dsh-channel-wechat ^0.1.0
++ dsh-channel-wechat ^0.1.8
 Packages: +5
 reused 5, downloaded 0        ← 一个包都没下载
 ```
@@ -194,14 +256,20 @@ reused 5, downloaded 0        ← 一个包都没下载
 ```bash
 # 必须先完全退出桌面端（profile 被 Electron 独占）
 dsh plugin --profile desktop remove dsh-channel-wechat
-dsh plugin --profile desktop add dsh-channel-wechat@0.1.1
+dsh plugin --profile desktop add dsh-channel-wechat@0.2.1
 ```
 
 | 要点 | 原因 |
 |---|---|
 | **写 `@<版本>`** | 只写包名 → 已被现有范围满足 → **什么都不做**（还报成功） |
 | **先 `remove`** | 清掉旧 `dependencies` 与它带进 profile 的实体依赖；否则可能与新版本共存 |
-| **GUI 装不了特定版本** | 安装框只接受包名，写不了 `@0.1.1`；要精确版本走命令行 |
+| **GUI 装不了特定版本** | 安装框只接受包名，写不了 `@0.2.1`；要精确版本走命令行 |
+| **窗口外的版本会被拒** | 目标版本的 `engines.dsh` 不含当前运行时 → 安装被拦并给出原因，这是预期行为，不是 bug |
+
+**跨次版本升级（如 `0.1.3` → `0.2.1`）要额外提醒用户**：`0.1.x` 与 `0.2.x` 的
+profile 依赖写法相同，但按 npm 语义 0.x 的主次跳变属 breaking。同时旧版本**不带
+`engines.dsh`**（走 peer 回退），新版本**带**，所以兼容性判定口径会变——升级说明里
+要写清「先 remove 再装」和「装完重启」两件事。
 
 **装完自查两项**（第二项是历史上出过真实故障的地方）：
 

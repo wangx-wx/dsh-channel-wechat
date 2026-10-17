@@ -20,13 +20,22 @@ const manifest = JSON.parse(readFileSync(new URL('../../package.json', import.me
   exports?: Record<string, unknown>
   files?: string[]
   scripts?: Record<string, string>
+  engines?: Record<string, string>
   peerDependencies?: Record<string, string>
   dependencies?: Record<string, string>
   dsh?: { bundle?: { patch?: string | string[] }; client?: { platform?: string; inject?: string[] } }
 }
 
-/** The dsh runtime versions a released plugin must stay installable under. */
-const RUNTIME_VERSIONS = ['0.2.0-rc.1', '0.2.0-rc.2']
+/**
+ * The dsh runtime versions a released plugin must stay installable under.
+ *
+ * Exactly the two that were measured against a real launcher: `0.2.0-rc.2`
+ * (the packaged desktop app) and `0.2.1-rc.1` (the checkout). The rest of
+ * 0.2.x satisfies the declared range but has not been run, so it is not
+ * asserted here — claiming support we never exercised is how a plugin comes
+ * to break on a version nobody tried.
+ */
+const RUNTIME_VERSIONS = ['0.2.0-rc.2', '0.2.1-rc.1']
 
 /** Every source file that ends up in the published bundle. */
 function sourceFiles(dir: URL): URL[] {
@@ -89,6 +98,41 @@ describe('package manifest', () => {
         expect(semver.satisfies(runtime, range, { includePrerelease: true }), `${name} ${range} vs ${runtime}`).toBe(true)
       }
     }
+  })
+
+  it('declares the dsh compatibility floor and keeps every measured runtime above it', () => {
+    // `engines.dsh` decides alone once present: dsh ignores the dsh peers and
+    // evaluates this range with includePrerelease. So this one string, not the
+    // peer ranges, is what admits or refuses the install.
+    //
+    // There is deliberately NO upper bound. A ceiling would refuse every future
+    // DSH release until this plugin republished, which for a channel plugin is a
+    // worse failure than an untested runtime: the user's WeChat keeps working on
+    // versions whose contracts this plugin does not use. The floor is what
+    // actually matters, and it is spelled `>=0.2.0-rc.1` rather than `^0.2.0`
+    // because a caret on the release excludes `0.2.0-rc.2` - the packaged
+    // desktop app this plugin was verified against.
+    const range = manifest.engines?.['dsh']
+    expect(range).toBe('>=0.2.0-rc.1')
+    for (const runtime of RUNTIME_VERSIONS) {
+      expect(semver.satisfies(runtime, range!, { includePrerelease: true }), `engines.dsh ${range} vs ${runtime}`).toBe(true)
+    }
+  })
+
+  it('pins the compatibility floor and deliberately leaves the ceiling open', () => {
+    // Both edges are asserted so a change to either is visible in review. The
+    // floor is the oldest runtime measured against a real launcher; runtimes
+    // below it predate APIs this plugin calls, so they must be refused.
+    const range = manifest.engines?.['dsh']
+    if (range === undefined) throw new Error('engines.dsh is required')
+    expect(semver.satisfies('0.2.0-rc.2', range, { includePrerelease: true })).toBe(true)
+    expect(semver.satisfies('0.2.1-rc.1', range, { includePrerelease: true })).toBe(true)
+    expect(semver.satisfies('0.1.7-rc.2', range, { includePrerelease: true })).toBe(false)
+    // No ceiling: a future minor, a future major, and their prereleases are all
+    // admitted rather than blocked until this package republishes.
+    expect(semver.satisfies('0.3.0-rc.1', range, { includePrerelease: true })).toBe(true)
+    expect(semver.satisfies('0.3.0', range, { includePrerelease: true })).toBe(true)
+    expect(semver.satisfies('1.0.0', range, { includePrerelease: true })).toBe(true)
   })
 
   it('exposes a root export the loader can import', () => {
