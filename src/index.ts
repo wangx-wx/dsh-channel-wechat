@@ -360,19 +360,31 @@ function channelRun(ctx: Context, config: Config): SingleRun {
     // The rejection is absorbed here rather than left to the caller: the launch
     // is detached because the loop runs until shutdown, so an unhandled
     // rejection would surface as a process-level warning instead of a log line.
-    launch: signal => {
-      void runChannel(ctx, config, signal).catch((error: unknown) => {
-        reporterFor(ctx)('channel stopped', error)
-      })
-    },
+    //
+    // The promise is *returned* as well as detached. `SingleRun` needs it to wait
+    // for this run's teardown before starting a replacement - and a replacement
+    // is exactly what a save from the plugin page causes, because every config
+    // field is volatile and a volatile-only change re-runs `apply` without
+    // unloading the row.
+    launch: signal => runChannel(ctx, config, signal).catch((error: unknown) => {
+      reporterFor(ctx)('channel stopped', error)
+    }),
     onError: (error: unknown) => { reporterFor(ctx)('channel failed to start', error) },
   })
   runs.set(ctx, run)
   // Unloading the plugin ends the poll instead of leaving it running against a
   // dead context.
+  //
+  // The disposer returns the stop's promise rather than dropping it. A volatile
+  // config change does not unload this row - it disposes and re-runs `apply` -
+  // so the plugin's own teardown is what stands between the old run and its
+  // replacement. Cordis awaits an async disposer (measured), and without this
+  // await the two runs overlapped: the second found the peer's session already
+  // live under the first, delivered into a handle it did not own, and the user's
+  // next message went unanswered.
   ctx.effect(() => () => {
-    run.stop()
     runs.delete(ctx)
+    return run.stop()
   })
   return run
 }

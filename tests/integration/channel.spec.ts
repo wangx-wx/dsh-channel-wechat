@@ -1050,8 +1050,17 @@ describe('a profile boot with the login action', () => {
     await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
       await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
 
+    // Read before disposal on purpose: `dispose` now waits for the channel's
+    // teardown, which releases every session it owns, so `live` is empty by the
+    // time the test ends. Comparing against a map read afterwards would compare
+    // the forwarding against the teardown rather than against what was live when
+    // the command ran.
+    let forwardedTo: unknown
+    let liveForGeneration: unknown
     try {
       await until(async () => forwarded.length > 0, 3_000)
+      forwardedTo = forwarded[0]
+      liveForGeneration = live.get('channel-wechat-user-7~g1')
     } finally {
       await ctx.fiber.dispose()
       if (previous === undefined) delete process.env['DSH_HOME']
@@ -1060,7 +1069,8 @@ describe('a profile boot with the login action', () => {
 
     // The agent must be the live one for this peer's *current* conversation, not
     // a lookup that missed it.
-    expect(forwarded).toEqual([live.get('channel-wechat-user-7~g1')])
+    expect(forwardedTo).toBe(liveForGeneration)
+    expect(liveForGeneration).toBeDefined()
   }, 30_000)
 
   it('resumes a session a previous run left behind instead of recreating it', async () => {

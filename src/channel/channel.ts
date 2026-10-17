@@ -74,6 +74,16 @@ export interface ChannelOptions {
   pollTimeoutMs?: number
   /** Hard limit on one run. */
   maxRunMs?: number
+  /**
+   * Ends the run when it aborts.
+   *
+   * The run owner (`SingleRun`) aborts this to replace or stop a run, and a
+   * `Channel` that ignored it kept polling: `stop()` was never reached because
+   * `run()` never resolved, so a replacement overlapped the run it replaced.
+   * A `Channel` with no signal is stopped through {@link Channel.stop} alone,
+   * which is what the tests that build one directly rely on.
+   */
+  signal?: AbortSignal
   /** Observe a reply that exhausted its attempts. */
   onReplyError?: (error: unknown, peerId: string, text: string) => void
   /** Observe a handler failure; the loop continues either way. */
@@ -235,6 +245,15 @@ export class Channel {
     if (this.running !== undefined) return this.running
     const controller = new AbortController()
     this.controller = controller
+    // Two ways to end this run, one loop: the owner's signal, and `stop()`.
+    // Forwarding the owner's abort into the local controller is what makes the
+    // two agree - without it the loop only ever watched its own controller,
+    // which nothing outside this class can reach.
+    const outer = this.options.signal
+    if (outer !== undefined) {
+      if (outer.aborted) controller.abort()
+      else outer.addEventListener('abort', () => controller.abort(), { once: true })
+    }
     this.running = monitorLoop({
       initialCursor: this.options.initialCursor,
       poll: this.options.poll,

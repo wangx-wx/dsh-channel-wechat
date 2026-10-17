@@ -63,6 +63,7 @@ dsh plugin --profile <你的 profile> add dsh-channel-wechat
 4. 之后直接在微信里给这个 bot 发消息即可，DSH 的回复会回到微信
 
 同一个页面下方就是本插件的设置（`cwd` / `cards`），改完点保存即可生效，不必再手改 YAML。
+保存时通道会**先停掉旧的轮询、再开新的**，所以改完立刻发消息就能收到回复，不需要重启 DSH。
 
 > 没有 GUI（headless 之类不挂 web app 的 profile）时，仍可用 `dsh <profile> login` 在终端
 > 打印二维码。注意：**挂了 web app 的 profile（web / desktop）上这条命令用不了**——web app

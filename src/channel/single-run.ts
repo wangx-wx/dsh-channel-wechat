@@ -18,13 +18,18 @@ export interface SingleRun {
   /**
    * Start a run, or refuse when one is already live.
    * @param options - `force` ends the live run and replaces it.
-   * @returns when the run has been launched, not when it finishes.
+   * @returns when the run has been launched, not when it finishes. A `force`
+   *   replaces only after the previous run's teardown has completed.
    */
-  start: (options?: { force?: boolean }) => void
+  start: (options?: { force?: boolean }) => Promise<void>
   /** Whether a run is currently live. */
   live: () => boolean
-  /** End the live run, if there is one. */
-  stop: () => void
+  /**
+   * End the live run, if there is one.
+   * @returns when the run's own teardown has finished, not merely when it was
+   *   told to stop.
+   */
+  stop: () => Promise<void>
 }
 
 /** What a run needs from its owner. */
@@ -32,8 +37,10 @@ export interface SingleRunOptions {
   /**
    * Launch the run.
    * @param signal - aborted when this run is replaced or stopped.
+   * @returns a promise for the run's own lifetime, so a stop can wait for its
+   *   teardown instead of racing it. Absent for callers that cannot report it.
    */
-  launch: (signal: AbortSignal) => void
+  launch: (signal: AbortSignal) => void | Promise<void>
   /** Observe a launch failure, which must not end the whole plugin. */
   onError?: (error: unknown) => void
 }
@@ -45,24 +52,37 @@ export interface SingleRunOptions {
  */
 export function createSingleRun(options: SingleRunOptions): SingleRun {
   let current: AbortController | undefined
+  /**
+   * The live run's own settlement.
+   *
+   * Kept beside the controller because aborting is not stopping: the loop still
+   * has to notice the signal, drain its queue and release every session it
+   * owns. A replacement that started on the abort alone would overlap the run
+   * it replaced - two loops over one account, two writers of one cursor, and a
+   * session created by one whose handle only the other can see.
+   */
+  let settled: Promise<void> | undefined
 
   return {
-    start({ force = false } = {}): void {
+    async start({ force = false } = {}): Promise<void> {
       if (current !== undefined) {
         // Refusing is the default because two loops over one account duplicate
         // every message; replacing is opt-in because only the caller knows
         // whether it is connecting an account the live run never saw.
         if (!force) return
-        current.abort()
+        await this.stop()
       }
       const controller = new AbortController()
       current = controller
       try {
-        options.launch(controller.signal)
+        const launched = options.launch(controller.signal)
+        settled = launched === undefined
+          ? undefined
+          : Promise.resolve(launched).catch((error: unknown) => { options.onError?.(error) })
       } catch (error) {
         // A launch that throws must not leave the run marked live, or no later
         // start could ever succeed.
-        if (current === controller) current = undefined
+        if (current === controller) { current = undefined; settled = undefined }
         options.onError?.(error)
       }
     },
@@ -71,9 +91,15 @@ export function createSingleRun(options: SingleRunOptions): SingleRun {
       return current !== undefined
     },
 
-    stop(): void {
+    async stop(): Promise<void> {
       current?.abort()
       current = undefined
+      // Awaited rather than fired and forgotten: the caller is usually about to
+      // start its replacement, and an overlap is the defect this type exists to
+      // prevent.
+      const running = settled
+      settled = undefined
+      await running
     },
   }
 }

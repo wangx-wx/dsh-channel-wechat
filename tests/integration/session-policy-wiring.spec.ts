@@ -111,6 +111,17 @@ interface World {
   readonly sent: { peerId: string; text: string }[]
   /** Polls the wire has answered, so a test can wait for delivery to have happened. */
   polls: () => number
+  /**
+   * Apply a config change the way the GUI does.
+   *
+   * `cwd` and every other field here are `volatile`, and a volatile-only change
+   * is committed in place by the Loader - which is what makes this the exact
+   * path a save from the plugin page takes. Driving `update()` is therefore
+   * closer to the defect than writing the patch file and rebooting.
+   */
+  reconfigure: (next: Record<string, unknown>) => Promise<void>
+  /** Hand the wire one more batch of messages on its next poll. */
+  deliver: (msgs: readonly unknown[]) => void
 }
 
 /**
@@ -150,6 +161,10 @@ async function boot(
   const messages = options.messages ?? [INBOUND]
   const sent: { peerId: string; text: string }[] = []
   let polls = 0
+  // The message the wire hands over on its next poll, consumed once and then
+  // reset. A reconfigure test needs to inject a second message *after* the
+  // remount, which is the situation the defect reports.
+  let pending: readonly unknown[] | undefined
 
   // The record key must be one `listAccounts` accepts, or the channel finds no
   // account and never starts polling - a failure that looks like "the plugin did
@@ -181,7 +196,10 @@ async function boot(
     const url = String(input)
     if (url.includes('getupdates')) {
       polls += 1
-      const body = { ret: 0, get_updates_buf: `c${String(polls)}`, msgs: polls === 1 ? messages : [] }
+      let msgs: readonly unknown[] = []
+      if (pending !== undefined) { msgs = pending; pending = undefined }
+      else if (polls === 1) msgs = messages
+      const body = { ret: 0, get_updates_buf: `c${String(polls)}`, msgs }
       return new Response(JSON.stringify(body), { status: 200 })
     }
     if (url.includes('sendmessage')) {
@@ -204,7 +222,17 @@ async function boot(
   const fiber = ctx.plugin(module, { cwd: '/work', ...config })
   await fiber
 
-  return { ctx, calls: adapter.calls, permissionCalls, sent, polls: () => polls }
+  return {
+    ctx,
+    calls: adapter.calls,
+    permissionCalls,
+    sent,
+    polls: () => polls,
+    reconfigure: async next => {
+      await (fiber as never as { update: (config: unknown) => Promise<void> }).update({ cwd: '/work', ...config, ...next })
+    },
+    deliver: (msgs: readonly unknown[]) => { pending = msgs },
+  }
 }
 
 /** Wait until a condition holds, so a detached run can make progress. */
@@ -281,4 +309,34 @@ describe('the permission preset this channel configures', () => {
 
     expect(world.permissionCalls).toEqual([])
   })
+})
+
+describe('saving the page while the channel is running', () => {
+  it('still answers the next message after a working directory change', async () => {
+    // The reported defect. `cwd` is volatile, so saving it is a volatile-only
+    // config change - which the Loader applies *without* tearing the plugin
+    // down: it commits the new value and re-runs `apply` for nothing else. What
+    // the user sees is t1 set a directory, t2 works, t3 change the directory,
+    // t4 silence.
+    //
+    // Silence, not an error, because the old run is still polling: it holds the
+    // account's cursor and a live session for the peer, so the *new* run finds
+    // both already taken. The message is polled, delivered to a session whose
+    // handle the new run does not own, and nothing comes back.
+    const world = await boot({})
+    await until(() => world.sent.length > 0)
+
+    await world.reconfigure({ cwd: '/elsewhere' })
+    // Let the remount settle, then send the message that used to go unanswered.
+    await new Promise(resolve => setTimeout(resolve, 300))
+    world.deliver([{ ...INBOUND, message_id: 2, item_list: [{ type: 1, text_item: { text: 'after save' } }] }])
+
+    await until(() => world.sent.length > 1, 8_000)
+
+    expect(world.sent[1]?.text).toBe('ok')
+    // Exactly one peer from the replacement's point of view, and exactly one
+    // live session under the peer's id. Two would mean the old run still owned
+    // one while the new run created another.
+    expect(world.ctx.agents.get('channel-wechat-user-7' as never)).toBeDefined()
+  }, 30_000)
 })

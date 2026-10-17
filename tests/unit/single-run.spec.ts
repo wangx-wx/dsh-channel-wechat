@@ -35,20 +35,51 @@ describe('one polling run at a time', () => {
     expect(launch).toHaveBeenCalledOnce()
   })
 
-  it('ends the live run before replacing it when forced', () => {
+  it('ends the live run before replacing it when forced', async () => {
     // The panel's case: the account it just connected is not the one the boot
     // started with, so the old loop has to stop rather than keep polling an
     // account that was replaced.
     const signals: AbortSignal[] = []
-    const run = createSingleRun({ launch: signal => signals.push(signal) })
+    const run = createSingleRun({ launch: signal => { signals.push(signal) } })
 
-    run.start()
+    await run.start()
     const first = signals[0]
-    run.start({ force: true })
+    await run.start({ force: true })
 
     expect(signals).toHaveLength(2)
     expect(first?.aborted).toBe(true)
     expect(signals[1]?.aborted).toBe(false)
+  })
+
+  it('waits for the previous run to settle before starting its replacement', async () => {
+    // Aborting is not stopping. A replacement that began on the abort alone
+    // polled alongside the run it replaced: two loops over one account, two
+    // writers of one cursor, and a session created by one whose handle only the
+    // other could see - which the user experiences as "my message got no reply".
+    const order: string[] = []
+    let finishFirst: () => void = () => {}
+    const run = createSingleRun({
+      launch: async signal => {
+        const index = order.filter(entry => entry.startsWith('launch')).length
+        order.push(`launch${String(index + 1)}`)
+        if (index > 0) return
+        signal.addEventListener('abort', () => { order.push('aborted1') }, { once: true })
+        await new Promise<void>(resolve => { finishFirst = resolve })
+        order.push('settled1')
+      },
+    })
+
+    await run.start()
+    const replacing = run.start({ force: true })
+
+    // Still the first run's teardown: nothing of the second has begun.
+    await Promise.resolve()
+    expect(order).toEqual(['launch1', 'aborted1'])
+
+    finishFirst()
+    await replacing
+
+    expect(order).toEqual(['launch1', 'aborted1', 'settled1', 'launch2'])
   })
 
   it('allows a new run after the previous one was stopped', () => {
