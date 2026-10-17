@@ -1,0 +1,335 @@
+/*
+  dsh-channel-wechat 站点共用样式。
+
+  站点由 GitHub Pages 从 /docs 发布在 /dsh-channel-wechat/ 子路径下，
+  所以引用本文件一律用相对路径：<link rel="stylesheet" href="assets/site.css">。
+  写成 /assets/site.css 会指到 wangx-wx.github.io 根上并 404。
+*/
+
+:root {
+  --green: #07C160;
+  --green-dark: #06A350;
+  --ink: #0F172A;
+  --muted: #5A6B7B;
+  --line: #E3E9EE;
+  --bg: #FFFFFF;
+  --soft: #F5F8FA;
+  --code-bg: #0F172A;
+  --radius: 14px;
+  --max: 960px;
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+               "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-size: 16px;
+  line-height: 1.75;
+}
+
+a { color: var(--green-dark); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.wrap { max-width: var(--max); margin: 0 auto; padding: 0 24px; }
+
+/* ---------- hero ---------- */
+
+.hero {
+  text-align: center;
+  padding: 72px 24px 56px;
+  background: linear-gradient(180deg, #F3FBF7 0%, #FFFFFF 100%);
+  border-bottom: 1px solid var(--line);
+}
+
+.logo {
+  width: 96px; height: 96px;
+  display: block;
+  margin: 0 auto 24px;
+  border-radius: 22px;
+}
+
+.hero h1 {
+  margin: 0 0 16px;
+  font-size: clamp(28px, 5vw, 42px);
+  letter-spacing: -0.02em;
+  font-weight: 700;
+}
+
+.tagline {
+  margin: 0 auto 20px;
+  max-width: 620px;
+  font-size: clamp(16px, 2.2vw, 19px);
+  color: var(--ink);
+}
+
+.meta {
+  margin: 0 0 32px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+
+.btn {
+  display: inline-block;
+  padding: 11px 26px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 500;
+  transition: border-color .15s, background .15s;
+}
+.btn:hover { text-decoration: none; border-color: #C8D4DE; }
+.btn.primary {
+  background: var(--green);
+  border-color: var(--green);
+  color: #fff;
+}
+.btn.primary:hover { background: var(--green-dark); border-color: var(--green-dark); }
+
+/* ---------- sections ---------- */
+
+section { padding: 64px 0; border-bottom: 1px solid var(--line); }
+section:last-of-type { border-bottom: 0; }
+
+h2 {
+  margin: 0 0 12px;
+  font-size: clamp(22px, 3.4vw, 28px);
+  letter-spacing: -0.01em;
+  font-weight: 700;
+}
+
+.lede { margin: 0 0 36px; color: var(--muted); max-width: 680px; }
+
+/* ---------- screenshots ---------- */
+
+.shots {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 24px;
+}
+
+/*
+  截图位。图片文件放到位就自动显示，不需要改 HTML：
+  图片加载失败时 onerror 把它从 DOM 里删掉，:has(img) 随之失效，
+  ::before 的占位说明就透出来了。data-label 只是占位提示，不是最终文案。
+*/
+.shot {
+  margin: 0;
+  min-height: 300px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 18px;
+  text-align: center;
+  border: 1px dashed #B9D8C6;
+  border-radius: var(--radius);
+  background: var(--soft);
+}
+
+.shot::before {
+  content: attr(data-label);
+  font-size: 13px;
+  line-height: 1.9;
+  color: #6B8A79;
+  white-space: pre-line;
+}
+
+.shot:has(img)::before { display: none; }
+
+/*
+  手机截图多是 9:19.5 的长图。按高度收能让三张并排时高度一致，但长图缩到 300px 宽
+  字就看不清了——所以这里只是缩略图，外面套 <a target="_blank"> 点开看原图。
+*/
+.shot a { display: block; line-height: 0; }
+.shot a:hover img { opacity: .9; }
+
+.shot img {
+  max-width: 100%;
+  max-height: 440px;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.shot figcaption {
+  width: 100%;
+  padding-top: 12px;
+  font-size: 13px;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+}
+
+/* ---------- feature list ---------- */
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 20px;
+}
+
+.card {
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.card h3 {
+  margin: 0 0 8px;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+/* 卡片标题可以是链接（如「先看的东西」那组），保持与正文同级颜色，
+   否则同一排卡片里会有一半是绿色标题。悬停时再给下划线。 */
+.card h3 a { color: inherit; }
+.card h3 a:hover { color: var(--green-dark); }
+
+.card p { margin: 0; font-size: 15px; color: var(--muted); }
+
+/* ---------- code ---------- */
+
+pre {
+  margin: 0 0 20px;
+  padding: 18px 20px;
+  overflow-x: auto;
+  border-radius: var(--radius);
+  background: var(--code-bg);
+  color: #E6EDF3;
+  font-size: 14px;
+  line-height: 1.7;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.92em;
+}
+
+p code, li code, td code {
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: var(--soft);
+  color: var(--green-dark);
+}
+
+/* ---------- steps ---------- */
+
+ol.steps { margin: 0; padding: 0; list-style: none; counter-reset: step; }
+
+ol.steps > li {
+  position: relative;
+  counter-increment: step;
+  padding: 0 0 32px 48px;
+  border-left: 2px solid var(--line);
+  margin-left: 16px;
+}
+
+ol.steps > li:last-child { border-left-color: transparent; padding-bottom: 0; }
+
+ol.steps > li::before {
+  content: counter(step);
+  position: absolute;
+  left: -17px;
+  top: 0;
+  width: 32px; height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--green);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+ol.steps h3 { margin: 0 0 10px; font-size: 17px; font-weight: 600; }
+ol.steps p { margin: 0 0 12px; font-size: 15px; color: var(--muted); }
+ol.steps pre { margin-bottom: 12px; }
+
+.note {
+  margin: 0;
+  padding: 14px 18px;
+  border-left: 3px solid var(--green);
+  border-radius: 0 8px 8px 0;
+  background: var(--soft);
+  font-size: 14px;
+  color: var(--ink);
+}
+
+.note strong { font-weight: 600; }
+
+/* ---------- tables ---------- */
+
+.table-wrap { overflow-x: auto; margin: 0 0 20px; }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 15px;
+}
+
+th, td {
+  padding: 12px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+th { font-weight: 600; color: var(--muted); font-size: 14px; white-space: nowrap; }
+
+/* ---------- diagram ---------- */
+
+.diagram {
+  margin: 0 0 24px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--soft);
+  overflow-x: auto;
+}
+
+.diagram svg { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+
+/* ---------- limits ---------- */
+
+.limits li { margin-bottom: 10px; color: var(--muted); }
+.limits strong { color: var(--ink); font-weight: 600; }
+
+/* ---------- footer ---------- */
+
+footer {
+  padding: 48px 0 64px;
+  background: var(--soft);
+  border-top: 1px solid var(--line);
+  font-size: 14px;
+  color: var(--muted);
+}
+
+footer .wrap { display: flex; flex-wrap: wrap; gap: 24px 40px; justify-content: space-between; }
+footer ul { margin: 0; padding: 0; list-style: none; }
+footer li { margin-bottom: 6px; }
+
+@media (max-width: 600px) {
+  .hero { padding: 52px 20px 44px; }
+  section { padding: 48px 0; }
+  .wrap { padding: 0 20px; }
+  th, td { padding: 10px 8px; }
+
+  /*
+    窄屏一列显示。长截图按屏宽铺满会把页面拉到近万像素高，而 1080px 宽的截图缩到
+    330px 后字依然读不出来——既然两种方式都读不清，就选更省滚动的：限制高度，
+    点开看原图。.shot a 的 title 已写明「点开看原图」。
+  */
+  .shot { min-height: 0; padding: 14px; }
+  .shot img { max-height: 560px; }
+}

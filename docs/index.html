@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dsh-channel-wechat — 把微信接入 DeepSeek Harness</title>
+<meta name="description" content="把微信接入 DeepSeek Harness 的通道插件：扫码登录，在微信里收发会话，审批卡与提问卡也能在聊天里回答。">
+<meta property="og:type" content="website">
+<meta property="og:title" content="dsh-channel-wechat — 把微信接入 DeepSeek Harness">
+<meta property="og:description" content="扫码登录，在微信里收发 DSH 会话；审批卡与提问卡转发到聊天里回答。">
+<!--
+  站点由 GitHub Pages 从 /docs 发布，地址是 /dsh-channel-wechat/ 子路径。
+  因此本站内所有资源一律用 **相对路径**（assets/x.png），写成 /assets/x.png 会指到
+  wangx-wx.github.io 根上并 404。
+
+  唯一的外部资源是页首图标：它取自仓库根目录的 icon.svg（Pages 只发布 /docs，
+  所以根目录的那份拿不到）。用 CDN 指向同一份文件，避免在 docs/ 里复制一份造成漂移。
+  换成外链失效时可改为本地复制品。
+-->
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+
+<header class="hero">
+  <img class="logo" src="https://cdn.jsdelivr.net/gh/wangx-wx/dsh-channel-wechat@main/icon.svg" alt="" aria-hidden="true">
+  <h1>dsh-channel-wechat</h1>
+  <p class="tagline">
+    把微信接入 DeepSeek Harness。在微信里给 bot 发消息，DSH 在同一会话里回答；
+    需要你拍板的审批卡和提问卡，也是在聊天里点。
+  </p>
+  <p class="meta">MIT · 插件 + bundle 单包 · 在 Harness 进程内运行，没有独立的桥接进程</p>
+  <div class="cta">
+    <a class="btn primary" href="#install">怎么装</a>
+    <a class="btn" href="https://github.com/wangx-wx/dsh-channel-wechat">GitHub</a>
+  </div>
+</header>
+
+<main>
+
+<section>
+  <div class="wrap">
+    <h2>它长什么样</h2>
+    <p class="lede">装完之后，你的微信和 DSH 插件页就是这几处。</p>
+
+    <div class="shots">
+      <figure class="shot" data-label="截图待补：手机微信里的对话">
+        <a href="assets/wechat-chat.png" target="_blank" rel="noopener" title="点开看原图"><img src="assets/wechat-chat.png" alt="微信对话截图" onerror="this.remove()"></a>
+        <figcaption>微信里发一句话，DSH 的回答回到微信</figcaption>
+      </figure>
+
+      <figure class="shot" data-label="截图待补：插件页与二维码">
+        <a href="assets/plugin-page.png" target="_blank" rel="noopener" title="点开看原图"><img src="assets/plugin-page.png" alt="插件页截图" onerror="this.remove()"></a>
+        <figcaption>插件页里扫码登录，下面是全部设置</figcaption>
+      </figure>
+
+      <figure class="shot" data-label="截图待补：微信里的审批卡">
+        <a href="assets/approval-card.png" target="_blank" rel="noopener" title="点开看原图"><img src="assets/approval-card.png" alt="审批卡截图" onerror="this.remove()"></a>
+        <figcaption>审批卡直接出现在聊天里，点了才继续</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>它替你接上的六件事</h2>
+    <p class="lede">
+      一个通道插件要做的不是「转发文本」，而是让微信这一端在 DSH 里成为一个<strong>真正的输入来源</strong>。
+    </p>
+
+    <div class="cards">
+      <div class="card">
+        <h3>消息进得来</h3>
+        <p>
+          腾讯 iLink 长轮询收消息，用 <code>agent.followup()</code> 原生注入会话——
+          不是伪造一段提示词，走的是和你在 GUI 里发消息同一条路。
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>回复回得去</h3>
+        <p>
+          订阅 durable 的 <code>assistant/message</code> 事件再回发。所以一轮跑完就一定会回，
+          不取决于模型怎么流式输出。
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>卡片能在微信里回答</h3>
+        <p>
+          审批卡和提问卡转发到聊天里，批准、拒绝、回答都在微信里完成。
+          默认 <code>cards: wechat</code> 时 GUI 不会重复弹一张。
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>长任务不堵收消息</h3>
+        <p>
+          长轮询和会话处理是两条独立循环。跑长任务期间照样收新消息，
+          <code>/stop</code> 能打断。
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>登录和配置都在 GUI 里</h3>
+        <p>
+          二维码、退出登录、工作目录、审批卡位置、默认模型、会话权限，
+          全在插件卡片里，不用手改 YAML。
+        </p>
+      </div>
+
+      <div class="card">
+        <h3>装完只占一行</h3>
+        <p>
+          profile 里只有一个 bundle 条目。早期版本要两行，现在命令行能力合进了主行。
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <h2>怎么装</h2>
+    <p class="lede">需要 DSH <code>0.2.0-rc.1</code> 或更高。没有上界——DSH 发新版本时你不会被挡在门外。</p>
+
+    <ol class="steps">
+      <li>
+        <h3>装进你的 profile</h3>
+        <pre><code>dsh plugin --profile &lt;你的 profile&gt; add dsh-channel-wechat</code></pre>
+        <p>
+          <code>add</code> 会自动构建，并把包同时写进 profile 的 <code>dependencies</code>
+          和 <code>dsh.profile.bundles</code>——后者才决定它<strong>加载</strong>什么。
+        </p>
+      </li>
+
+      <li>
+        <h3>完全退出 DSH，再重新打开</h3>
+        <p class="note">
+          <strong>这一步不能省。</strong>插件是后装上来的话，只关窗口不够，要从进程退出重开。
+          否则插件页里不显示配置区，而且<strong>不会有任何报错</strong>。
+        </p>
+      </li>
+
+      <li>
+        <h3>在插件页扫码</h3>
+        <p>
+          侧边栏 <strong>Plugins</strong> → 点开 <strong>dsh-channel-wechat</strong> →
+          <strong>登录微信</strong>，页内出二维码，手机微信扫码确认。
+          扫码后<strong>无需再重启</strong>：凭证即刻写入，长轮询当场开始。
+        </p>
+      </li>
+
+      <li>
+        <h3>把工作目录改掉</h3>
+        <p>
+          同一页的<strong>工作目录</strong>决定所有微信会话在哪儿干活。它
+          <strong>在会话创建时写入，之后不可变</strong>，所以改它只影响之后新建的会话。
+          <strong>默认值通常是错的</strong>：不设的话取启动器的当前目录，桌面端那是
+          <code>~/.dsh/profiles/desktop</code>。
+        </p>
+      </li>
+    </ol>
+
+    <p class="note" style="margin-top:32px">
+      想立刻装到<strong>刚发布</strong>的版本，要显式关掉 pnpm 的供应链观察期（默认 24 小时）：
+      <code>add dsh-channel-wechat@latest --config.minimumReleaseAge=0</code>。
+      注意只加 <code>@latest</code> 不管用，观察期在版本解析之后才生效。代价是该版本未经观察期。
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>它是怎么接进去的</h2>
+    <p class="lede">
+      单包，同时是插件和 bundle，跑在 Harness 进程内。没有独立守护进程，没有本地端口转发。
+    </p>
+
+    <div class="diagram">
+      <svg viewBox="0 0 860 250" role="img" aria-label="架构图：微信用户经腾讯 iLink 连到运行在 DSH 进程内的本插件，插件再接入 DSH 会话">
+        <defs>
+          <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+            <path d="M0,0 L10,4 L0,8 Z" fill="#8FA3B3"/>
+          </marker>
+        </defs>
+
+        <!-- 微信用户 -->
+        <rect x="16" y="86" width="132" height="76" rx="12" fill="#FFFFFF" stroke="#D6E0E8"/>
+        <text x="82" y="118" text-anchor="middle" font-size="15" font-weight="600" fill="#0F172A">微信用户</text>
+        <text x="82" y="140" text-anchor="middle" font-size="12" fill="#5A6B7B">手机 / 桌面微信</text>
+
+        <!-- iLink -->
+        <rect x="188" y="86" width="132" height="76" rx="12" fill="#FFFFFF" stroke="#D6E0E8"/>
+        <text x="254" y="118" text-anchor="middle" font-size="15" font-weight="600" fill="#0F172A">腾讯 iLink</text>
+        <text x="254" y="140" text-anchor="middle" font-size="12" fill="#5A6B7B">getUpdates 长轮询</text>
+
+        <!-- 箭头 -->
+        <line x1="150" y1="124" x2="180" y2="124" stroke="#8FA3B3" stroke-width="1.5" marker-end="url(#arrow)"/>
+        <line x1="322" y1="124" x2="352" y2="124" stroke="#8FA3B3" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+        <!-- 插件（大框） -->
+        <rect x="360" y="30" width="300" height="188" rx="14" fill="#F3FBF7" stroke="#07C160" stroke-width="1.5"/>
+        <text x="510" y="56" text-anchor="middle" font-size="14" font-weight="600" fill="#06A350">本插件 · DSH 进程内</text>
+
+        <rect x="378" y="70" width="264" height="26" rx="7" fill="#FFFFFF" stroke="#CFE6DA"/>
+        <text x="510" y="88" text-anchor="middle" font-size="12" fill="#0F172A">协议层 · 收消息 / 发消息 / 媒体</text>
+
+        <rect x="378" y="104" width="264" height="26" rx="7" fill="#FFFFFF" stroke="#CFE6DA"/>
+        <text x="510" y="122" text-anchor="middle" font-size="12" fill="#0F172A">通道层 · 长轮询 · 会话代次 · 面板</text>
+
+        <rect x="378" y="138" width="264" height="26" rx="7" fill="#FFFFFF" stroke="#CFE6DA"/>
+        <text x="510" y="156" text-anchor="middle" font-size="12" fill="#0F172A">桥接层 · 消息路由 · 卡片 · 出站文件</text>
+
+        <rect x="378" y="172" width="264" height="26" rx="7" fill="#FFFFFF" stroke="#CFE6DA"/>
+        <text x="510" y="190" text-anchor="middle" font-size="12" fill="#0F172A">插件页（GUI）· 登录 / 设置 / 检查更新</text>
+
+        <!-- DSH -->
+        <rect x="704" y="86" width="140" height="76" rx="12" fill="#FFFFFF" stroke="#D6E0E8"/>
+        <text x="774" y="118" text-anchor="middle" font-size="15" font-weight="600" fill="#0F172A">DSH</text>
+        <text x="774" y="140" text-anchor="middle" font-size="12" fill="#5A6B7B">agent · session · 工具</text>
+
+        <line x1="662" y1="124" x2="696" y2="124" stroke="#8FA3B3" stroke-width="1.5" marker-end="url(#arrow)"/>
+      </svg>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <tr>
+          <th>方向</th>
+          <th>用什么</th>
+        </tr>
+        <tr>
+          <td>微信 → DSH</td>
+          <td><code>agent.followup()</code> 原生注入会话，与你在 GUI 里发消息同一条路径</td>
+        </tr>
+        <tr>
+          <td>DSH → 微信</td>
+          <td>订阅 durable <code>assistant/message</code> 事件，跑完一轮就回发</td>
+        </tr>
+        <tr>
+          <td>卡片</td>
+          <td>审批卡与提问卡加监听时带 <code>prepend: true</code>，否则 GUI 会先拿走且不报错</td>
+        </tr>
+        <tr>
+          <td>会话 id</td>
+          <td><code>channel-wechat-&lt;peerId&gt;</code>，peer 的纯函数；<code>/new</code> 是代次 +1，不是删会话</td>
+        </tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>在微信里能用的命令</h2>
+    <p class="lede">
+      本地自管 6 个，其余原生命令<strong>原样透传</strong>给 harness——所以 <code>/permission</code>、
+      <code>/model</code> 这些你在 GUI 里认识的命令，在微信里同样有效。
+    </p>
+
+    <div class="table-wrap">
+      <table>
+        <tr>
+          <th>命令</th>
+          <th>作用</th>
+        </tr>
+        <tr><td><code>/stop</code></td><td>打断当前这一轮。绕过队列，所以不会和进行中的一轮死锁。</td></tr>
+        <tr><td><code>/status</code></td><td>看当前会话与通道状态。</td></tr>
+        <tr><td><code>/new</code></td><td>换一个新会话（代次 +1）。旧会话不会被删除，DSH 没有删除 API。</td></tr>
+        <tr><td><code>/help</code></td><td>列出可用命令。</td></tr>
+        <tr><td><code>/cwd</code></td><td>已注册，<strong>尚未实现</strong>——会明确回复，而不是静默失败。</td></tr>
+        <tr><td><code>/reconnect</code></td><td>同上，已注册未实现。</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>边界：它不做什么</h2>
+    <p class="lede">
+      写在这里是因为它们都是<strong>刻意的取舍</strong>，不是还没做完。
+    </p>
+
+    <ul class="limits">
+      <li>
+        <strong>不做群聊。</strong>协议层没有群聊的依据，硬做只能靠猜。
+      </li>
+      <li>
+        <strong>不做多账号。</strong>一个 profile 一条通道。
+      </li>
+      <li>
+        <strong>不做消息去重 / 节流。</strong>对齐官方实现，不自作聪明加一层。
+      </li>
+      <li>
+        <strong>不做主动推送。</strong>只回你发起的对话。
+      </li>
+      <li>
+        <strong>它是一个单方通道。</strong>微信消息继承与本地输入同等的权限，操作者本人就是用户。
+        也正因如此，你在微信里发 <code>/permission danger-full-access</code> 是真的会关掉审批卡——
+        这条命令走原生透传。将来若要服务群聊或不可信来源，这个假设必须推翻。
+      </li>
+    </ul>
+
+    <p class="note" style="margin-top:28px">
+      <strong>已知的坑：</strong>装完不重启就没有配置区，而且没有任何报错。这不是 bug 报告里才有的边缘情况，
+      从插件页安装时它就是常态——Host 先启动，包后落盘。
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>装好之前可以先看的东西</h2>
+    <p class="lede">完整文档在仓库里。这里只放最常被点开的几个。</p>
+
+    <div class="cards">
+      <div class="card">
+        <h3><a href="https://github.com/wangx-wx/dsh-channel-wechat/blob/main/README.md">README</a></h3>
+        <p>安装、用法、数据落在哪里、已知问题、与同类插件的差异。</p>
+      </div>
+
+      <div class="card">
+        <h3><a href="https://github.com/wangx-wx/dsh-channel-wechat/blob/main/docs/invariants.md">不变量</a></h3>
+        <p>那些「违反了不会报错、只是行为悄悄变错」的规则，以及为什么。</p>
+      </div>
+
+      <div class="card">
+        <h3><a href="market/index.json">插件市场索引</a></h3>
+        <p>
+          把这份 URL 加进 DSH 的<strong>发现</strong>标签页，就能按名字搜到并安装。
+          版本列表取自 npm 注册表。
+        </p>
+      </div>
+
+      <div class="card">
+        <h3><a href="https://github.com/wangx-wx/dsh-channel-wechat/issues">Issue</a></h3>
+        <p>装了没跑通、或者发现哪里写错了，开一个 issue。</p>
+      </div>
+    </div>
+
+    <p class="note" style="margin-top:28px">
+      市场索引里的标题、图标和关键词取自 npm 上<strong>已发布</strong>的那个版本，
+      所以它们会比这里慢一拍——这是索引的语义，不是没生效。
+    </p>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div>
+      <p style="margin:0 0 6px;color:var(--ink);font-weight:600">dsh-channel-wechat</p>
+      <p style="margin:0">MIT · 由社区独立开发与维护，非 DeepSeek 官方项目</p>
+    </div>
+    <ul>
+      <li><a href="https://github.com/wangx-wx/dsh-channel-wechat">源码</a></li>
+      <li><a href="https://www.npmjs.com/package/dsh-channel-wechat">npm</a></li>
+      <li><a href="https://github.com/deepseek-ai/deepseek-harness">DeepSeek Harness</a></li>
+      <li><a href="https://github.com/topics/dsh-plugin">更多 dsh-plugin</a></li>
+    </ul>
+  </div>
+</footer>
+
+</body>
+</html>
