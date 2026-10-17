@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "微信通道",
+    "description": "在 DeepSeek Harness 会话里收发微信消息，审批卡与提问卡转发到聊天里回答。"
+  }
+}

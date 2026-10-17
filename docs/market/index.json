@@ -1,0 +1,89 @@
+{
+  "format": 1,
+  "title": "dsh-channel-wechat",
+  "description": "DeepSeek Harness bundles published from this repository",
+  "plugins": [
+    {
+      "name": "dsh-channel-wechat",
+      "title": "dsh-channel-wechat",
+      "description": "WeChat (iLink / ClawBot) channel for DeepSeek Harness",
+      "homepage": "https://github.com/wangx-wx/dsh-channel-wechat#readme",
+      "repository": {
+        "url": "https://github.com/wangx-wx/dsh-channel-wechat"
+      },
+      "metadata": {
+        "keywords": [
+          "dsh",
+          "deepseek-harness",
+          "wechat",
+          "weixin",
+          "ilink",
+          "channel",
+          "plugin"
+        ]
+      },
+      "versions": [
+        {
+          "version": "0.2.2",
+          "publishTimestamp": 1792239132,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": ">=0.2.0-rc.1"
+          }
+        },
+        {
+          "version": "0.2.1",
+          "publishTimestamp": 1792228798,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": ">=0.2.0-rc.1"
+          }
+        },
+        {
+          "version": "0.1.3",
+          "publishTimestamp": 1792163996,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": "^0.2.0-rc.1"
+          }
+        },
+        {
+          "version": "0.1.2",
+          "publishTimestamp": 1792154072,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": "^0.2.0-rc.1"
+          }
+        },
+        {
+          "version": "0.1.1",
+          "publishTimestamp": 1792080328,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": "^0.2.0-rc.1"
+          }
+        },
+        {
+          "version": "0.1.0",
+          "publishTimestamp": 1792073938,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": "^0.2.0-rc.1"
+          }
+        }
+      ]
+    }
+  ]
+}

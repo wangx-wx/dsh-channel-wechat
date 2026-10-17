@@ -17,6 +17,8 @@ const manifest = JSON.parse(readFileSync(new URL('../../package.json', import.me
   type?: string
   private?: boolean
   license?: string
+  keywords?: string[]
+  icon?: string
   exports?: Record<string, unknown>
   files?: string[]
   scripts?: Record<string, string>
@@ -24,6 +26,12 @@ const manifest = JSON.parse(readFileSync(new URL('../../package.json', import.me
   peerDependencies?: Record<string, string>
   dependencies?: Record<string, string>
   dsh?: { bundle?: { patch?: string | string[] }; client?: { platform?: string; inject?: string[] } }
+}
+
+/** Whether npm would pack a `./`-relative path, given the declared `files[]`. */
+const shipped = (path: string): boolean => {
+  const clean = path.replace(/^\.\//u, '')
+  return (manifest.files ?? []).some(entry => clean === entry || clean.startsWith(entry))
 }
 
 /**
@@ -260,10 +268,6 @@ describe('package manifest', () => {
     // are independent fields, so a type face can point at a source path that
     // the tarball omits - the consumer silently falls back to `any`, and the
     // breakage lands on whoever installs rather than on whoever published.
-    const shipped = (path: string): boolean => {
-      const clean = path.replace(/^\.\//u, '')
-      return (manifest.files ?? []).some(entry => clean === entry || clean.startsWith(entry))
-    }
     const offenders: string[] = []
     for (const [subpath, target] of Object.entries(manifest.exports ?? {})) {
       if (subpath === './package.json') continue
@@ -287,5 +291,91 @@ describe('package manifest', () => {
       hooks.some(command => /\b(build|tsdown)\b/u.test(command)),
       'the publish hook must actually run the build',
     ).toBe(true)
+  })
+})
+
+describe('discovery metadata', () => {
+  // Everything below is read by DSH *without loading our code*: the plugin page
+  // calls `readPluginMeta` for the icon and locale files, and the market index
+  // lists what a user can install. None of it is exercised by the runtime tests,
+  // and every field fails silently - a bad icon path, a locale file left out of
+  // `files`, a keyword typo - so each one is pinned to the file it names.
+
+  it('carries the github topic dsh reads for discovery in its keywords', () => {
+    // `dsh-plugin` is the only topic the harness README and CONTRIBUTING name.
+    // It is also copied verbatim into the market index's `metadata.keywords`,
+    // where it is searchable - so a typo costs a word and nothing complains.
+    expect(manifest.keywords).toContain('dsh-plugin')
+  })
+
+  it('declares an icon the plugin page can render', () => {
+    const icon = manifest.icon
+    expect(icon, 'package.json must declare `icon`').toBeTypeOf('string')
+    // DSH rejects an absolute path or a URL, and any file outside the package.
+    expect(icon).toMatch(/^\.\/[^/].*\.svg$/u)
+    expect(shipped(String(icon)), `${String(icon)} must be in files[]`).toBe(true)
+    const file = new URL(`../../${String(icon)}`, import.meta.url)
+    expect(existsSync(file), `${String(icon)} must exist`).toBe(true)
+    // The 256 KiB ceiling is DSH's, enforced when it base64-encodes the file.
+    expect(readFileSync(file).byteLength).toBeLessThanOrEqual(256 * 1024)
+  })
+
+  it('ships locale files that give the plugin a localized title', () => {
+    // `readPluginMeta` resolves `<pkg>/locale/en.json` through `exports`, then
+    // reads every sibling `*.json`. A locale directory that is not exported
+    // yields no metadata at all rather than an error.
+    const prefixes = Object.keys(manifest.exports ?? {}).filter(key => key.startsWith('./locale/'))
+    expect(prefixes, 'exports must expose ./locale/*.json').toEqual(['./locale/*.json'])
+    const english = JSON.parse(readFileSync(new URL('../../locale/en.json', import.meta.url), 'utf8')) as {
+      meta?: { title?: string; description?: string }
+    }
+    // English is the required fallback: `LocalizedText` objects must carry `en`.
+    expect(english.meta?.title?.trim()).toBeTruthy()
+    expect(english.meta?.description?.trim()).toBeTruthy()
+    const translations = readdirSync(new URL('../../locale/', import.meta.url))
+      .filter(name => name.endsWith('.json'))
+    expect(translations).toContain('en.json')
+    for (const name of translations) {
+      // Every file must parse: one malformed sibling would take the whole
+      // localization down with it, since the reader throws on the directory.
+      const text = JSON.parse(readFileSync(new URL(`../../locale/${name}`, import.meta.url), 'utf8')) as {
+        meta?: { title?: string; description?: string }
+      }
+      expect(text.meta?.title?.trim(), `${name} needs meta.title`).toBeTruthy()
+    }
+  })
+
+  it('publishes a market index that lists this package instead of being hand-written', () => {
+    // The index is generated from the npm registry, so these assertions are the
+    // cheap half of the format-1 rules: enough to catch a hand edit or a stale
+    // copy, without duplicating `dsh-plugin-market-index` (a dsh package this
+    // repository must not depend on).
+    const index = JSON.parse(readFileSync(new URL('../../docs/market/index.json', import.meta.url), 'utf8')) as {
+      format?: number
+      title?: string
+      plugins?: {
+        name?: string
+        versions?: { version?: string; publishTimestamp?: number; source?: { type?: string }; engines?: { dsh?: string } }[]
+      }[]
+    }
+    expect(index.format).toBe(1)
+    expect(index.title?.trim()).toBeTruthy()
+    const entry = (index.plugins ?? []).find(plugin => plugin.name === manifest.name)
+    expect(entry, `the index must list ${manifest.name}`).toBeDefined()
+    expect(entry?.versions?.length ?? 0).toBeGreaterThan(0)
+    for (const version of entry?.versions ?? []) {
+      expect(version.version).toMatch(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u)
+      expect(version.source?.type).toBe('npm')
+      expect(Number.isInteger(version.publishTimestamp)).toBe(true)
+      // Format 1 has no peer-dependency fallback here: a version without a
+      // copy of our own `engines.dsh` is rejected at install. Older releases
+      // declared a caret range, so only the newest entry has to match today's
+      // manifest - it is the one a default install picks.
+      expect(version.engines?.dsh, 'every listed version needs engines.dsh').toBeTypeOf('string')
+    }
+    expect(entry?.versions?.[0]?.engines?.dsh).toBe(manifest.engines?.['dsh'])
+    // The index is generated from the registry, so the newest listed version is
+    // the one published last. A mismatch here means someone edited the file.
+    expect(entry?.versions?.[0]?.version).toBe(manifest.version)
   })
 })
