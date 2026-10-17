@@ -45,6 +45,43 @@ describe('reading a presented-file event', () => {
     expect(files?.[0]?.path).toBe('/work/here/out/report.xlsx')
   })
 
+  it('leaves an absolute Windows path alone', () => {
+    // A drive-qualified path is already absolute, so resolving it against the
+    // cwd would produce `D:\ws\D:\ws\out\report.xlsx` - a path that exists
+    // nowhere. This suite runs on macOS, where `path.win32` still classifies the
+    // spelling correctly, so the case is testable off Windows.
+    const files = presentedFilesFrom(
+      event('deliverables/presented', { turn: 1, callId: 'c1', files: [{ path: 'D:\\ws\\out\\report.xlsx' }] }),
+      'D:\\ws',
+    )
+
+    expect(files?.[0]?.path).toBe('D:\\ws\\out\\report.xlsx')
+  })
+
+  it('joins a relative path with the separator its cwd already uses', () => {
+    // A Windows cwd joined with `/` produces `D:\ws/report.xlsx`. Windows APIs
+    // tolerate that, but the result is then not the path anyone wrote, and it is
+    // handed to a file read. Only the JOIN uses the cwd's separator; separators
+    // inside the model's own relative path are left as written.
+    const files = presentedFilesFrom(
+      event('deliverables/presented', { turn: 1, callId: 'c1', files: [{ path: 'report.xlsx' }] }),
+      'D:\\ws',
+    )
+
+    expect(files?.[0]?.path).toBe('D:\\ws\\report.xlsx')
+  })
+
+  it('does not double the separator when the cwd already ends with one', () => {
+    // A drive root (`D:\`) ends in a separator, and appending another would name
+    // a path that does not exist.
+    const files = presentedFilesFrom(
+      event('deliverables/presented', { turn: 1, callId: 'c1', files: [{ path: 'report.xlsx' }] }),
+      'D:\\',
+    )
+
+    expect(files?.[0]?.path).toBe('D:\\report.xlsx')
+  })
+
   it('ignores every other kind of session event', () => {
     // This runs on every append for every session, so returning anything for an
     // unrelated event would send files nobody declared.

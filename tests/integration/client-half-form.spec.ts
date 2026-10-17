@@ -32,6 +32,7 @@ import { REPO_ROOT } from '../support/harness.ts'
  */
 function fakeReact() {
   const states: unknown[] = []
+  const effects: (() => unknown)[] = []
   let cursor = 0
   return {
     /** Reset the hook cursor; called once per render pass. */
@@ -53,8 +54,17 @@ function fakeReact() {
           },
         ]
       },
-      useEffect() {},
+      // Run the effect once, the way a mount does. A no-op here made any
+      // on-mount fetch invisible to these tests: the callback that issued it was
+      // never invoked, so an assertion about it passed for the wrong reason.
+      // Effects keyed on a dependency list are not re-run (there is no second
+      // render to key them against), which is what a mount does anyway.
+      useEffect(effect: () => unknown) {
+        effects.push(effect)
+      },
     },
+    /** Effects collected during the last render pass, in call order. */
+    effects,
   }
 }
 
@@ -120,9 +130,15 @@ interface Page {
  * Load the shipped bundle and produce a renderer for the page it registers.
  *
  * @param config - the permission, provider and model the form currently holds.
+ * @param fetchImpl - the wire the page sees. Absent installs a promise that never
+ *   settles, so the connection half's poll neither resolves nor schedules a
+ *   retry that would outlive the test.
  * @returns the page renderer and the edits it records.
  */
-function loadPage(config: { permission: string, provider?: string, model?: string }): Page {
+function loadPage(
+  config: { permission: string, provider?: string, model?: string },
+  fetchImpl?: (input: string | URL | Request) => Promise<Response>,
+): Page {
   const source = readFileSync(join(REPO_ROOT, 'lib/client.js'), 'utf8')
   const react = fakeReact()
   const edited: { field: string, text: string }[] = []
@@ -155,8 +171,11 @@ function loadPage(config: { permission: string, provider?: string, model?: strin
   }
 
   // The connection half fetches on mount. A promise that never settles keeps its
-  // poll from scheduling a retry timer that would outlive the test.
-  vi.stubGlobal('fetch', vi.fn(() => new Promise(() => {})) as unknown as typeof fetch)
+  // poll from scheduling a retry timer that would outlive the test. A caller that
+  // wants to observe requests supplies its own wire instead.
+  vi.stubGlobal('fetch', fetchImpl === undefined
+    ? vi.fn(() => new Promise(() => {})) as unknown as typeof fetch
+    : fetchImpl as unknown as typeof fetch)
 
   let component: ((props: Record<string, unknown>) => unknown) | undefined
   const ctx = {
@@ -213,7 +232,8 @@ function loadPage(config: { permission: string, provider?: string, model?: strin
   return {
     draw: () => {
       react.beginRender()
-      return render(component!({
+      react.effects.length = 0
+      const tree = render(component!({
         t: (key: string) => key,
         // The renderer hands the component a `use<Name>` hook per `hooks` source;
         // this is that hook, returning the state the test set up.
@@ -223,6 +243,11 @@ function loadPage(config: { permission: string, provider?: string, model?: strin
         save: () => {},
         discard: () => {},
       }))
+      // Mount effects run after the tree is committed, which is when the page's
+      // on-mount fetches fire. Collected first so a test can render again without
+      // re-running an earlier mount's effect.
+      for (const effect of [...react.effects]) effect()
+      return tree
     },
     edited,
     reset,
@@ -362,5 +387,37 @@ describe('the model control', () => {
 
     expect(page.edited).toEqual([])
     expect(page.reset).toEqual([])
+  })
+})
+
+describe('the version card on the page', () => {
+  it('is rendered last, after the settings card', () => {
+    // Placement is a product decision with a test: an update is a rare action and
+    // must not sit above the login or the settings, which are what the page is
+    // opened for. A card that drifted to the top would be one more thing to scroll
+    // past every time.
+    const page = loadPage({ permission: 'workspace-write' })
+    const tree = page.draw() as Rendered
+
+    // The last section the page renders is the version card; its heading is the
+    // locale key the dictionaries carry.
+    const titles = findAll(tree, 'h3').map(node => (node.props['children'] as string[] | string))
+    const flat = titles.map(title => Array.isArray(title) ? title.join('') : title)
+    expect(flat.at(-1)).toBe('version')
+  })
+
+  it('reads the version check from the Host rather than showing a number of its own', async () => {
+    // The running version is read off the installed manifest by the Host. A page
+    // that hardcoded it would keep claiming the old number after an update - the
+    // exact situation this card exists to resolve.
+    const asked: string[] = []
+    const page = loadPage({ permission: 'workspace-write' }, async (input) => {
+      asked.push(String(input))
+      return new Promise(() => {})
+    })
+
+    page.draw()
+
+    expect(asked.some(url => url.includes('api/channel-wechat/update/check'))).toBe(true)
   })
 })

@@ -288,6 +288,34 @@ describe.skipIf(!REACT_AVAILABLE)('the browser half as a script', () => {
     expect(cwd.parse('   ')).toEqual({ kind: 'clear' })
   })
 
+  it('accepts a Windows working directory', () => {
+    // This page runs in a browser: no `node:path`, and no knowledge of which
+    // platform the Host is on. "Absolute" is therefore a decision this file
+    // makes, and a POSIX-only test for a leading `/` made it the wrong one - on
+    // Windows every drive-qualified path rendered as "must be an absolute path"
+    // with no spelling that could satisfy it.
+    const probe = runBundle()
+    const cwd = probe.specs.find(spec => spec.field === 'cwd')!
+
+    expect(cwd.parse('D:\\workspace\\coding\\dsh-ws'))
+      .toEqual({ kind: 'set', value: 'D:\\workspace\\coding\\dsh-ws' })
+    // Forward slashes name the same path on Windows and are what Git Bash and
+    // most editor copy-path commands produce, so the spelling must not decide.
+    expect(cwd.parse('D:/workspace/coding/dsh-ws'))
+      .toEqual({ kind: 'set', value: 'D:/workspace/coding/dsh-ws' })
+    // A complete UNC share is one fixed location as well.
+    expect(cwd.parse('\\\\server\\share\\ws'))
+      .toEqual({ kind: 'set', value: '\\\\server\\share\\ws' })
+    // Drive-relative is NOT absolute: `D:dsh-ws` resolves against that drive's
+    // own current directory, which is process state rather than a location.
+    expect(cwd.parse('D:dsh-ws')).toBeUndefined()
+    // A rooted drive-less path (`\foo`) passes `win32.isAbsolute` yet still
+    // resolves against the process's current drive - the same reasoning
+    // `directory-picker-browse`'s `fullyQualified` records. Refused here, so the
+    // page never offers a save the Host would answer differently per platform.
+    expect(cwd.parse('\\foo')).toBeUndefined()
+  })
+
   it('accepts only the enum values the schema declares', () => {
     const probe = runBundle()
     const cards = probe.specs.find(spec => spec.field === 'cards')!

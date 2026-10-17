@@ -9,7 +9,8 @@
  * @module dsh-channel-wechat
  */
 
-import { isAbsolute } from 'node:path'
+import { existsSync } from 'node:fs'
+import { isAbsolute, join } from 'node:path'
 import type { Context, Volatile } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 // Type-only, for the `ctx.agentDefaultModel` declaration it merges into
@@ -32,6 +33,9 @@ import { createPanel } from './channel/panel.ts'
 import { startChannelFromStore } from './channel/runtime.ts'
 import { resolveModelSelection, resolvePermission } from './channel/session-policy.ts'
 import { buildModelOptions } from './channel/model-catalog.ts'
+import { CURRENT_VERSION, createUpdateChecker } from './channel/update-check.ts'
+import { buildUpdateCommand } from './channel/update-command.ts'
+import { createUpdateRoutes } from './channel/update-routes.ts'
 import type { Channel } from './channel/channel.ts'
 import { CardService } from './bridge/cards-service.ts'
 import { prepareMedia as prepareMediaBlocks } from './bridge/media.ts'
@@ -267,6 +271,21 @@ async function mountLoginPanel(ctx: Context, config: Config): Promise<void> {
     // reason `permissionPresets` is: a deployment without an LLM registry is a
     // supported composition, and `inject` would park the panel on it.
     ...(contextLlm(ctx) === undefined ? {} : { listModels: async () => await buildModelOptions(contextLlm(ctx)!) }),
+  }), () => createUpdateRoutes({
+    check: createUpdateChecker({ currentVersion: CURRENT_VERSION }),
+    // Built from the live profile rather than a guess: the profile name and the
+    // installation path differ per deployment, and a wrong one edits a different
+    // profile than the page belongs to. `ctx.get` because `profileContext` is a
+    // launcher fact that a non-CLI embedding may not provide.
+    command: () => buildUpdateCommand({
+      execPath: process.execPath,
+      installAnchor: ctx.get('profileContext')?.installAnchor ?? '',
+      profile: ctx.get('profileContext')?.name ?? '',
+      platform: process.platform,
+      // Only the Desktop application's own carrier may manage its reserved
+      // profile; the page prints no command when this deployment has none.
+      ...desktopCarrierPath() === undefined ? {} : { desktopCarrier: desktopCarrierPath()! },
+    }),
   }))
 
   // Reported rather than `console.log`, so the one line a first-time user needs
@@ -284,6 +303,29 @@ async function mountLoginPanel(ctx: Context, config: Config): Promise<void> {
   // which the desktop app always has, and which the user's browser has by the
   // time they are reading this, because that is where the UI is.
   reporterFor(ctx)('微信登录', `在已打开 Harness 界面的浏览器中打开 ${panelUrl(ctx)}，用手机微信扫码`)
+}
+
+/**
+ * The Desktop application's own CLI entry, when this process is that carrier.
+ *
+ * `dsh plugin --profile desktop` is refused by the launcher unless the invocation
+ * came from the application's bundled CLI, so a Desktop profile has exactly one
+ * runnable spelling and it is not derivable from the plugin's own paths. The
+ * carrier lives beside the runtime the app handed this process: `<runtime>/cli/bin/dsh`,
+ * where the packaged tree is `<...>/Resources>`. When the layout is not the
+ * packaged one - a development checkout, a CLI install - this returns undefined
+ * and the page prints no command rather than one the launcher would reject.
+ *
+ * @returns the absolute carrier path, or undefined when this is not the packaged
+ *   Desktop layout.
+ */
+function desktopCarrierPath(): string | undefined {
+  // `process.resourcesPath` exists only inside Electron, which is exactly the
+  // condition under which a Desktop profile is being served.
+  const resources = (process as { resourcesPath?: unknown }).resourcesPath
+  if (typeof resources !== 'string' || resources === '') return undefined
+  const carrier = join(resources, 'runtime', 'cli', 'bin', process.platform === 'win32' ? 'dsh.cmd' : 'dsh')
+  return existsSync(carrier) ? carrier : undefined
 }
 
 /**

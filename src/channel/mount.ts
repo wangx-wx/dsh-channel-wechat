@@ -17,6 +17,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { Panel } from './panel.ts'
+import type { UpdateRoutes } from './update-routes.ts'
 
 /** The path prefix every route shares, and the reason they are authenticated. */
 export const PANEL_PREFIX = '/api/channel-wechat'
@@ -68,9 +69,16 @@ export function panelUrl(ctx: Context): string {
  *
  * @param ctx - the plugin's cordis context.
  * @param createPanel - builds the panel, called only when a host can serve it.
+ * @param createUpdate - builds the update routes, called only when a host can
+ *   serve them. Absent leaves the update card out entirely rather than mounting
+ *   routes that would answer 404.
  * @returns the page's path, for a host that wants to print it.
  */
-export async function mountPanelRoutes(ctx: Context, createPanel: () => Panel): Promise<string> {
+export async function mountPanelRoutes(
+  ctx: Context,
+  createPanel: () => Panel,
+  createUpdate?: () => UpdateRoutes,
+): Promise<string> {
   // Conditional inject rather than a declaration in the plugin's own `inject`:
   // a declared dependency would park the whole channel on a headless profile,
   // where the panel cannot exist and the messaging half still must.
@@ -82,6 +90,10 @@ export async function mountPanelRoutes(ctx: Context, createPanel: () => Panel): 
     if (connection?.fetch === undefined) return
 
     const panel = createPanel()
+    // Built inside the conditional inject for the same reason the panel is: the
+    // update card reads the profile it belongs to, and that must be read from a
+    // host that can actually serve the page.
+    const update = createUpdate === undefined ? undefined : createUpdate()
     // Registered through `ctx.effect`, so unloading removes them: a route that
     // outlived the plugin would keep serving a QR for a channel that is gone.
     injected.effect(() => {
@@ -128,6 +140,20 @@ export async function mountPanelRoutes(ctx: Context, createPanel: () => Panel): 
           requestBody: 'buffered',
           fetch: () => panel.routes.models(),
         }),
+        ...update === undefined ? [] : [
+          connection.fetch.register({
+            path: `${PANEL_PREFIX}/update/check`,
+            methods: ['GET'],
+            requestBody: 'buffered',
+            fetch: () => update.check(),
+          }),
+          connection.fetch.register({
+            path: `${PANEL_PREFIX}/update/command`,
+            methods: ['GET'],
+            requestBody: 'buffered',
+            fetch: () => update.command(),
+          }),
+        ],
       ]
       return () => { for (const dispose of disposers) dispose() }
     })

@@ -65,8 +65,37 @@ export function presentedFilesFrom(event: unknown, cwd: string): PresentedFile[]
   return files.length === 0 ? undefined : files
 }
 
-/** Resolve a session-relative path, leaving an absolute one alone. */
+/**
+ * Whether `path` names one fixed location, in either spelling a Session records.
+ *
+ * A session's cwd is on whichever platform the Host runs, so this process may be
+ * reading a Windows path on POSIX or the reverse. The rule is the Host's own
+ * (`dsh-util-workspace-path`'s `isAbsoluteWorkspacePath`): POSIX-absolute, a
+ * drive-qualified Windows path, or a complete UNC share. A drive-relative path
+ * (`D:x`) is not absolute - it resolves against that drive's current directory.
+ *
+ * @param path - the path to classify.
+ * @returns whether it is already absolute.
+ */
+function isAbsolutePath(path: string): boolean {
+  if (path.startsWith('/')) return true
+  if (/^[A-Za-z]:[\\/]/.test(path)) return true
+  return /^\\\\[^\\/]+[\\/][^\\/]+/.test(path)
+}
+
+/**
+ * Resolve a session-relative path, leaving an absolute one alone.
+ *
+ * The separator follows the cwd's own spelling rather than always `/`: a
+ * Windows cwd joined with `/` would produce `D:\ws/out/report.xlsx`, which the
+ * Windows APIs tolerate but which is not the path anyone wrote.
+ *
+ * @param path - the declared path, as the model wrote it.
+ * @param cwd - the Session's working directory.
+ * @returns the absolute path.
+ */
 function resolvePath(path: string, cwd: string): string {
-  if (path.startsWith('/')) return path
-  return cwd.endsWith('/') ? `${cwd}${path}` : `${cwd}/${path}`
+  if (isAbsolutePath(path)) return path
+  const separator = cwd.includes('\\') ? '\\' : '/'
+  return cwd.endsWith('/') || cwd.endsWith('\\') ? `${cwd}${path}` : `${cwd}${separator}${path}`
 }
