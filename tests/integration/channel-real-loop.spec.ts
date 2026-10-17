@@ -299,3 +299,55 @@ describe('a message with no answer still reaches the agent', () => {
     expect(sent).toEqual([])
   })
 })
+
+describe('the owner ending a run', () => {
+  it('stops polling and settles when the signal it was started with aborts', async () => {
+    // The Host's shutdown aborts the owner and then waits for the event loop to
+    // drain. A Channel that reads only its own controller never notices, so its
+    // 35-second poll stays open and the process outlives the Host's graceful
+    // deadline - which is what makes the Desktop updater refuse to install.
+    //
+    // This is the wiring test: the signal is passed in exactly as `runtime`
+    // passes it, and the poll is held open exactly as `getUpdates` holds one.
+    const ctx = new Context()
+    contexts.push(ctx)
+    await mountAgentLoopTestDependencies(ctx, { systemPrompt: WEB_APP_SYSTEM_PROMPT })
+    await mountAgentLoopTestHarness(ctx)
+
+    const owner = new AbortController()
+    let polls = 0
+    let sawSignal: AbortSignal | undefined
+    const channel = new Channel({
+      registry: ctx.agents as never,
+      poll: (_cursor, _timeoutMs, signal) => {
+        polls += 1
+        sawSignal = signal
+        // A held long poll: it settles only when the signal it was given aborts.
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true })
+        })
+      },
+      send: async () => {},
+      saveCursor: async () => {},
+      sleep: async () => {},
+      now: () => 0,
+      pollTimeoutMs: 35_000,
+      signal: owner.signal,
+    })
+    channels.push(channel)
+
+    const running = channel.run()
+    // Let the first poll start before ending the run, so the case under test is
+    // an abort while a request is in flight rather than one before it.
+    await Promise.resolve()
+    expect(polls).toBe(1)
+
+    owner.abort()
+
+    await expect(running).resolves.toBeUndefined()
+    // The request itself must have been handed the abort: racing the loop
+    // against a signal it never forwards leaves the socket open.
+    expect(sawSignal).toBeDefined()
+    expect(sawSignal?.aborted).toBe(true)
+  })
+})

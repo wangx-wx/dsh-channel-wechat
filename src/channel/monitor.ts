@@ -91,7 +91,13 @@ const DEFAULT_MAX_RUN_MS = 24 * 60 * 60 * 1_000
  * @returns when the loop has finished.
  */
 export async function monitorLoop(options: MonitorOptions): Promise<void> {
-  const sleep = options.sleep ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)))
+  // `unref`'d so an idle pause cannot be the last thing holding the process
+  // open. The Host waits for the event loop to drain on shutdown, and between
+  // two polls this loop is doing nothing that should keep anyone alive - the
+  // poll itself, not the pause, is what has work outstanding.
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>(resolve => {
+    setTimeout(resolve, ms).unref()
+  }))
   const now = options.now ?? Date.now
   const deadline = now() + (options.maxRunMs ?? DEFAULT_MAX_RUN_MS)
 

@@ -165,7 +165,14 @@ export class ReplyQueue {
       } catch (error) {
         lastError = error
         if (reply.attempts < this.maxAttempts && this.retryDelayMs > 0) {
-          await new Promise(resolve => setTimeout(resolve, this.retryDelayMs))
+          await new Promise(resolve => {
+            const timer = setTimeout(resolve, this.retryDelayMs)
+            // Never let a pending retry keep the process alive: the Host waits
+            // for the event loop to drain on shutdown, and a reply that is only
+            // waiting to be retried has nothing left to do. The queue still
+            // holds the promise, so the delay itself is unchanged.
+            timer.unref()
+          })
         }
       }
     }
