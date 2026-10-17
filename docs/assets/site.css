@@ -432,3 +432,149 @@ footer li { margin-bottom: 6px; }
 */
 .article table td:first-child,
 .article table th:first-child { min-width: 6.5em; }
+
+/* ---------- 命令块与复制按钮 ---------- */
+
+/*
+  .cmd 包住一个 <pre><code> 和一个复制按钮。按钮绝对定位在右上角，
+  所以 <pre> 需要预留右上内边距，否则长命令会钻到按钮下面。
+*/
+.cmd { position: relative; margin: 0 0 20px; }
+
+.cmd pre { margin-bottom: 0; padding-right: 84px; }
+
+/*
+  命令块换行而不横向滚动。横向滚动时，超出的文字会滚到右侧 padding 区域
+  被复制按钮压住（Chrome 不把容器的右 padding 算进滚动区末端）。
+  这些命令都很短，换行比滚动更合适，也保证按钮永远不遮字。
+*/
+.cmd pre code { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.cmd .copy {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  padding: 5px 12px;
+  border: 1px solid rgba(255, 255, 255, .22);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, .08);
+  color: #C9D6E2;
+  font-size: 12px;
+  line-height: 1.5;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+}
+
+.cmd .copy:hover { background: rgba(255, 255, 255, .16); color: #fff; }
+.cmd .copy:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+
+/* 复制成功后短暂变绿，作为「点到了」的反馈 */
+.cmd .copy.copied {
+  border-color: var(--green);
+  background: rgba(7, 193, 96, .18);
+  color: #7BE3AD;
+}
+
+/* ---------- 更新日志 ---------- */
+
+.releases { margin: 0; padding: 0; list-style: none; }
+
+.releases > li {
+  padding: 18px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.releases > li:last-child { border-bottom: 0; }
+
+.releases .ver {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.releases .ver a {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.releases .ver a:hover { color: var(--green-dark); }
+
+/* 最新版本给一个标记，避免读者以为列表顺序不可靠 */
+.releases .tag {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(7, 193, 96, .12);
+  color: var(--green-dark);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.releases .date { font-size: 13px; color: var(--muted); }
+
+.releases p { margin: 0; font-size: 15px; color: var(--muted); }
+
+/* ---------- 安装方式二选一 ---------- */
+
+.ways {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 20px;
+  margin: 0 0 32px;
+}
+
+.way {
+  padding: 22px 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.way h3 { margin: 0 0 8px; font-size: 16px; font-weight: 600; }
+.way > p { margin: 0 0 14px; font-size: 14px; color: var(--muted); }
+
+/* 安装方式里的图，尺寸与截图位一致，但不需要虚线框 */
+.way figure { margin: 0; }
+.way img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 320px;
+  object-fit: contain;
+  margin-bottom: 10px;
+  border-radius: 8px;
+  background: var(--soft);
+}
+.way figcaption { font-size: 13px; color: var(--muted); }
+
+/*
+  缺图时的占位。判据是「figure 里还有没有 img」，与 .shot 一致：
+  图片加载失败时 onerror 把它移出 DOM，:not(:has(img)) 随之成立，
+  占位提示就出现。图片加载成功则 onload 清掉 data-placeholder，恢复普通排版。
+
+  注意不能靠 data-placeholder 自己去 display:none 掉 img——那样图片永远不会加载，
+  onload 也就永远不触发，占位和真图会同时消失。
+*/
+.way figure[data-placeholder]:not(:has(img)) {
+  display: grid;
+  place-items: center;
+  min-height: 200px;
+  padding: 16px;
+  border: 1px dashed #B9D8C6;
+  border-radius: 8px;
+  background: var(--soft);
+  text-align: center;
+}
+
+.way figure[data-placeholder]:not(:has(img))::before {
+  content: attr(data-placeholder);
+  white-space: pre-line;
+  font-size: 13px;
+  line-height: 1.9;
+  color: #6B8A79;
+}
+
+.way figure[data-placeholder]:not(:has(img)) figcaption { display: none; }

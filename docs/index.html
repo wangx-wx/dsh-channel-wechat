@@ -17,7 +17,9 @@
   所以根目录的那份拿不到）。用 CDN 指向同一份文件，避免在 docs/ 里复制一份造成漂移。
   换成外链失效时可改为本地复制品。
 -->
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="assets/site.css">
+<script src="assets/site.js" defer></script>
 </head>
 <body>
 
@@ -122,18 +124,44 @@
 <section id="install">
   <div class="wrap">
     <h2>怎么装</h2>
-    <p class="lede">需要 DSH <code>0.2.0-rc.1</code> 或更高。没有上界——DSH 发新版本时你不会被挡在门外。</p>
+    <p class="lede">
+      需要 DSH <code>0.2.0-rc.1</code> 或更高。没有上界——DSH 发新版本时你不会被挡在门外。
+      两种方式效果一样，选顺手的那个。
+    </p>
 
-    <ol class="steps">
-      <li>
-        <h3>装进你的 profile</h3>
-        <pre><code>dsh plugin --profile &lt;你的 profile&gt; add dsh-channel-wechat</code></pre>
+    <div class="ways">
+      <div class="way">
+        <h3>方式一：在 DSH 插件页里输入包名</h3>
+        <p>
+          侧边栏 <strong>插件</strong> → <strong>添加插件</strong>，在包名输入框里填
+          <code>dsh-channel-wechat</code>，回车或点<strong>安装</strong>。
+          不用记参数，也不用切到终端。
+        </p>
+        <figure data-placeholder="截图待补：插件页的「添加插件」对话框&#10;assets/install-dialog.png">
+          <img src="assets/install-dialog.png" alt="DSH 插件页的添加插件对话框"
+               onload="this.closest('figure').removeAttribute('data-placeholder')"
+               onerror="this.remove()">
+          <figcaption>对话框的输入框就是 <code>dsh plugin add</code> 后面那一段。</figcaption>
+        </figure>
+      </div>
+
+      <div class="way">
+        <h3>方式二：命令行</h3>
+        <p>
+          适合脚本化或没有 GUI 的 profile。先装进你的 profile：
+        </p>
+        <div class="cmd">
+          <pre><code>dsh plugin --profile &lt;你的 profile&gt; add dsh-channel-wechat</code></pre>
+          <button type="button" class="copy" data-copy="已复制">复制</button>
+        </div>
         <p>
           <code>add</code> 会自动构建，并把包同时写进 profile 的 <code>dependencies</code>
           和 <code>dsh.profile.bundles</code>——后者才决定它<strong>加载</strong>什么。
         </p>
-      </li>
+      </div>
+    </div>
 
+    <ol class="steps">
       <li>
         <h3>完全退出 DSH，再重新打开</h3>
         <p class="note">
@@ -164,7 +192,12 @@
 
     <p class="note" style="margin-top:32px">
       想立刻装到<strong>刚发布</strong>的版本，要显式关掉 pnpm 的供应链观察期（默认 24 小时）：
-      <code>add dsh-channel-wechat@latest --config.minimumReleaseAge=0</code>。
+    </p>
+    <div class="cmd" style="margin-top:12px">
+      <pre><code>dsh plugin --profile &lt;你的 profile&gt; add dsh-channel-wechat@latest --config.minimumReleaseAge=0</code></pre>
+      <button type="button" class="copy" data-copy="已复制">复制</button>
+    </div>
+    <p class="note">
       注意只加 <code>@latest</code> 不管用，观察期在版本解析之后才生效。代价是该版本未经观察期。
     </p>
   </div>
@@ -306,6 +339,72 @@
     <p class="note" style="margin-top:28px">
       <strong>已知的坑：</strong>装完不重启就没有配置区，而且没有任何报错。这不是 bug 报告里才有的边缘情况，
       从插件页安装时它就是常态——Host 先启动，包后落盘。
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>更新日志</h2>
+    <p class="lede">
+      点版本号跳到对应的 GitHub Release，完整的变更说明在那里。
+      版本号的规则见 <a href="https://github.com/wangx-wx/dsh-channel-wechat/blob/main/README.md">README</a>：
+      <code>0.2.x</code> 配 DSH <code>0.2</code> 那一代。
+    </p>
+
+    <ul class="releases">
+      <li>
+        <div class="ver">
+          <a href="https://github.com/wangx-wx/dsh-channel-wechat/releases/tag/v0.2.3">v0.2.3</a> <span class="tag">最新</span>
+          <span class="date">2026-10-17</span>
+        </div>
+        <p>修好 0.2.2 里没生效的退出修复</p>
+      </li>
+      <li>
+        <div class="ver">
+          <a href="https://github.com/wangx-wx/dsh-channel-wechat/releases/tag/v0.2.2">v0.2.2</a>
+          <span class="date">2026-10-17</span>
+        </div>
+        <p>检查更新、Windows 路径修复</p>
+      </li>
+      <li>
+        <div class="ver">
+          <a href="https://github.com/wangx-wx/dsh-channel-wechat/releases/tag/v0.2.1">v0.2.1</a>
+          <span class="date">2026-10-17</span>
+        </div>
+        <p>版本号跟随 DSH，修长轮询 teardown</p>
+      </li>
+      <li>
+        <div class="ver">
+          <a href="https://github.com/wangx-wx/dsh-channel-wechat/releases/tag/v0.1.3">v0.1.3</a>
+          <span class="date">2026-10-16</span>
+        </div>
+        <p>插件页内配置默认模型与会话权限</p>
+      </li>
+      <li>
+        <div class="ver">
+          <a href="https://github.com/wangx-wx/dsh-channel-wechat/releases/tag/v0.1.2">v0.1.2</a>
+          <span class="date">2026-10-16</span>
+        </div>
+        <p>GUI 内登录与配置，插件只占一行</p>
+      </li>
+      <li>
+        <div class="ver">
+          <a href="https://github.com/wangx-wx/dsh-channel-wechat/releases/tag/v0.1.1">v0.1.1</a>
+          <span class="date">2026-10-16</span>
+        </div>
+      </li>
+      <li>
+        <div class="ver">
+          <a href="https://github.com/wangx-wx/dsh-channel-wechat/releases/tag/v0.1.0">v0.1.0</a>
+          <span class="date">2026-10-15</span>
+        </div>
+      </li>
+    </ul>
+
+    <p class="note" style="margin-top:28px">
+      还没发版的改动不在这个列表里，见
+      <a href="https://github.com/wangx-wx/dsh-channel-wechat/commits/main">提交历史</a>。
     </p>
   </div>
 </section>

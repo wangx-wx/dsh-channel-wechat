@@ -430,4 +430,35 @@ describe('discovery metadata', () => {
     expect(entry?.description).toEqual({ en: english.meta?.description, zh: chinese.meta?.description })
     expect(entry?.metadata?.keywords).toEqual(manifest.keywords)
   })
+
+  it('publishes a favicon that is the same artwork as the package icon', () => {
+    // GitHub Pages serves /docs, so the site cannot reach the repository-root
+    // `icon.svg` and needs its own copy. A copy can drift, and a stale favicon
+    // is invisible: the browser shows *an* icon either way, so nothing looks
+    // broken. This pins the copy to the original.
+    const icon = manifest.icon
+    expect(icon, 'package.json must declare `icon`').toBeTypeOf('string')
+    const source = readFileSync(new URL(`../../${String(icon)}`, import.meta.url), 'utf8')
+    const favicon = readFileSync(new URL('../../docs/favicon.svg', import.meta.url), 'utf8')
+    expect(favicon, 'docs/favicon.svg must be byte-identical to icon.svg').toBe(source)
+  })
+
+  it('links every page that ships from /docs to the favicon', () => {
+    // A page without the link silently falls back to /favicon.ico, which this
+    // site does not have, so the tab shows the browser's blank-document icon.
+    // Nothing errors; it simply looks unfinished.
+    const pages = [
+      new URL('../../docs/index.html', import.meta.url),
+      new URL('../../docs/article/wechat-channel-internals.html', import.meta.url),
+    ]
+    for (const page of pages) {
+      const html = readFileSync(page, 'utf8')
+      const href = html.match(/<link rel="icon" href="([^"]+)"/u)?.[1]
+      expect(href, `${page.pathname} must declare a favicon`).toBeTypeOf('string')
+      // Resolve the way a browser would, then require the file to exist: a
+      // typo in a relative href is a 404 nobody notices.
+      const resolved = new URL(String(href), page)
+      expect(existsSync(resolved), `${href} in ${page.pathname} must exist`).toBe(true)
+    }
+  })
 })
