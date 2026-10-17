@@ -56,8 +56,8 @@ export interface CardAnswererLike {
 export interface ChannelOptions {
   /** The agent registry. */
   registry: AgentRegistryLike
-  /** Poll the server once. */
-  poll: (cursor: string | undefined, timeoutMs: number) => Promise<MonitorResponse>
+  /** Poll the server once, aborting the request when `signal` aborts. */
+  poll: (cursor: string | undefined, timeoutMs: number, signal: AbortSignal | undefined) => Promise<MonitorResponse>
   /** Send one reply to WeChat. */
   send: ReplySender
   /** Persist the poll cursor. */

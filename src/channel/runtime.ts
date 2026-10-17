@@ -241,11 +241,12 @@ export async function startChannelFromStore(options: RuntimeOptions): Promise<vo
     registry: options.createRegistry(),
     // The poll carries the cursor and the account's own credentials; the
     // channel itself never sees a token.
-    poll: (cursor, timeoutMs) => options.api.getUpdates({
+    poll: (cursor, timeoutMs, signal) => options.api.getUpdates({
       baseUrl,
       token,
       ...(cursor === undefined ? {} : { cursor }),
       timeoutMs,
+      ...(signal === undefined ? {} : { signal }),
     }),
     send: (peerId, text, contextToken) => options.api.sendText({
       baseUrl,

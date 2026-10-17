@@ -18,7 +18,11 @@
  */
 
 /** Polls once and returns whatever the server said. */
-export type PollFn = (cursor: string | undefined, timeoutMs: number) => Promise<MonitorResponse>
+export type PollFn = (
+  cursor: string | undefined,
+  timeoutMs: number,
+  signal: AbortSignal | undefined,
+) => Promise<MonitorResponse>
 
 /** The subset of a `getUpdates` response the monitor acts on. */
 export interface MonitorResponse {
@@ -60,7 +64,15 @@ export interface MonitorOptions {
   pollTimeoutMs?: number
   /** Hard limit on how long a single `monitorLoop` call may run. */
   maxRunMs?: number
-  /** Ends the loop promptly when aborted. */
+  /**
+   * Ends the loop promptly when aborted, and is handed to every poll so the
+   * request in flight is aborted too.
+   *
+   * Racing the poll against this signal only releases the *loop*; the request
+   * it stops waiting for stays open, and its socket plus its own timeout timer
+   * keep the Node event loop alive. A Host shutting down then misses its
+   * graceful deadline, and the Desktop updater refuses to install.
+   */
   signal?: AbortSignal
 }
 
@@ -90,10 +102,11 @@ export async function monitorLoop(options: MonitorOptions): Promise<void> {
     let response: MonitorResponse
     try {
       // Race the poll against the abort: a long poll holds for up to 35
-      // seconds, and a stop that waited it out would look hung. The poll's own
-      // rejection is left to settle on its own rather than becoming an
-      // unhandled rejection.
-      const polled = options.poll(cursor, pollTimeoutMs)
+      // seconds, and a stop that waited it out would look hung. The signal also
+      // goes INTO the poll, so the held request is aborted rather than left
+      // open behind a loop that already returned. The poll's own rejection is
+      // left to settle on its own rather than becoming an unhandled rejection.
+      const polled = options.poll(cursor, pollTimeoutMs, options.signal)
       response = options.signal === undefined
         ? await polled
         : await Promise.race([polled, abortPromise(options.signal)])

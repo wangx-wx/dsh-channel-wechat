@@ -37,6 +37,13 @@ export interface ApiGetParams {
   endpoint: string
   /** Client-side abort after this many milliseconds. */
   timeoutMs?: number
+  /**
+   * Caller abort, forwarded to the request itself.
+   *
+   * A request that only stops being *awaited* keeps its socket open and holds
+   * the process alive; a held long poll is the case that matters.
+   */
+  signal?: AbortSignal
   /** Diagnostic label used in error messages. */
   label: string
 }
@@ -95,6 +102,13 @@ export interface GetUpdatesParams {
   cursor?: string
   /** How long the server may hold the request. */
   timeoutMs?: number
+  /**
+   * Caller abort, forwarded to the request itself.
+   *
+   * Stopping the channel only stops *awaiting* the poll; without this the held
+   * request outlives the shutdown that ended it.
+   */
+  signal?: AbortSignal
 }
 
 /** What a long poll returned. */
@@ -322,17 +336,39 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
   void options.botAgent
 
   /**
-   * Perform one request with an optional timeout.
+   * Perform one request with an optional timeout and an optional caller abort.
+   *
+   * Both signals abort the same request: the timeout is this call's own
+   * deadline, and `signal` is the owner ending it early. The timer is
+   * `unref`'d so a request that was already settled cannot hold the process
+   * open by itself - a held long poll is the case that matters, because its
+   * deadline is 35 seconds past the shutdown that abandoned it.
+   *
    * @param url - absolute request URL.
-   * @param init - fetch init, including the timeout signal when one applies.
+   * @param init - fetch init, including the abort signals when either applies.
    * @param label - diagnostic label.
    * @returns the raw response text.
    */
-  async function send(url: string, init: RequestInit, label: string, timeoutMs: number | undefined): Promise<string> {
+  async function send(
+    url: string,
+    init: RequestInit,
+    label: string,
+    timeoutMs: number | undefined,
+    signal: AbortSignal | undefined,
+  ): Promise<string> {
     const controller = timeoutMs !== undefined && timeoutMs > 0 ? new AbortController() : undefined
     const timer = controller === undefined ? undefined : setTimeout(() => controller.abort(), timeoutMs)
+    // Never let the deadline alone keep the process alive; the request it
+    // guards is what should decide that.
+    timer?.unref()
+    const forward = (): void => { controller?.abort() }
+    if (controller !== undefined && signal !== undefined) {
+      if (signal.aborted) forward()
+      else signal.addEventListener('abort', forward, { once: true })
+    }
+    const requestSignal = controller?.signal ?? signal
     try {
-      const response = await fetchImpl(url, controller === undefined ? init : { ...init, signal: controller.signal })
+      const response = await fetchImpl(url, requestSignal === undefined ? init : { ...init, signal: requestSignal })
       const text = await response.text()
       // A non-2xx answer is a server verdict, not a transport fault: it keeps
       // its status and body so callers can read the protocol's error payload.
@@ -344,6 +380,7 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       throw Object.assign(new Error(`${label}: ${classified.description}`), { classification: classified, cause: error })
     } finally {
       if (timer !== undefined) clearTimeout(timer)
+      if (controller !== undefined && signal !== undefined) signal.removeEventListener('abort', forward)
     }
   }
 
@@ -361,6 +398,7 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
         body,
         token: params.token,
         ...(params.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
+        ...(params.signal === undefined ? {} : { signal: params.signal }),
         label: 'getupdates',
       })
       const parsed = JSON.parse(raw) as {
@@ -485,7 +523,7 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
     },
     async get(params) {
       const url = new URL(params.endpoint, withTrailingSlash(params.baseUrl)).toString()
-      return send(url, { method: 'GET', headers: { ...common } }, params.label, params.timeoutMs)
+      return send(url, { method: 'GET', headers: { ...common } }, params.label, params.timeoutMs, params.signal)
     },
     async post(params) {
       const url = new URL(params.endpoint, withTrailingSlash(params.baseUrl)).toString()
@@ -496,7 +534,7 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
         ...common,
       }
       if (params.token !== undefined && params.token.trim() !== '') headers['Authorization'] = `Bearer ${params.token.trim()}`
-      return send(url, { method: 'POST', headers, body: params.body }, params.label, params.timeoutMs)
+      return send(url, { method: 'POST', headers, body: params.body }, params.label, params.timeoutMs, params.signal)
     },
   }
 }

@@ -171,6 +171,36 @@ describe('the two calls the channel makes', () => {
     expect(body['get_updates_buf']).toBe('')
   })
 
+  it('aborts a held long poll when the caller signal aborts', async () => {
+    // A 35-second held request outlives the channel that started it unless the
+    // caller's abort reaches the fetch itself: the abandoned socket and the
+    // request's own timeout timer both keep the process alive past the Host's
+    // shutdown deadline, and the Desktop updater then refuses to install.
+    const controller = new AbortController()
+    let fetchSignal: AbortSignal | undefined
+    // Behaves like the real fetch: the request only settles when its signal aborts.
+    const fetchImpl = vi.fn((_url: string | URL | Request, init?: RequestInit) => {
+      fetchSignal = init?.signal ?? undefined
+      return new Promise<Response>((_resolve, reject) => {
+        fetchSignal?.addEventListener('abort', () => {
+          reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+        }, { once: true })
+      })
+    }) as unknown as typeof fetch
+    const api = createApiClient({ fetchImpl })
+
+    const polled = api.getUpdates({
+      baseUrl: 'https://example.test/',
+      token: 'tok-1',
+      timeoutMs: 60_000,
+      signal: controller.signal,
+    })
+    controller.abort()
+
+    await expect(polled).rejects.toThrow()
+    expect(fetchSignal?.aborted).toBe(true)
+  })
+
   it('sends text with the destination and the conversation token', async () => {
     const { fetchImpl, calls } = stubFetch({ body: '{"ret":0}' })
     const api = createApiClient({ fetchImpl })

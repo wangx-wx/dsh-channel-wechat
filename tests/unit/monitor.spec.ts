@@ -318,6 +318,38 @@ describe('abort', () => {
       .resolves.not.toBe('timeout')
     expect(polls).toBe(1)
   })
+
+  it('aborts the poll that was in flight, not only the loop that awaited it', async () => {
+    // Racing the abort lets the *loop* end at once, but the request it gave up
+    // on stays open: its socket and its own timeout timer both keep the Node
+    // event loop alive. The Host's shutdown then misses its graceful deadline
+    // and the Desktop updater refuses to install. So the poll is handed the
+    // loop's signal and must see it aborted.
+    const controller = new AbortController()
+    let pollSignal: AbortSignal | undefined
+    const run = monitorLoop({
+      initialCursor: undefined,
+      poll: async (_cursor, _timeoutMs, signal) => {
+        pollSignal = signal
+        // Never returns; only the abort can end this request.
+        return new Promise<never>(() => {})
+      },
+      onMessage: async () => {},
+      saveCursor: async () => {},
+      shouldStop: () => false,
+      signal: controller.signal,
+      sleep: async () => {},
+      now: () => 0,
+      pollTimeoutMs: 60_000,
+    })
+
+    await new Promise(resolve => setTimeout(resolve, 5))
+    controller.abort()
+    await run
+
+    expect(pollSignal).toBeDefined()
+    expect(pollSignal?.aborted).toBe(true)
+  })
 })
 
 describe('long-poll timeout', () => {
