@@ -124,6 +124,25 @@ allowBuilds:
   dsh-channel-wechat@<the full key pnpm printed>: true
 ```
 
+### Install from the plugin market's Discover tab
+
+DSH ships an **experimental** custom plugin market, off by default. Enabling it
+adds a **Discover** tab to the plugins page, where index sources are browsed,
+searched, and installed from. This repository publishes its own index:
+
+```
+https://wangx-wx.github.io/dsh-channel-wechat/market/index.json
+```
+
+Open **Plugins → Experimental plugins → More → Custom plugin market**, then
+**Discover → Add index source** and paste that URL. The index describes this one
+package, and its versions come from the npm registry; see
+[docs/market/README.md](./docs/market/README.md) for how it is maintained.
+
+> The index takes its display title and description from the version published
+> on npm. `icon`, `locale/`, and the new `dsh-plugin` keyword only reach the
+> index with the next release; until then the card shows the package name.
+
 ⚠️ **Do not `add` a local directory.** That creates a `link:`, and **`link:` runs
 no build**. Since `lib/` is gitignored, the installed package has no `lib/`, so
 startup reports `failed to import` and **silently loads nothing**. If you must,

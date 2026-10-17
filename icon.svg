@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="WeChat channel for DeepSeek Harness">
+  <rect width="256" height="256" rx="56" fill="#0F172A"/>
+  <path d="M118 62c-38 0-68 24-68 54 0 17 10 32 26 42l-7 22 24-13c8 2 16 3 25 3h4c-3-7-4-15-3-23 3-27 27-47 57-47h6c-7-22-32-38-64-38z" fill="#22C55E"/>
+  <path d="M176 118c-27 0-48 17-48 38s21 38 48 38c7 0 13-1 19-3l17 9-5-16c11-7 17-17 17-28 0-21-21-38-48-38z" fill="#38BDF8"/>
+  <circle cx="98" cy="106" r="7" fill="#0F172A"/>
+  <circle cx="138" cy="106" r="7" fill="#0F172A"/>
+  <circle cx="162" cy="152" r="5.5" fill="#0F172A"/>
+  <circle cx="190" cy="152" r="5.5" fill="#0F172A"/>
+</svg>

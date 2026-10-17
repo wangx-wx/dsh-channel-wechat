@@ -97,6 +97,22 @@ allowBuilds:
   dsh-channel-wechat@<pnpm 打印的那串完整键>: true
 ```
 
+### 从插件市场的「发现」里装
+
+DSH 自带一个**实验性**的自定义插件市场，默认关闭。打开后插件页多一个**发现**标签页，可以按索引源
+浏览、搜索并安装组合包。本仓库自己发布了一份索引：
+
+```
+https://wangx-wx.github.io/dsh-channel-wechat/market/index.json
+```
+
+打开路径：**插件 → 实验性插件 → 更多 → 自定义插件市场**，再在**发现 → 添加索引源**里填上面的 URL。
+索引只描述本仓库这一个包，版本列表取自 npm 注册表；维护方式见
+[docs/market/README.md](./docs/market/README.md)。
+
+> 索引里的展示名与描述来自 npm 上**已发布**的那个版本。`icon`、`locale/` 与新增的
+> `dsh-plugin` 关键词要等下次发版才出现在索引里，之前卡片会显示包名。
+
 ⚠️ **不要直接 `add` 一个本地目录**：那会建立 `link:`，而 **`link:` 不会执行构建**。
 仓库里 `lib/` 是 gitignore 的，于是装出来的包**没有 `lib/`**，启动时报
 `failed to import` 并**静默不加载**。真要这么做，必须先 `pnpm install && pnpm build`。

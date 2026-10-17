@@ -11,8 +11,10 @@
   },
   "homepage": "https://github.com/wangx-wx/dsh-channel-wechat#readme",
   "bugs": "https://github.com/wangx-wx/dsh-channel-wechat/issues",
+  "icon": "./icon.svg",
   "keywords": [
     "dsh",
+    "dsh-plugin",
     "deepseek-harness",
     "wechat",
     "weixin",
@@ -29,11 +31,14 @@
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
     "./package.json": "./package.json",
-    "./cordis.patch.yml": "./cordis.patch.yml"
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json"
   },
   "files": [
     "lib/",
     "cordis.patch.yml",
+    "icon.svg",
+    "locale/*.json",
     "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
