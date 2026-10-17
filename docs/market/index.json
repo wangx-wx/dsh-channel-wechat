@@ -5,8 +5,15 @@
   "plugins": [
     {
       "name": "dsh-channel-wechat",
-      "title": "dsh-channel-wechat",
-      "description": "WeChat (iLink / ClawBot) channel for DeepSeek Harness",
+      "title": {
+        "en": "WeChat channel",
+        "zh": "微信通道"
+      },
+      "description": {
+        "en": "Answer WeChat messages from a DeepSeek Harness session, with interaction cards relayed to the chat.",
+        "zh": "在 DeepSeek Harness 会话里收发微信消息，审批卡与提问卡转发到聊天里回答。"
+      },
+      "icon": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNTYgMjU2IiB3aWR0aD0iMjU2IiBoZWlnaHQ9IjI1NiIgcm9sZT0iaW1nIiBhcmlhLWxhYmVsPSJXZUNoYXQgY2hhbm5lbCBmb3IgRGVlcFNlZWsgSGFybmVzcyI+CiAgPHJlY3Qgd2lkdGg9IjI1NiIgaGVpZ2h0PSIyNTYiIHJ4PSI1NiIgZmlsbD0iIzBGMTcyQSIvPgogIDxwYXRoIGQ9Ik0xMTggNjJjLTM4IDAtNjggMjQtNjggNTQgMCAxNyAxMCAzMiAyNiA0MmwtNyAyMiAyNC0xM2M4IDIgMTYgMyAyNSAzaDRjLTMtNy00LTE1LTMtMjMgMy0yNyAyNy00NyA1Ny00N2g2Yy03LTIyLTMyLTM4LTY0LTM4eiIgZmlsbD0iIzIyQzU1RSIvPgogIDxwYXRoIGQ9Ik0xNzYgMTE4Yy0yNyAwLTQ4IDE3LTQ4IDM4czIxIDM4IDQ4IDM4YzcgMCAxMy0xIDE5LTNsMTcgOS01LTE2YzExLTcgMTctMTcgMTctMjggMC0yMS0yMS0zOC00OC0zOHoiIGZpbGw9IiMzOEJERjgiLz4KICA8Y2lyY2xlIGN4PSI5OCIgY3k9IjEwNiIgcj0iNyIgZmlsbD0iIzBGMTcyQSIvPgogIDxjaXJjbGUgY3g9IjEzOCIgY3k9IjEwNiIgcj0iNyIgZmlsbD0iIzBGMTcyQSIvPgogIDxjaXJjbGUgY3g9IjE2MiIgY3k9IjE1MiIgcj0iNS41IiBmaWxsPSIjMEYxNzJBIi8+CiAgPGNpcmNsZSBjeD0iMTkwIiBjeT0iMTUyIiByPSI1LjUiIGZpbGw9IiMwRjE3MkEiLz4KPC9zdmc+Cg==",
       "homepage": "https://github.com/wangx-wx/dsh-channel-wechat#readme",
       "repository": {
         "url": "https://github.com/wangx-wx/dsh-channel-wechat"
@@ -14,6 +21,7 @@
       "metadata": {
         "keywords": [
           "dsh",
+          "dsh-plugin",
           "deepseek-harness",
           "wechat",
           "weixin",
@@ -23,6 +31,16 @@
         ]
       },
       "versions": [
+        {
+          "version": "0.2.3",
+          "publishTimestamp": 1792246466,
+          "source": {
+            "type": "npm"
+          },
+          "engines": {
+            "dsh": ">=0.2.0-rc.1"
+          }
+        },
         {
           "version": "0.2.2",
           "publishTimestamp": 1792239132,
