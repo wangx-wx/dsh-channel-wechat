@@ -62,6 +62,8 @@ window.__ModuleLoader__.load({
       verifyCode: 'api/channel-wechat/verify-code',
       logout: 'api/channel-wechat/logout',
       models: 'api/channel-wechat/models',
+      updateCheck: 'api/channel-wechat/update/check',
+      updateCommand: 'api/channel-wechat/update/command',
     };
 
     /** Copy for the page, in the two languages the client selects between. */
@@ -113,6 +115,24 @@ window.__ModuleLoader__.load({
         saveFailed: '保存未被接受。',
         save: '保存',
         saving: '保存中…',
+        version: '版本与更新',
+        currentVersion: '当前版本 {version}',
+        checkUpdate: '检查更新',
+        checking: '正在检查…',
+        upToDate: '已是最新版本（{version}）。',
+        updateFailed: '无法检查更新：{reason}',
+        updateAvailable: '有新版本 {latest}，当前 {current}。',
+        updateHowTo: '两种更新方式，任选其一。更新后必须完全退出 DSH 再重新打开才会生效。',
+        updateWay1: '方式一：在终端执行下面这条命令',
+        updateWay2: '方式二：在「设置 → 插件」里先卸载 dsh-channel-wechat，再安装 {spec}',
+        updateSpecLabel: '要安装的版本',
+        copy: '复制',
+        copied: '已复制',
+        copyFailed: '复制失败，请手动选中命令',
+        updateExitFirst: '执行前请先完全退出 DSH：插件正在运行时，安装会撞上「包已安装」的拒绝。',
+        updateAgeNote: '命令带 --config.minimumReleaseAge=0，会跳过 pnpm 的发布观察期。新版本可能刚发布、尚未被广泛验证，请自行判断。',
+        updateNoCommand: '此部署无法生成更新命令，请在终端执行 dsh plugin 相关命令。',
+        updateDesktopNote: '这是桌面版，只能用应用自带的 dsh 命令。',
       },
       en: {
         connection: 'Connection',
@@ -161,6 +181,24 @@ window.__ModuleLoader__.load({
         saveFailed: 'The save was not accepted.',
         save: 'Save',
         saving: 'Saving…',
+        version: 'Version and updates',
+        currentVersion: 'Running {version}',
+        checkUpdate: 'Check for updates',
+        checking: 'Checking…',
+        upToDate: 'Up to date ({version}).',
+        updateFailed: 'Could not check for updates: {reason}',
+        updateAvailable: 'Version {latest} is available; you are running {current}.',
+        updateHowTo: 'Two ways to update, pick one. Both need a full quit and relaunch of DSH to take effect.',
+        updateWay1: 'Option 1: run this command in a terminal',
+        updateWay2: 'Option 2: in Settings → Plugins, uninstall dsh-channel-wechat, then install {spec}',
+        updateSpecLabel: 'Version to install',
+        copy: 'Copy',
+        copied: 'Copied',
+        copyFailed: 'Could not copy; select the command manually',
+        updateExitFirst: 'Quit DSH completely first: installing while the plugin is running is refused as "already installed".',
+        updateAgeNote: 'The command passes --config.minimumReleaseAge=0, which skips pnpm\'s release observation window. A brand-new release may not have been widely vetted yet.',
+        updateNoCommand: 'This deployment cannot produce an update command; run the dsh plugin command in a terminal instead.',
+        updateDesktopNote: 'This is the desktop app, so only its bundled dsh command works.',
       },
     };
 
@@ -779,6 +817,138 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /**
+     * The version card: what is running, whether something newer exists, and the
+     * two ways to update.
+     *
+     * This card deliberately offers no "update now" button. Measured: the
+     * in-process plugin manager refuses to replace an installed package
+     * (`already-installed` while HMR is present, which the shipped bundles always
+     * provide), and its remove path can leave the package installed but the
+     * bundle deselected - a state the user is never told about. The CLI has
+     * neither problem, so the card hands over the command instead of pretending
+     * to do something it cannot do safely.
+     */
+    function UpdateCard(props) {
+      var t = props.t;
+      var useState = React.useState;
+      var useEffect = React.useEffect;
+      // idle | checking | ready | failed
+      var stateState = useState({ phase: 'idle' });
+      var state = stateState[0];
+      var setState = stateState[1];
+      var commandState = useState(null);
+      var command = commandState[0];
+      var setCommand = commandState[1];
+      var copiedState = useState('');
+      var copied = copiedState[0];
+      var setCopied = copiedState[1];
+
+      // Read once when the card first appears. A check on every render would ask
+      // the registry repeatedly for an answer that only changes when a release is
+      // published.
+      useEffect(function () {
+        var stopped = false;
+        setState({ phase: 'checking' });
+        fetch(ROUTES.updateCheck, { cache: 'no-store' })
+          .then(function (response) { return response.json(); })
+          .then(function (body) {
+            if (stopped) return;
+            setState({ phase: 'ready', check: body });
+            // Only an actual upgrade needs a command; fetching one otherwise
+            // would ask the Host to prepare instructions nobody sees.
+            if (body.status === 'ready' && body.newer) {
+              return fetch(ROUTES.updateCommand, { cache: 'no-store' })
+                .then(function (response) { return response.ok ? response.json() : null; })
+                .then(function (value) { if (!stopped && value !== null) setCommand(value); });
+            }
+          })
+          .catch(function (failure) {
+            if (!stopped) setState({ phase: 'failed', reason: String(failure && failure.message ? failure.message : failure) });
+          });
+        return function () { stopped = true; };
+      }, []);
+
+      /**
+       * Put the command on the clipboard.
+       *
+       * `navigator.clipboard` needs a secure context, which a `http://127.0.0.1`
+       * page has; a plain-HTTP page on another host does not. The fallback
+       * reports that the copy failed rather than showing "已复制" over an empty
+       * clipboard, so the user knows to select the text themselves.
+       */
+      function copy(text) {
+        var done = function () { setCopied('copied'); };
+        var failed = function () { setCopied('failed'); };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(done, failed);
+          return;
+        }
+        failed();
+      }
+
+      var body;
+      if (state.phase === 'checking' || state.phase === 'idle') {
+        body = h('p', { className: 'cw-muted' }, t('checking'));
+      } else if (state.phase === 'failed') {
+        body = h('p', { className: 'cw-err' }, t('updateFailed', { reason: state.reason }));
+      } else if (state.check.status === 'failed') {
+        // The Host answered but the registry could not be read. Kept distinct
+        // from "up to date": one is the user's network, the other is the truth.
+        body = h('p', { className: 'cw-err' }, t('updateFailed', { reason: state.check.reason }));
+      } else if (!state.check.newer) {
+        body = h('p', { className: 'cw-ok' }, t('upToDate', { version: state.check.current }));
+      } else {
+        body = h('div', { className: 'cw-update' },
+          h('p', { className: 'cw-muted' }, t('updateAvailable', {
+            latest: state.check.latest,
+            current: state.check.current,
+          })),
+          h('p', { className: 'cw-muted' }, t('updateHowTo')),
+
+          // The command goes first because it is the one that works without the
+          // user hunting through the GUI, and it is the only one that can be
+          // copied. It is also the only way on a profile whose plugin list the
+          // GUI cannot reach.
+          h('div', { className: 'cw-way' },
+            h('p', { className: 'cw-way-title' }, t('updateWay1')),
+            command === null
+              ? h('p', { className: 'cw-hint' }, t('updateNoCommand'))
+              : h('div', { className: 'cw-cmd-wrap' },
+                h('pre', { className: 'cw-cmd' }, command.command),
+                h(Button, {
+                  variant: 'outline',
+                  size: 'sm',
+                  onClick: function () { copy(command.command); },
+                }, copied === 'copied' ? t('copied') : copied === 'failed' ? t('copyFailed') : t('copy')),
+              ),
+            // Two facts the command alone does not convey, and each one is the
+            // difference between a working update and a refused one.
+            h('p', { className: 'cw-hint' }, t('updateExitFirst')),
+            h('p', { className: 'cw-hint' }, t('updateAgeNote')),
+            command !== null && command.desktop ? h('p', { className: 'cw-hint' }, t('updateDesktopNote')) : null,
+          ),
+
+          h('div', { className: 'cw-way' },
+            h('p', { className: 'cw-way-title' }, t('updateWay2', { spec: state.check.latest })),
+          ),
+        );
+      }
+
+      return h('section', { className: 'cw-card' },
+        h('div', { className: 'cw-card-head' },
+          h('h3', { className: 'cw-card-title' }, t('version')),
+          // Shown only once the Host has answered, because the running version is
+          // read from the installed manifest there. A placeholder would be a
+          // number the page guessed at.
+          state.phase === 'ready' && state.check.status === 'ready'
+            ? h('span', { className: 'cw-version' }, t('currentVersion', { version: state.check.current }))
+            : null,
+        ),
+        h('div', { className: 'cw-card-body' }, body),
+      );
+    }
+
     /** The page: connection above, configuration below. */
     function WechatPage(props) {
       return h('div', { className: 'cw-root' },
@@ -791,6 +961,9 @@ window.__ModuleLoader__.load({
           save: props.save,
           discard: props.discard,
         }),
+        // Last on the page: an update is a rare, deliberate action, so it does
+        // not compete with the scan and the settings for the first screen.
+        h(UpdateCard, { t: props.t }),
       );
     }
 
@@ -839,6 +1012,22 @@ window.__ModuleLoader__.load({
       // The model trigger sits under its label on the same left edge as the
       // segmented controls, so the three fields read as one column.
       '.cw-field .cw-menu{align-self:flex-start;}',
+      // The version card: a heading that carries the running version beside it,
+      // the way the other cards carry only a title.
+      '.cw-version{margin-left:auto;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5;}',
+      '.cw-update{display:flex;flex-direction:column;gap:12px;}',
+      // Each way is its own block with a top rule: the two options are separate
+      // instructions, not a paragraph. The rule is the same hairline the settings
+      // fields use, so the card reads as the same family.
+      '.cw-way{display:flex;flex-direction:column;gap:8px;padding-top:12px;border-top:0.5px solid var(--dsw-alias-border-l2);}',
+      '.cw-way-title{margin:0;font-size:13px;font-weight:500;line-height:1.5;color:var(--dsw-alias-label-primary);}',
+      // The command scrolls rather than wrapping: a wrapped shell line is a
+      // command a user is likely to copy with a stray newline in the middle.
+      '.cw-cmd-wrap{display:flex;flex-direction:column;gap:8px;align-items:flex-start;}',
+      '.cw-cmd{margin:0;padding:10px 12px;max-width:100%;overflow-x:auto;box-sizing:border-box;',
+      'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.6;',
+      'color:var(--dsw-alias-label-primary);background:var(--dsw-alias-bg-layer-2);',
+      'border-radius:var(--dsw-radius-lg);white-space:pre;}',
     ].join('');
 
     /**

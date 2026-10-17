@@ -13,7 +13,7 @@
  * whole path: begin, poll, scan, confirm, store, start.
  */
 
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -24,6 +24,7 @@ import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { inject as channelInject } from '../../src/index.ts'
 import { mountChannel } from '../support/config.ts'
+import { REPO_ROOT } from '../support/harness.ts'
 import { loadAccount, saveAccount } from '../../src/credentials.ts'
 
 /** One mounted profile, disposed after its test. */
@@ -164,6 +165,36 @@ describe('the panel as the plugin wires it', () => {
     expect(routes.has('/api/channel-wechat/login')).toBe(true)
     expect(routes.has('/api/channel-wechat/status')).toBe(true)
     expect(routes.has('/api/channel-wechat/qr.svg')).toBe(true)
+  })
+
+  it('registers the update routes beside the login ones', async () => {
+    // The recurring defect in this repository: a unit test injects its own
+    // collaborator, so nothing observes whether `apply` connected it. These routes
+    // exist only if `mountLoginPanel` wired the builder through, which no unit
+    // test can see.
+    const { routes } = await bootWithPanel()
+    await until(() => routes.has('/api/channel-wechat/update/check'))
+
+    expect(routes.has('/api/channel-wechat/update/check')).toBe(true)
+    expect(routes.has('/api/channel-wechat/update/command')).toBe(true)
+  })
+
+  it('serves the running version from the installed manifest', async () => {
+    // The card shows this number, and a build that inlined it would drift from
+    // `package.json` the moment one of them was bumped alone. Read from the route
+    // the page actually fetches.
+    const { routes } = await bootWithPanel()
+    await until(() => routes.has('/api/channel-wechat/update/check'))
+
+    const body = (await (await call(routes, '/api/channel-wechat/update/check')).json()) as {
+      status: string
+      current?: string
+    }
+
+    // Whether the registry answered is the network's business; the version is read
+    // from disk either way, so it is present in both shapes.
+    const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')) as { version: string }
+    expect(body.current).toBe(manifest.version)
   })
 
   it('walks a login from idle to a stored account', async () => {
