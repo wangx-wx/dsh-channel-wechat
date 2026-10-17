@@ -102,8 +102,8 @@ DSH 一旦看到 `engines.dsh`，就**只用它判定兼容性**，`@deepseek-ai
 ```
 0.1.7-rc.2     REFUSED         ← 早于下界，它没有本插件调用的那些 API
 0.2.0-rc.1     COMPATIBLE
-0.2.0-rc.2     COMPATIBLE      ← 打包桌面端，集成测试 84 项通过
-0.2.1-rc.1     COMPATIBLE      ← 本地 checkout，集成测试 99 项通过
+0.2.0-rc.2     COMPATIBLE      ← 打包桌面端，集成测试 99 项通过
+0.2.1-rc.1     COMPATIBLE      ← npm 装的真 launcher，集成测试 99 项通过
 0.3.0-rc.1     COMPATIBLE      ← 未实测，放行
 1.0.0          COMPATIBLE      ← 未实测，放行
 ```
@@ -115,6 +115,12 @@ DSH 一旦看到 `engines.dsh`，就**只用它判定兼容性**，`@deepseek-ai
 DSH_CHECKOUT=<该版本的 checkout 或 app> pnpm test:integration
 ```
 
+⚠️ **先确认绿灯是哪个版本点的。** `tests/support/harness.ts` 在
+`$DSH_CHECKOUT/apps/cli/lib/bin.js` 不存在时会**静默回退到 `DeepSeek Harness.app`**，
+而 `lib/` 在 DSH 仓库里是 gitignore 的——一个没构建过的 checkout 会让测试跑在打包版上，
+报告看起来完全正常。用 `.dsh/skills/dsh-plugin-upgrade/scripts/probe-dsh.sh` 装一个
+指定版本并校验 `--version`，它会把这个歧义消掉。
+
 **加版本时必须同时记下证据**（`RUNTIME_EVIDENCE`）：用了哪个 launcher、跳过几项、为什么跳过。
 `manifest.spec.ts` 有一条测试强制两者一一对应——往清单里加一个没有证据的版本会**直接失败**。
 理由很直接：清单里的名字长得都一样，跑过的和没跑过的一模一样，只有证据能区分。
@@ -123,8 +129,8 @@ DSH_CHECKOUT=<该版本的 checkout 或 app> pnpm test:integration
 
 | 版本 | launcher | 跳过 | 说明 |
 |---|---|---|---|
-| `0.2.0-rc.2` | 打包的 `DeepSeek Harness.app` | 15 | 跳过的是 `client-half-runs`，它要 checkout 的 `ui-theme` 源码；打包版不带源码，属环境限制而非版本不兼容 |
-| `0.2.1-rc.1` | checkout `dsh-v0.2.1-rc.1` | 0 | 本套件能产出的最完整一次运行（99 项全过），`0.2.x` 这条线即以此为准 |
+| `0.2.0-rc.2` | 打包的 `DeepSeek Harness.app` | 0 | 99 项全过。**注意**：跳过数与 DSH 版本无关，只与「源码树能否读到」有关——`client-half-runs` 要 checkout 的 `ui-theme` 源码和 react |
+| `0.2.1-rc.1` | npm 装的 `@deepseek-ai/dsh@0.2.1-rc.1`，套 checkout 形状的 shim | 0 | 99 项全过，`0.2.x` 这条线即以此为准 |
 
 ### 递增用 `npm version`
 

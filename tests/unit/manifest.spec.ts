@@ -31,13 +31,21 @@ const manifest = JSON.parse(readFileSync(new URL('../../package.json', import.me
  *
  * Exactly the ones measured against a real launcher with the integration suite:
  *
- *  - `0.2.0-rc.2` — the packaged desktop app (`DeepSeek Harness.app`), 84 tests
- *    pass and 15 skip. The skips are `client-half-runs`, which needs the
- *    checkout's `ui-theme` sources; the packaged app ships no sources, so the
- *    skip is an environment limit, not a version incompatibility.
- *  - `0.2.1-rc.1` — the local checkout at `dsh-v0.2.1-rc.1`, 99 tests pass with
- *    nothing skipped. This is the fullest run this suite can produce, and it is
- *    the release the `0.2.x` line was verified against.
+ *  - `0.2.0-rc.2` — the packaged desktop app (`DeepSeek Harness.app`), 99 tests
+ *    pass with nothing skipped.
+ *  - `0.2.1-rc.1` — installed from npm as `@deepseek-ai/dsh@0.2.1-rc.1` and
+ *    staged into a checkout-shaped directory, 99 tests pass with nothing
+ *    skipped. This is the release the `0.2.x` line was verified against.
+ *
+ * An earlier revision of this comment claimed `0.2.0-rc.2` skipped 15 tests and
+ * blamed the version. That was a misattribution worth recording: the skips were
+ * `client-half-runs` wanting the checkout's `ui-theme` sources and react, which
+ * depends on where the SOURCES live, not on which DSH runs. Measured: the same
+ * launch against the same packaged app reports 99/0 when the checkout's sources
+ * are present and 84/15 when they are not. So the skip count cannot be evidence
+ * about a runtime, and the harness silently substitutes the packaged app when a
+ * checkout has no `lib/` - see `.dsh/skills/dsh-plugin-upgrade` for the probe
+ * that removes the ambiguity.
  *
  * The rest of `0.2.x` satisfies the declared range but has not been run, so it
  * is not asserted here — claiming support we never exercised is how a plugin
@@ -47,8 +55,8 @@ const RUNTIME_VERSIONS = ['0.2.0-rc.2', '0.2.1-rc.1']
 
 /** How each {@link RUNTIME_VERSIONS} entry was measured, and what a run must show. */
 const RUNTIME_EVIDENCE: Record<string, { launcher: string; skipped: number }> = {
-  '0.2.0-rc.2': { launcher: 'the packaged DeepSeek Harness.app', skipped: 15 },
-  '0.2.1-rc.1': { launcher: 'the checkout at dsh-v0.2.1-rc.1', skipped: 0 },
+  '0.2.0-rc.2': { launcher: 'the packaged DeepSeek Harness.app', skipped: 0 },
+  '0.2.1-rc.1': { launcher: 'npm @deepseek-ai/dsh@0.2.1-rc.1, checkout-shaped', skipped: 0 },
 }
 
 /** Every source file that ends up in the published bundle. */

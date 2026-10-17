@@ -5,8 +5,9 @@ English | [中文](./README.md)
 A **channel plugin** that connects WeChat (Tencent iLink / ClawBot) to
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
 
-> Status: **v0.1.3, published to npm** (0.2.x from the next release; see
-> Versions and compatibility below). Signing in and configuring happen on
+> Status: **v0.2.1, published to npm** (version numbers track the DSH
+> major.minor from this release on; see Versions and compatibility below).
+> Signing in and configuring happen on
 > the plugin's page in the GUI, and the plugin takes one row in a profile. That
 > page also picks the **default model** and the **WeChat session permission**
 > (three presets, the widest behind a risk confirmation, all scoped to WeChat
@@ -27,10 +28,17 @@ only a change of our own bumps it.
 
 | DSH version | Installable | Verified |
 |---|---|---|
-| `0.2.0-rc.2` (packaged desktop app) | ✅ | ✅ 84 integration tests |
-| `0.2.1-rc.1` (local checkout) | ✅ | ✅ 99 integration tests |
+| `0.2.0-rc.2` (packaged desktop app) | ✅ | ✅ 99 integration tests pass |
+| `0.2.1-rc.1` (installed from npm, real launcher) | ✅ | ✅ 99 integration tests pass |
 | other `0.2.x` / `0.3.x` / `1.x` | ✅ | ⚠️ not individually measured |
 | older than `0.2.0-rc.1` | ⛔ refused at install with the reason | — |
+
+> "99 pass" means the full run, **nothing skipped**. An earlier version of this
+> table recorded "84 pass, 15 skipped" for `0.2.0-rc.2`, which was a
+> **misattribution**: the skips were `client-half-runs`, which needs the
+> checkout's `ui-theme` sources and react. That is unrelated to the DSH version —
+> the same suite runs all 99 on `0.2.0-rc.2` whenever the source tree is
+> available.
 
 **"Installable" and "verified" are different claims.** The ceiling is left open
 because a ceiling would block every user as soon as DSH ships a new release and
@@ -59,8 +67,8 @@ the profile's `bundles` layer.
 > dsh plugin --profile <your-profile> add dsh-channel-wechat@latest --config.minimumReleaseAge=0
 > ```
 >
-> Measured on both pnpm 11.7.0 and 11.9.0: with the flag it installs the newest
-> (`0.1.3`), without it `0.1.1`. The flag works without `@latest` too. **The cost**
+> Measured on both pnpm 11.7.0 and 11.9.0: with the flag it installs the newest,
+> without it the previous one. The flag works without `@latest` too. **The cost**
 > is that the version ships without an observation period — your call.
 >
 > **Restart fully after installing**, see the static module graph entry under
@@ -287,7 +295,7 @@ cause is the host package `@deepseek-ai/dsh-client-modules`:
   stays empty.
 
 That window is **the normal case for an install from the Plugins page** — the
-Host is already running when pnpm writes the package. Installing 0.1.1 or 0.1.3
+Host is already running when pnpm writes the package. Whichever version
 makes no difference, because the staleness is fixed at the first resolution, not
 by the version installed later.
 
