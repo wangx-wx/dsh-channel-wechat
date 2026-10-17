@@ -4,8 +4,9 @@
 
 把微信（腾讯 iLink / ClawBot）接入 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的**通道插件**。
 
-> 状态：**v0.2.1 已发布到 npm**（自本版起版本号跟随 DSH 主次，见下方「版本号与兼容性」）。登录与配置都在 GUI 插件页里完成；插件在 profile 中只占一行。
+> 状态：**v0.2.2 已发布到 npm**（版本号跟随 DSH 主次，见下方「版本号与兼容性」）。登录与配置都在 GUI 插件页里完成；插件在 profile 中只占一行。
 > 插件页现在还能选**默认模型**与**微信会话权限**（三档，完全权限带风险确认，只作用于微信会话）。
+> 新的「版本与更新」卡片会检查 npm 上的新版本，并给出**可直接复制的更新命令**（绝对路径，不依赖 PATH）。
 > 出站文件已**真机验证**；`svr_id` 引用与 `message_id` 精度为**已知记录项**（见 [plan-v1 §Q45](./docs/plan-v1.md)）。
 
 ### 版本号与兼容性
@@ -244,6 +245,32 @@ app 参数（只有声明 `inject` 的行才会拿到命令行），另一行是
 本插件只能做规避，不能改变宿主行为。
 
 规避方式一条：**装完/升级完插件，完全退出并重开 DSH。**
+
+### 已知问题详述：为什么「更新」要你手动执行命令
+
+插件页的「版本与更新」卡片只**检查**新版本并给出命令，**不代你升级**。这不是偷懒，是实测
+出来的：宿主进程内的插件管理器这条路走不通，而且失败方式很坏。
+
+| 路径 | 点「更新」的结果 |
+|---|---|
+| 进程内 `pluginManager.installBundle` | 拒绝：`already-installed`（只要 HMR 存在，而它默认存在） |
+| 先 `removeBundle` 再装（官方页面的做法） | `removeBundle` 报 `failed`，但**包还在 `dependencies`，却已从 `bundles` 摘除** |
+| CLI `dsh plugin add <包>@latest` | ✅ 直接替换旧版本，bundle 保持选中 |
+
+第一行的守卫在 `@deepseek-ai/dsh-plugin-manager`。第二行的半途状态最糟：**插件从 GUI 消失，
+而没有任何提示指向这件事**。官方已有同一缺陷的报告
+（[deepseek-harness #9936](https://github.com/deepseek-ai/deepseek-harness/discussions/9936)），
+当前最新版仍未被修。
+
+所以卡片给的是**可用且不会弄坏 profile** 的那条命令。两个细节都来自实测：
+
+- **绝对路径**：命令用当前进程的 `node` 与 DSH 安装位置拼成，不依赖 `PATH`。
+  桌面版必须换成 App 自带的 `dsh`，否则启动器会拒绝管理 `desktop` profile。
+- **`--config.minimumReleaseAge=0`**：不带它，pnpm 会以
+  `ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION` 拒绝安装刚发布的版本——而「新版本」恰恰就是刚发布的。
+  代价是跳过供应链观察期，请自行判断。
+
+**执行前请完全退出 DSH**：插件还在运行时，安装会撞上第一条的 `already-installed`。
 
 ### 已知边界：微信端可以自己放宽权限
 
