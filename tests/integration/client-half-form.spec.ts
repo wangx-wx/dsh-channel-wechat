@@ -114,7 +114,78 @@ const MARK = {
   risk: '__RiskConfirmation',
   menu: '__Menu',
   valueField: '__SettingsValueField',
+  button: '__Button',
 } as const
+
+/** Flatten a render tree into the visible text it would produce. */
+function texts(node: unknown, found: string[] = []): string[] {
+  if (node === null || node === undefined || typeof node === 'boolean') return found
+  if (Array.isArray(node)) { for (const child of node) texts(child, found); return found }
+  if (typeof node !== 'object') { found.push(String(node)); return found }
+  texts((node as Rendered).children, found)
+  return found
+}
+
+/** The first rendered button whose label is `label`. */
+function button(page: Page, label: string): Rendered {
+  const found = findAll(page.draw(), MARK.button)
+    .filter(node => texts(node.children).includes(label))
+  expect(found).toHaveLength(1)
+  return found[0]!
+}
+
+/** Press the button labelled `key` (the dictionaries pass keys through here). */
+function click(page: Page, key: string): void {
+  ;(button(page, key).props['onClick'] as () => void)()
+}
+
+/**
+ * Let a resolved fetch's `.then` callbacks run.
+ *
+ * The page's handlers are promise chains, so a press returns before its state
+ * has been folded in. Two microtask turns is enough for `json()` plus the
+ * handler that follows it.
+ */
+async function settle(): Promise<void> {
+  // Each press is a chain: `fetch` -> `json()` -> the handler that sets state,
+  // and the command costs a second chain that starts inside the first. Twenty
+  // turns drains both without waiting on a real timer.
+  for (let turn = 0; turn < 20; turn += 1) await Promise.resolve()
+}
+
+/**
+ * A wire that answers the two update routes, recording what was asked.
+ *
+ * @param check - the body the check route should answer.
+ * @returns the wire, the URLs it was asked, and a per-route count.
+ */
+function checkResponse(check: unknown): {
+  wire: (input: string | URL | Request) => Promise<Response>
+  asked: string[]
+  answer: (next: unknown) => void
+  noCommand: () => void
+} {
+  const asked: string[] = []
+  let body = check
+  let commandAnswers = true
+  const wire = async (input: string | URL | Request): Promise<Response> => {
+    const url = String(input)
+    asked.push(url)
+    if (url.includes('update/check')) return new Response(JSON.stringify(body))
+    if (url.includes('update/command')) {
+      return commandAnswers
+        ? new Response(JSON.stringify({ command: '/n node /d/lib/bin.js plugin --profile web add dsh-channel-wechat@latest', desktop: false, profile: 'web', spec: 'dsh-channel-wechat@latest' }))
+        : new Response(JSON.stringify({ error: '此部署无法生成更新命令' }), { status: 501 })
+    }
+    return new Response(JSON.stringify({ phase: 'connected' }))
+  }
+  return {
+    wire,
+    asked,
+    answer: (next: unknown) => { body = next },
+    noCommand: () => { commandAnswers = false },
+  }
+}
 
 /** What one render produced, and how to produce the next. */
 interface Page {
@@ -234,7 +305,14 @@ function loadPage(
       react.beginRender()
       react.effects.length = 0
       const tree = render(component!({
-        t: (key: string) => key,
+        // Keys pass through, with their parameters appended: an assertion can
+        // then see both which string was chosen and what was filled in. A `t`
+        // that dropped the parameters made "the page shows the version the Host
+        // reported" unobservable - every render said `currentVersion` and no
+        // number.
+        t: (key: string, params?: Record<string, unknown>) => params === undefined
+          ? key
+          : `${key} ${Object.values(params).map(value => String(value)).join(' ')}`,
         // The renderer hands the component a `use<Name>` hook per `hooks` source;
         // this is that hook, returning the state the test set up.
         useWechatConfig: (selector: (snapshot: unknown) => unknown) => selector(state),
@@ -406,10 +484,11 @@ describe('the version card on the page', () => {
     expect(flat.at(-1)).toBe('version')
   })
 
-  it('reads the version check from the Host rather than showing a number of its own', async () => {
-    // The running version is read off the installed manifest by the Host. A page
-    // that hardcoded it would keep claiming the old number after an update - the
-    // exact situation this card exists to resolve.
+  it('asks the Host nothing until the user presses the button', async () => {
+    // Checking on mount made the page a poll the user never asked for, and it
+    // answered a question ("is there a newer release?") nobody had posed. The
+    // card is now quiet until it is asked: no request, no version number, just
+    // the button.
     const asked: string[] = []
     const page = loadPage({ permission: 'workspace-write' }, async (input) => {
       asked.push(String(input))
@@ -418,6 +497,89 @@ describe('the version card on the page', () => {
 
     page.draw()
 
-    expect(asked.some(url => url.includes('api/channel-wechat/update/check'))).toBe(true)
+    expect(asked.some(url => url.includes('api/channel-wechat/update/'))).toBe(false)
+  })
+
+  it('checks when the button is pressed, and shows the version the Host reported', async () => {
+    // The running version is read off the installed manifest by the Host. A page
+    // that hardcoded it would keep claiming the old number after an update - the
+    // exact situation this card exists to resolve.
+    const checked = checkResponse({ status: 'ready', current: '0.2.2', latest: '0.2.2', newer: false })
+    const page = loadPage({ permission: 'workspace-write' }, checked.wire)
+
+    page.draw()
+    click(page, 'checkUpdate')
+    await settle()
+
+    expect(checked.asked.filter(url => url.includes('update/check'))).toHaveLength(1)
+    // The version the Host reported, not one the page made up.
+    expect(texts(page.draw()).join(' | ')).toContain('currentVersion 0.2.2')
+  })
+
+  it('does not ask for a command when the running copy is already current', async () => {
+    // Only an actual upgrade has instructions to prepare. Asking anyway would
+    // make the Host build a command nobody sees.
+    const checked = checkResponse({ status: 'ready', current: '0.2.2', latest: '0.2.2', newer: false })
+    const page = loadPage({ permission: 'workspace-write' }, checked.wire)
+
+    page.draw()
+    click(page, 'checkUpdate')
+    await settle()
+
+    expect(checked.asked.some(url => url.includes('update/command'))).toBe(false)
+  })
+
+  it('asks for the command when a newer release exists', async () => {
+    const checked = checkResponse({ status: 'ready', current: '0.2.2', latest: '0.3.0', newer: true })
+    const page = loadPage({ permission: 'workspace-write' }, checked.wire)
+
+    page.draw()
+    click(page, 'checkUpdate')
+    await settle()
+
+    expect(checked.asked.some(url => url.includes('update/command'))).toBe(true)
+    expect(texts(page.draw()).join(' | ')).toContain('0.3.0')
+  })
+
+  it('drops the previous command when a later press cannot build one', async () => {
+    // The command names a version. A second press that finds a *different*
+    // release whose command this deployment cannot build (501) must not leave
+    // the previous release's command on screen: the copy button beside it would
+    // hand the user a command that installs the wrong version.
+    const checked = checkResponse({ status: 'ready', current: '0.2.2', latest: '0.3.0', newer: true })
+    const page = loadPage({ permission: 'workspace-write' }, checked.wire)
+
+    page.draw()
+    click(page, 'checkUpdate')
+    await settle()
+    expect(texts(page.draw()).join(' | ')).toContain('dsh-channel-wechat@latest')
+
+    // A newer release appears, but this deployment has no command for it.
+    checked.answer({ status: 'ready', current: '0.2.2', latest: '0.3.1', newer: true })
+    checked.noCommand()
+    click(page, 'checkUpdate')
+    await settle()
+
+    const after = texts(page.draw()).join(' | ')
+    expect(after).toContain('0.3.1')
+    expect(after).toContain('updateNoCommand')
+    // The stale command from 0.3.0 must be gone with it.
+    expect(after).not.toContain('dsh-channel-wechat@latest')
+  })
+
+  it('checks again on a second press, so a release made a minute ago is visible', async () => {
+    // The button is the only trigger left. A second press that reused the first
+    // answer would leave a just-published version invisible with nothing on
+    // screen explaining why.
+    const checked = checkResponse({ status: 'ready', current: '0.2.2', latest: '0.2.2', newer: false })
+    const page = loadPage({ permission: 'workspace-write' }, checked.wire)
+
+    page.draw()
+    click(page, 'checkUpdate')
+    await settle()
+    click(page, 'checkUpdate')
+    await settle()
+
+    expect(checked.asked.filter(url => url.includes('update/check'))).toHaveLength(2)
   })
 })

@@ -9,9 +9,11 @@
  *    `0.10.0` older than `0.9.0`, which inverts the one answer this feature
  *    exists to give;
  *  - a registry that cannot be read is a `failed` result, never "already up to
- *    date" - the two render identically and only one is the user's situation;
- *  - the successful answer is cached briefly, so two page opens cost one
- *    request, while a release published a minute ago is still seen.
+ *    date" - the two render identically and only one is the user's situation.
+ *
+ * Nothing is cached: the only caller is a button press, and a press means "ask
+ * now". A page that checked on mount needed a cache to keep two opens from
+ * costing two requests; a page that waits for a press has no such cost.
  *
  * The package name is this package's own, read from the file that npm resolved,
  * so a fork that renames itself checks its own releases rather than this one's.
@@ -149,81 +151,57 @@ export interface UpdateCheckerOptions {
   fetchImpl?: typeof fetch
   /** Registry base URL; defaults to npm's own. */
   registry?: string
-  /** Monotonic milliseconds; defaults to `Date.now`. */
-  now?: () => number
-  /** How long a successful answer is reused. */
-  cacheMs?: number
-}
-
-/** One cached success, with the instant it stops being reused. */
-interface Cache {
-  check: Extract<UpdateCheck, { status: 'ready' }>
-  expiresAt: number
 }
 
 /**
- * Build a checker that caches its last successful answer.
- * @param options - the running version, the request implementation, and timing.
- * @returns a function that reads the registry at most once per cache window.
+ * Build a checker that reads the registry on every call.
+ *
+ * There is no cache. The only caller is a person who just pressed "check for
+ * updates", and a cached answer would be a different answer than the one they
+ * asked for: a release published a minute ago would stay invisible until the
+ * window expired, with nothing on screen explaining why. The cost of asking is
+ * one small `dist-tags` document per press, which is what a press means.
+ *
+ * @param options - the running version and the request implementation.
+ * @returns a function that reads the registry and reports what it found.
  */
 export function createUpdateChecker(options: UpdateCheckerOptions): () => Promise<UpdateCheck> {
   const doFetch = options.fetchImpl ?? globalThis.fetch
   const registry = (options.registry ?? REGISTRY).replace(/\/+$/u, '')
-  const now = options.now ?? (() => Date.now())
-  const cacheMs = options.cacheMs ?? 300_000
-  let cache: Cache | undefined
-  // One in-flight request, shared by every caller that arrives while it runs: a
-  // page that mounts and immediately re-renders must not open two sockets.
-  let pending: Promise<UpdateCheck> | undefined
 
   return async function check(): Promise<UpdateCheck> {
-    if (cache !== undefined && now() < cache.expiresAt) return cache.check
-    if (pending !== undefined) return await pending
-
-    pending = (async (): Promise<UpdateCheck> => {
-      try {
-        // The `dist-tags` endpoint rather than the full packument: this feature
-        // reads one string, and the packument for a package with a long history
-        // is measured in megabytes.
-        const response = await doFetch(`${registry}/-/package/${encodeURIComponent(PACKAGE_NAME)}/dist-tags`, {
-          headers: { accept: 'application/json' },
-        })
-        if (!response.ok) return { status: 'failed', current: options.currentVersion, reason: `HTTP ${String(response.status)}` }
-
-        const body: unknown = await response.json()
-        // Two shapes answer here: the bare tag map, and one wrapped in `dist-tags`
-        // by registries that proxy npm under a different route.
-        const tags = (body as { 'dist-tags'?: unknown })['dist-tags'] ?? body
-        const latest = typeof (tags as { latest?: unknown }).latest === 'string'
-          ? (tags as { latest: string }).latest
-          : undefined
-        if (latest === undefined) {
-          return { status: 'failed', current: options.currentVersion, reason: 'registry named no latest tag' }
-        }
-
-        const ready: Cache['check'] = {
-          status: 'ready',
-          current: options.currentVersion,
-          latest,
-          newer: isNewer(latest, options.currentVersion),
-        }
-        cache = { check: ready, expiresAt: now() + cacheMs }
-        return ready
-      } catch (error) {
-        // A failure is never cached, so the next open retries: a cached error
-        // would keep reporting the same outage after the network came back.
-        return {
-          status: 'failed',
-          current: options.currentVersion,
-          reason: error instanceof Error ? error.message : String(error),
-        }
-      }
-    })()
-
     try {
-      return await pending
-    } finally {
-      pending = undefined
+      // The `dist-tags` endpoint rather than the full packument: this feature
+      // reads one string, and the packument for a package with a long history
+      // is measured in megabytes.
+      const response = await doFetch(`${registry}/-/package/${encodeURIComponent(PACKAGE_NAME)}/dist-tags`, {
+        headers: { accept: 'application/json' },
+      })
+      if (!response.ok) return { status: 'failed', current: options.currentVersion, reason: `HTTP ${String(response.status)}` }
+
+      const body: unknown = await response.json()
+      // Two shapes answer here: the bare tag map, and one wrapped in `dist-tags`
+      // by registries that proxy npm under a different route.
+      const tags = (body as { 'dist-tags'?: unknown })['dist-tags'] ?? body
+      const latest = typeof (tags as { latest?: unknown }).latest === 'string'
+        ? (tags as { latest: string }).latest
+        : undefined
+      if (latest === undefined) {
+        return { status: 'failed', current: options.currentVersion, reason: 'registry named no latest tag' }
+      }
+
+      return {
+        status: 'ready',
+        current: options.currentVersion,
+        latest,
+        newer: isNewer(latest, options.currentVersion),
+      }
+    } catch (error) {
+      return {
+        status: 'failed',
+        current: options.currentVersion,
+        reason: error instanceof Error ? error.message : String(error),
+      }
     }
   }
 }

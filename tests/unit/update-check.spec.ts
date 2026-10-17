@@ -9,8 +9,8 @@
  *  - a registry that cannot be read is reported as a failure rather than as
  *    "already up to date" - the two look identical on screen and only one is the
  *    user's situation;
- *  - the answer is cached long enough that opening the page twice does not ask
- *    twice, but not so long that a release the user just made stays invisible.
+ *  - the answer is read fresh on every call, because every call is a button
+ *    press: a release the user just made is visible on the next press.
  */
 
 import { describe, expect, it, vi } from 'vitest'
@@ -97,27 +97,20 @@ describe('asking the registry', () => {
     }
   })
 
-  it('serves a repeated request from its short cache', async () => {
-    // Opening the page twice must not ask twice, but the cache is deliberately
-    // short: a release the user just published has to become visible without a
-    // restart.
-    let now = 1_000
+  it('asks the registry on every call, because every call is a user pressing the button', async () => {
+    // The page no longer checks when it opens; the only caller left is a person
+    // who just pressed "check for updates". Serving that from a cache would
+    // answer a different question than the one they asked - a release published
+    // in the last five minutes would stay invisible until the window expired,
+    // and nothing on screen would explain why.
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ latest: '0.3.0' })))
-    const check = createUpdateChecker({
-      currentVersion: '0.2.1',
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-      now: () => now,
-      cacheMs: 60_000,
-    })
+    const check = createUpdateChecker({ currentVersion: '0.2.1', fetchImpl: fetchImpl as unknown as typeof fetch })
 
     await check()
-    now += 30_000
     await check()
-    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    await check()
 
-    now += 60_000
-    await check()
-    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    expect(fetchImpl).toHaveBeenCalledTimes(3)
   })
 
   it('does not cache a failure, so a retry can succeed', async () => {

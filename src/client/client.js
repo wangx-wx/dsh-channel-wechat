@@ -832,7 +832,6 @@ window.__ModuleLoader__.load({
     function UpdateCard(props) {
       var t = props.t;
       var useState = React.useState;
-      var useEffect = React.useEffect;
       // idle | checking | ready | failed
       var stateState = useState({ phase: 'idle' });
       var state = stateState[0];
@@ -844,30 +843,39 @@ window.__ModuleLoader__.load({
       var copied = copiedState[0];
       var setCopied = copiedState[1];
 
-      // Read once when the card first appears. A check on every render would ask
-      // the registry repeatedly for an answer that only changes when a release is
-      // published.
-      useEffect(function () {
-        var stopped = false;
+      /**
+       * Ask the Host to read the registry, then fetch instructions if there is an
+       * upgrade.
+       *
+       * Deliberately not run on mount. A check nobody asked for is one more
+       * request on every page open, and it answers a question - "is there a newer
+       * release?" - the user has not posed. The button is the only trigger, which
+       * is also why the Host keeps no cache: a press means "ask now", so a release
+       * published a minute ago is visible on the next press rather than five
+       * minutes later.
+       */
+      function check() {
         setState({ phase: 'checking' });
+        // The command belongs to the version that was current when it was built,
+        // so a result from an earlier press must not outlive the next one.
+        setCommand(null);
+        setCopied('');
         fetch(ROUTES.updateCheck, { cache: 'no-store' })
           .then(function (response) { return response.json(); })
           .then(function (body) {
-            if (stopped) return;
             setState({ phase: 'ready', check: body });
             // Only an actual upgrade needs a command; fetching one otherwise
             // would ask the Host to prepare instructions nobody sees.
             if (body.status === 'ready' && body.newer) {
               return fetch(ROUTES.updateCommand, { cache: 'no-store' })
                 .then(function (response) { return response.ok ? response.json() : null; })
-                .then(function (value) { if (!stopped && value !== null) setCommand(value); });
+                .then(function (value) { if (value !== null) setCommand(value); });
             }
           })
           .catch(function (failure) {
-            if (!stopped) setState({ phase: 'failed', reason: String(failure && failure.message ? failure.message : failure) });
+            setState({ phase: 'failed', reason: String(failure && failure.message ? failure.message : failure) });
           });
-        return function () { stopped = true; };
-      }, []);
+      }
 
       /**
        * Put the command on the clipboard.
@@ -887,65 +895,77 @@ window.__ModuleLoader__.load({
         failed();
       }
 
-      var body;
-      if (state.phase === 'checking' || state.phase === 'idle') {
+      var body = null;
+      if (state.phase === 'checking') {
         body = h('p', { className: 'cw-muted' }, t('checking'));
       } else if (state.phase === 'failed') {
         body = h('p', { className: 'cw-err' }, t('updateFailed', { reason: state.reason }));
-      } else if (state.check.status === 'failed') {
-        // The Host answered but the registry could not be read. Kept distinct
-        // from "up to date": one is the user's network, the other is the truth.
-        body = h('p', { className: 'cw-err' }, t('updateFailed', { reason: state.check.reason }));
-      } else if (!state.check.newer) {
-        body = h('p', { className: 'cw-ok' }, t('upToDate', { version: state.check.current }));
-      } else {
-        body = h('div', { className: 'cw-update' },
-          h('p', { className: 'cw-muted' }, t('updateAvailable', {
-            latest: state.check.latest,
-            current: state.check.current,
-          })),
-          h('p', { className: 'cw-muted' }, t('updateHowTo')),
+      } else if (state.phase === 'ready') {
+        if (state.check.status === 'failed') {
+          // The Host answered but the registry could not be read. Kept distinct
+          // from "up to date": one is the user's network, the other is the truth.
+          body = h('p', { className: 'cw-err' }, t('updateFailed', { reason: state.check.reason }));
+        } else if (!state.check.newer) {
+          body = h('p', { className: 'cw-ok' }, t('upToDate', { version: state.check.current }));
+        } else {
+          body = h('div', { className: 'cw-update' },
+            h('p', { className: 'cw-muted' }, t('updateAvailable', {
+              latest: state.check.latest,
+              current: state.check.current,
+            })),
+            h('p', { className: 'cw-muted' }, t('updateHowTo')),
 
-          // The command goes first because it is the one that works without the
-          // user hunting through the GUI, and it is the only one that can be
-          // copied. It is also the only way on a profile whose plugin list the
-          // GUI cannot reach.
-          h('div', { className: 'cw-way' },
-            h('p', { className: 'cw-way-title' }, t('updateWay1')),
-            command === null
-              ? h('p', { className: 'cw-hint' }, t('updateNoCommand'))
-              : h('div', { className: 'cw-cmd-wrap' },
-                h('pre', { className: 'cw-cmd' }, command.command),
-                h(Button, {
-                  variant: 'outline',
-                  size: 'sm',
-                  onClick: function () { copy(command.command); },
-                }, copied === 'copied' ? t('copied') : copied === 'failed' ? t('copyFailed') : t('copy')),
-              ),
-            // Two facts the command alone does not convey, and each one is the
-            // difference between a working update and a refused one.
-            h('p', { className: 'cw-hint' }, t('updateExitFirst')),
-            h('p', { className: 'cw-hint' }, t('updateAgeNote')),
-            command !== null && command.desktop ? h('p', { className: 'cw-hint' }, t('updateDesktopNote')) : null,
-          ),
+            // The command goes first because it is the one that works without the
+            // user hunting through the GUI, and it is the only one that can be
+            // copied. It is also the only way on a profile whose plugin list the
+            // GUI cannot reach.
+            h('div', { className: 'cw-way' },
+              h('p', { className: 'cw-way-title' }, t('updateWay1')),
+              command === null
+                ? h('p', { className: 'cw-hint' }, t('updateNoCommand'))
+                : h('div', { className: 'cw-cmd-wrap' },
+                  h('pre', { className: 'cw-cmd' }, command.command),
+                  h(Button, {
+                    variant: 'outline',
+                    size: 'sm',
+                    onClick: function () { copy(command.command); },
+                  }, copied === 'copied' ? t('copied') : copied === 'failed' ? t('copyFailed') : t('copy')),
+                ),
+              // Two facts the command alone does not convey, and each one is the
+              // difference between a working update and a refused one.
+              h('p', { className: 'cw-hint' }, t('updateExitFirst')),
+              h('p', { className: 'cw-hint' }, t('updateAgeNote')),
+              command !== null && command.desktop ? h('p', { className: 'cw-hint' }, t('updateDesktopNote')) : null,
+            ),
 
-          h('div', { className: 'cw-way' },
-            h('p', { className: 'cw-way-title' }, t('updateWay2', { spec: state.check.latest })),
-          ),
-        );
+            h('div', { className: 'cw-way' },
+              h('p', { className: 'cw-way-title' }, t('updateWay2', { spec: state.check.latest })),
+            ),
+          );
+        }
       }
 
       return h('section', { className: 'cw-card' },
-        h('div', { className: 'cw-card-head' },
+        h('div', { className: 'cw-card-head cw-card-head--action' },
           h('h3', { className: 'cw-card-title' }, t('version')),
-          // Shown only once the Host has answered, because the running version is
-          // read from the installed manifest there. A placeholder would be a
-          // number the page guessed at.
-          state.phase === 'ready' && state.check.status === 'ready'
-            ? h('span', { className: 'cw-version' }, t('currentVersion', { version: state.check.current }))
-            : null,
+          h('div', { className: 'cw-card-action' },
+            // Shown only once the Host has answered, because the running version
+            // is read from the installed manifest there. A placeholder would be a
+            // number the page guessed at.
+            state.phase === 'ready' && state.check.status === 'ready'
+              ? h('span', { className: 'cw-version' }, t('currentVersion', { version: state.check.current }))
+              : null,
+            // The only thing that reads the registry. Disabled while a press is
+            // in flight, so a second press cannot race the first one's answer.
+            h(Button, {
+              variant: 'outline',
+              size: 'sm',
+              disabled: state.phase === 'checking',
+              onClick: check,
+            }, t('checkUpdate')),
+          ),
         ),
-        h('div', { className: 'cw-card-body' }, body),
+        body === null ? null : h('div', { className: 'cw-card-body' }, body),
       );
     }
 
@@ -977,6 +997,11 @@ window.__ModuleLoader__.load({
       '.cw-root{display:flex;flex-direction:column;gap:28px;}',
       '.cw-card{display:flex;flex-direction:column;border:0.5px solid var(--dsw-alias-settings-card-stroke);border-radius:var(--dsw-radius-xl);background:var(--dsw-alias-settings-card-fill);overflow:hidden;}',
       '.cw-card-head{padding:20px 20px 4px;}',
+      // The version card's head carries a button, so it becomes a row: the title
+      // keeps the left edge, and the version chip and the button share the right
+      // one. Wrapping keeps the button off the title's baseline.
+      '.cw-card-head--action{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding-bottom:8px;}',
+      '.cw-card-action{display:flex;align-items:center;gap:12px;margin-left:auto;}',
       // 16px/500, not the page's 13px/600: a group heading earns its rank from
       // size and the space under it, the way the panel's own headings do.
       '.cw-card-title{margin:0;font-size:16px;font-weight:500;line-height:24px;color:var(--dsw-alias-label-primary);}',
@@ -1014,7 +1039,7 @@ window.__ModuleLoader__.load({
       '.cw-field .cw-menu{align-self:flex-start;}',
       // The version card: a heading that carries the running version beside it,
       // the way the other cards carry only a title.
-      '.cw-version{margin-left:auto;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5;}',
+      '.cw-version{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5;}',
       '.cw-update{display:flex;flex-direction:column;gap:12px;}',
       // Each way is its own block with a top rule: the two options are separate
       // instructions, not a paragraph. The rule is the same hairline the settings
