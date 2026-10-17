@@ -40,6 +40,20 @@ cd /path/to/deepseek-harness
 **什么时候重新生成**：每次发版之后。索引里的版本列表和展示字段都取自 npm 上的包，
 不重新生成就永远是旧版本。
 
+> ⚠️ **本索引的展示字段当前是手工同步的，下一次重新生成会把它们改回去。**
+>
+> 2026-10-17 换图标与标题时没有发版，于是直接改了索引里的 `title`（→ `dsh-channel-wechat`）
+> 和内联 `icon`（→ 新的绿底图标），让落地页与索引保持一致。但生成器读的是 npm 上已发布的
+> **`0.2.3`**，它里面还是旧图标和「微信通道」。
+>
+> **所以下一次发版后重新生成索引时，先确认 npm 上那个版本的 `icon` 与 `locale/*.json`
+> 已经是新的**——否则生成器会把手改的内容覆盖回旧值，且不会有任何报错。核对方式：
+> `npm view dsh-channel-wechat@<版本> icon`，以及解开 tarball 看 `locale/zh.json`。
+>
+> `tests/unit/manifest.spec.ts` 里的「keeps the index display fields in step with this checkout」
+> 守着这条一致性：索引里的图标必须与仓库 `icon.svg` 逐字节相同，标题与描述必须与
+> `locale/` 相同。它断言的是**工作区**，所以在「先改仓库、后发版」的窗口期里才有意义。
+
 ## 索引里会显示什么
 
 | 字段 | 来源 |

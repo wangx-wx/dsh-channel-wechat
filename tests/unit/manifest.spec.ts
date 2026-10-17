@@ -379,4 +379,55 @@ describe('discovery metadata', () => {
     // the one published last. A mismatch here means someone edited the file.
     expect(entry?.versions?.[0]?.version).toBe(manifest.version)
   })
+
+  it('keeps the index display fields in step with this checkout', () => {
+    // The generator copies `icon` and `locale/*.json` out of the *published*
+    // package, so after changing either one in the repository the index keeps
+    // showing the previous release until it is regenerated. That divergence is
+    // invisible: the old icon is a perfectly valid SVG and the old title is a
+    // perfectly valid string, so no format check can catch it. This closes the
+    // gap by comparing the index against the files it is supposed to mirror.
+    //
+    // Note the direction: this asserts the index matches the *working tree*,
+    // which is only true while the two are deliberately kept in sync. Once a
+    // release regenerates the index from the registry, npm becomes the source
+    // of truth again and this test keeps passing only because the published
+    // version now carries the same bytes.
+    const icon = manifest.icon
+    expect(icon, 'package.json must declare `icon`').toBeTypeOf('string')
+    const iconSvg = readFileSync(new URL(`../../${String(icon)}`, import.meta.url), 'utf8')
+
+    const english = JSON.parse(readFileSync(new URL('../../locale/en.json', import.meta.url), 'utf8')) as {
+      meta?: { title?: string; description?: string }
+    }
+    const chinese = JSON.parse(readFileSync(new URL('../../locale/zh.json', import.meta.url), 'utf8')) as {
+      meta?: { title?: string; description?: string }
+    }
+
+    const index = JSON.parse(readFileSync(new URL('../../docs/market/index.json', import.meta.url), 'utf8')) as {
+      plugins?: {
+        name?: string
+        title?: Record<string, string>
+        description?: Record<string, string>
+        icon?: string
+        metadata?: { keywords?: string[] }
+      }[]
+    }
+    const entry = (index.plugins ?? []).find(plugin => plugin.name === manifest.name)
+    expect(entry, `the index must list ${manifest.name}`).toBeDefined()
+
+    // The icon is inlined as a base64 `data:` URL by the generator, so compare
+    // the decoded bytes rather than the string. `metadata.dataUrl` keeps the
+    // assertions readable when they fail.
+    expect(entry?.icon, 'the index must inline an icon').toMatch(/^data:image\/svg\+xml;base64,/u)
+    const inlined = Buffer.from(String(entry?.icon).split(',')[1] ?? '', 'base64').toString('utf8')
+    expect(inlined, 'the index icon must be byte-identical to icon.svg').toBe(iconSvg)
+    // The index-specific ceiling is 32 KiB, tighter than the plugin page's
+    // 256 KiB: a passing package `icon` can still be too big for an index.
+    expect(Buffer.byteLength(inlined)).toBeLessThanOrEqual(32 * 1024)
+
+    expect(entry?.title).toEqual({ en: english.meta?.title, zh: chinese.meta?.title })
+    expect(entry?.description).toEqual({ en: english.meta?.description, zh: chinese.meta?.description })
+    expect(entry?.metadata?.keywords).toEqual(manifest.keywords)
+  })
 })
