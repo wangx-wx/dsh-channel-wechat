@@ -104,6 +104,7 @@ DSH 一旦看到 `engines.dsh`，就**只用它判定兼容性**，`@deepseek-ai
 0.2.0-rc.1     COMPATIBLE
 0.2.0-rc.2     COMPATIBLE      ← 打包桌面端，集成测试 99 项通过
 0.2.1-rc.1     COMPATIBLE      ← npm 装的真 launcher，集成测试 99 项通过
+0.2.1-rc.2     COMPATIBLE      ← 打包桌面端，集成测试 111 项通过
 0.3.0-rc.1     COMPATIBLE      ← 未实测，放行
 1.0.0          COMPATIBLE      ← 未实测，放行
 ```
@@ -129,7 +130,8 @@ DSH_CHECKOUT=<该版本的 checkout 或 app> pnpm test:integration
 
 | 版本 | launcher | 跳过 | 说明 |
 |---|---|---|---|
-| `0.2.0-rc.2` | 打包的 `DeepSeek Harness.app` | 0 | 99 项全过。**注意**：跳过数与 DSH 版本无关，只与「源码树能否读到」有关——`client-half-runs` 要 checkout 的 `ui-theme` 源码和 react |
+| `0.2.1-rc.2` | 打包的 `DeepSeek Harness.app` | 0 | 111 项全过（2026-10-17 实测，`--reporter=json` 统计）。**当前桌面端就是这个版本** |
+| `0.2.0-rc.2` | 打包的 `DeepSeek Harness.app` | 0 | 当时 99 项全过。**注意**：跳过数与 DSH 版本无关，只与「源码树能否读到」有关——`client-half-runs` 要 checkout 的 `ui-theme` 源码和 react |
 | `0.2.1-rc.1` | npm 装的 `@deepseek-ai/dsh@0.2.1-rc.1`，套 checkout 形状的 shim | 0 | 99 项全过，`0.2.x` 这条线即以此为准 |
 
 ### 递增用 `npm version`

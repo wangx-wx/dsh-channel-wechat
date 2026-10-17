@@ -5,7 +5,7 @@ English | [中文](./README.md)
 A **channel plugin** that connects WeChat (Tencent iLink / ClawBot) to
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness).
 
-> Status: **v0.2.2, published to npm** (version numbers track the DSH
+> Status: **v0.2.3, published to npm** (version numbers track the DSH
 > major.minor from this release on; see Versions and compatibility below).
 > Signing in and configuring happen on
 > the plugin's page in the GUI, and the plugin takes one row in a profile. That
