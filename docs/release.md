@@ -115,6 +115,17 @@ DSH 一旦看到 `engines.dsh`，就**只用它判定兼容性**，`@deepseek-ai
 DSH_CHECKOUT=<该版本的 checkout 或 app> pnpm test:integration
 ```
 
+**加版本时必须同时记下证据**（`RUNTIME_EVIDENCE`）：用了哪个 launcher、跳过几项、为什么跳过。
+`manifest.spec.ts` 有一条测试强制两者一一对应——往清单里加一个没有证据的版本会**直接失败**。
+理由很直接：清单里的名字长得都一样，跑过的和没跑过的一模一样，只有证据能区分。
+
+现有记录：
+
+| 版本 | launcher | 跳过 | 说明 |
+|---|---|---|---|
+| `0.2.0-rc.2` | 打包的 `DeepSeek Harness.app` | 15 | 跳过的是 `client-half-runs`，它要 checkout 的 `ui-theme` 源码；打包版不带源码，属环境限制而非版本不兼容 |
+| `0.2.1-rc.1` | checkout `dsh-v0.2.1-rc.1` | 0 | 本套件能产出的最完整一次运行（99 项全过），`0.2.x` 这条线即以此为准 |
+
 ### 递增用 `npm version`
 
 npm **不允许重复发布同一版本号**，改动无论大小都要递增并提交：

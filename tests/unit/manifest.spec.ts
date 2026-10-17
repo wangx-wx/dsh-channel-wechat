@@ -29,13 +29,27 @@ const manifest = JSON.parse(readFileSync(new URL('../../package.json', import.me
 /**
  * The dsh runtime versions a released plugin must stay installable under.
  *
- * Exactly the two that were measured against a real launcher: `0.2.0-rc.2`
- * (the packaged desktop app) and `0.2.1-rc.1` (the checkout). The rest of
- * 0.2.x satisfies the declared range but has not been run, so it is not
- * asserted here — claiming support we never exercised is how a plugin comes
- * to break on a version nobody tried.
+ * Exactly the ones measured against a real launcher with the integration suite:
+ *
+ *  - `0.2.0-rc.2` — the packaged desktop app (`DeepSeek Harness.app`), 84 tests
+ *    pass and 15 skip. The skips are `client-half-runs`, which needs the
+ *    checkout's `ui-theme` sources; the packaged app ships no sources, so the
+ *    skip is an environment limit, not a version incompatibility.
+ *  - `0.2.1-rc.1` — the local checkout at `dsh-v0.2.1-rc.1`, 99 tests pass with
+ *    nothing skipped. This is the fullest run this suite can produce, and it is
+ *    the release the `0.2.x` line was verified against.
+ *
+ * The rest of `0.2.x` satisfies the declared range but has not been run, so it
+ * is not asserted here — claiming support we never exercised is how a plugin
+ * comes to break on a version nobody tried.
  */
 const RUNTIME_VERSIONS = ['0.2.0-rc.2', '0.2.1-rc.1']
+
+/** How each {@link RUNTIME_VERSIONS} entry was measured, and what a run must show. */
+const RUNTIME_EVIDENCE: Record<string, { launcher: string; skipped: number }> = {
+  '0.2.0-rc.2': { launcher: 'the packaged DeepSeek Harness.app', skipped: 15 },
+  '0.2.1-rc.1': { launcher: 'the checkout at dsh-v0.2.1-rc.1', skipped: 0 },
+}
 
 /** Every source file that ends up in the published bundle. */
 function sourceFiles(dir: URL): URL[] {
@@ -133,6 +147,23 @@ describe('package manifest', () => {
     expect(semver.satisfies('0.3.0-rc.1', range, { includePrerelease: true })).toBe(true)
     expect(semver.satisfies('0.3.0', range, { includePrerelease: true })).toBe(true)
     expect(semver.satisfies('1.0.0', range, { includePrerelease: true })).toBe(true)
+  })
+
+  it('names how every claimed runtime was measured, and claims nothing it cannot', () => {
+    // A version in RUNTIME_VERSIONS is a support claim. Recording the evidence
+    // beside it is what keeps that claim honest: a name added without a run
+    // would otherwise read exactly like one that was verified, which is the
+    // failure this list exists to prevent.
+    expect(Object.keys(RUNTIME_EVIDENCE).sort()).toEqual([...RUNTIME_VERSIONS].sort())
+    for (const runtime of RUNTIME_VERSIONS) {
+      const evidence = RUNTIME_EVIDENCE[runtime]
+      if (evidence === undefined) throw new Error(`no measurement recorded for ${runtime}`)
+      expect(evidence.launcher.trim()).not.toBe('')
+      expect(evidence.skipped).toBeGreaterThanOrEqual(0)
+    }
+    // The newest verified release runs the whole suite; a skip there would mean
+    // this list is claiming coverage the run did not produce.
+    expect(RUNTIME_EVIDENCE['0.2.1-rc.1']?.skipped).toBe(0)
   })
 
   it('exposes a root export the loader can import', () => {
