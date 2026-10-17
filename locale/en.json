@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "WeChat channel",
+    "title": "dsh-channel-wechat",
     "description": "Answer WeChat messages from a DeepSeek Harness session, with interaction cards relayed to the chat."
   }
 }
