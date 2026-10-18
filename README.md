@@ -134,3 +134,7 @@ pnpm test:integration
 ## 许可证与第三方声明
 
 本项目使用 MIT，第三方代码和完整版权声明见 [LICENSE](./LICENSE) 与 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。协议实现参考腾讯的 [`openclaw-weixin`](https://github.com/Tencent/openclaw-weixin)。
+
+## 友链
+
+- [LINUX DO](https://linux.do) — Where possible begins

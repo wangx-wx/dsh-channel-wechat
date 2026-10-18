@@ -14,3 +14,6 @@ docs/recon/_analysis/
 
 # npm's cache when the user-level one is not writable (see docs/release.md).
 .npm-cache/
+
+# Local notes kept out of the tree (e.g. posting guides written for a specific site).
+docs/ignore/
