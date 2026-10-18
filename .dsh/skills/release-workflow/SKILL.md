@@ -22,16 +22,17 @@ metadata:
 
 1. **确定版本**：根据 `package.json` 当前版本和 DSH 兼容代次选择 patch/minor/major；先不要发布。
 2. **整理内容**：完成代码、测试和面向用户的文档；README 只保留用户入口信息，详细内容归档到 `docs/` 或 `spec/`。
-3. **更新 GitHub Pages**：按 [github-pages.md](references/github-pages.md) 更新 `docs/index.html` 及必要的市场索引，检查版本、链接和页面文案一致。
+3. **更新 GitHub Pages 首页**：按 [github-pages.md](references/github-pages.md) 更新 `docs/index.html` 的当前版本、Release 链接和短摘要；市场索引留到 npm 发布后处理。
 4. **验证**：运行 `pnpm build`、`pnpm typecheck`、`pnpm test:all`；适用时运行真实 launcher 的集成测试。失败必须记录原因，不得删测试或降低标准。
 5. **提交发布前变更**：检查 `git diff`、`git diff --check` 和发布包内容；提交本次代码、文档和 Pages 变更。
 6. **递增版本**：使用 `npm version patch|minor|major -m "Release %s"`，生成版本提交和 `v<version>` tag。版本规则见 [release-reference.md](references/release-reference.md)。
 7. **发布 npm**：切到官方 registry，确认 `npm whoami`，执行 `npm publish --dry-run`，确认无误后执行 `npm publish`。收到 202 或 staged 状态后只观测，不重复发布。
 8. **确认 npm**：用 `npm view <package> version dist-tags` 确认 `latest` 指向新版本；传播期间不得换版本号重发。
-9. **推送 Git 状态**：推送发布提交和 tag。除非用户另有要求，不自动合并到其他分支。
-10. **创建 GitHub Release**：按 [github-release.md](references/github-release.md) 使用短声明，只写本版本变化、兼容性、验证状态和升级提示，不复制 README。
-11. **验证 Pages 与安装**：确认 Pages URL 返回新内容，必要时在隔离 `DSH_HOME` 中安装新版本并确认 bundle 能加载。
-12. **汇报**：列出版本、提交、tag、npm、GitHub Release、Pages、验证命令和失败/未验证项。
+9. **更新市场索引**：确认 npm 新版本可读后，按 [github-pages.md](references/github-pages.md) 重新生成或校验 `docs/market/index.json`，只提交由已发布 manifest 产生的内容。
+10. **推送 Git 状态**：推送发布提交、Pages 更新提交和 tag。除非用户另有要求，不自动合并到其他分支。
+11. **创建 GitHub Release**：按 [github-release.md](references/github-release.md) 使用短声明，只写本版本变化、兼容性、验证状态和升级提示，不复制 README。
+12. **验证 Pages 与安装**：确认 Pages URL 返回新内容，必要时在隔离 `DSH_HOME` 中安装新版本并确认 bundle 能加载。
+13. **汇报**：列出版本、提交、tag、npm、GitHub Release、Pages、验证命令和失败/未验证项。
 
 ## 停止条件
 
