@@ -18,6 +18,7 @@ import { readFileBytes, sendFileToPeer } from '../bridge/send-file.ts'
 import { uploadToCdn } from '../wechat/cdn-upload.ts'
 import { CDN_BASE_URL } from '../wechat/cdn.ts'
 import type { PresentedFile } from '../bridge/deliverables.ts'
+import type { NativeCommandRow } from '../bridge/native-commands.ts'
 import type { InboundMedia } from '../wechat/inbound.ts'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 
@@ -140,8 +141,8 @@ export interface RuntimeOptions {
    * @returns the harness's outcome, or `undefined` when it does not know the command.
    */
   executeNativeCommand?: (line: string, agent: unknown) => Promise<{ kind: 'success' | 'error'; text?: string } | undefined>
-  /** Resolve the command names the harness offers one agent, listed by `/help`. */
-  nativeCommands?: ((agent: unknown) => Promise<readonly string[]>) | undefined
+  /** Resolve the commands the harness offers one agent, listed by `/help`. */
+  nativeCommands?: ((agent: unknown) => Promise<readonly NativeCommandRow[]>) | undefined
 }
 
 /**

@@ -121,23 +121,28 @@ describe('forwarding to the harness', () => {
 })
 
 describe('the descriptor list', () => {
-  it('reports the command names the harness offers for one agent', async () => {
-    // `/help` shows these, so they have to come from the agent's own view.
+  it('reports the harness commands, with their descriptions, for one agent', async () => {
+    // `/help` shows these, so they have to come from the agent's own view. The
+    // description travels with the name: a listing that dropped it would leave
+    // the user guessing what `/compact` does.
     const list = vi.fn(() => [
       { name: 'compact', description: 'Compact the session' },
       { name: 'goal', description: 'Set a goal' },
     ])
-    const names = await createNativeCommandLister({ commands: { list } as never })({})
+    const rows = await createNativeCommandLister({ commands: { list } as never })({})
 
-    expect(names).toEqual(['compact', 'goal'])
+    expect(rows).toEqual([
+      { name: 'compact', description: 'Compact the session' },
+      { name: 'goal', description: 'Set a goal' },
+    ])
   })
 
   it('reports nothing when the peer has no agent', async () => {
     const list = vi.fn(() => [{ name: 'goal', description: 'x' }])
 
-    const names = await createNativeCommandLister({ commands: { list } as never })(undefined)
+    const rows = await createNativeCommandLister({ commands: { list } as never })(undefined)
 
-    expect(names).toEqual([])
+    expect(rows).toEqual([])
     expect(list).not.toHaveBeenCalled()
   })
 

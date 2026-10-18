@@ -50,8 +50,8 @@ function bench(accounts: WechatAccount[]) {
     disposed,
     /** Harness commands this run forwarded, in order. */
     forwarded: [] as string[],
-    /** Command names the harness offers, for `/help`. */
-    nativeCommands: undefined as readonly string[] | undefined,
+    /** Commands the harness offers, for `/help`. */
+    nativeCommands: undefined as readonly { name: string; description: string }[] | undefined,
     /** Set to override the forwarder; defaults to a recording success. */
     executeNativeCommand: undefined as
       | ((line: string) => Promise<{ kind: 'success' | 'error'; text?: string } | undefined>)
@@ -297,7 +297,10 @@ describe('the command surface', () => {
   it('lists the harness commands to /help', async () => {
     // The native surface is the larger half of what a user can type.
     const b = bench([account()])
-    b.nativeCommands = ['compact', 'goal']
+    b.nativeCommands = [
+      { name: 'compact', description: '压缩以上对话内容' },
+      { name: 'goal', description: '设置或查看长期任务目标' },
+    ]
     b.messages.push({
       message_id: 1, from_user_id: 'user-7', message_type: 1,
       item_list: [{ type: 1, text_item: { text: '/help' } }],

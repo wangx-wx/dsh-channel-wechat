@@ -26,6 +26,7 @@ import { deliverInbound } from '../bridge/dispatcher.ts'
 import { ReplyQueue, extractAssistantText, type ReplySender } from '../bridge/reply.ts'
 import { parseCommandLine, routeCommand } from '../bridge/commands.ts'
 import { runLocalCommand, type LocalCommandContext } from '../bridge/local-commands.ts'
+import type { NativeCommandRow } from '../bridge/native-commands.ts'
 import { parseInboundMessage, type InboundMedia } from '../wechat/inbound.ts'
 import { presentedFilesFrom, type PresentedFile } from '../bridge/deliverables.ts'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
@@ -113,14 +114,14 @@ export interface ChannelOptions {
   /** The account being polled, reported by `/status`. */
   accountId?: string | undefined
   /**
-   * Resolve the command names the harness offers one agent, listed by `/help`.
+   * Resolve the commands the harness offers one agent, listed by `/help`.
    *
    * Takes the agent rather than the peer id, for the same reason
    * {@link ChannelOptions.executeNativeCommand} does. `undefined` means the peer
    * has no live session, and the lister owns what to answer - so a deployment
    * that can answer without one still may.
    */
-  nativeCommands?: (agent: unknown) => Promise<readonly string[]>
+  nativeCommands?: (agent: unknown) => Promise<readonly NativeCommandRow[]>
   /**
    * Provider and model each new session selects.
    *

@@ -28,7 +28,11 @@ function bench(overrides: Partial<LocalCommandContext> = {}) {
     endSession: async () => void ended.push('user-7'),
     accountId: 'bot-9',
     sessionCount: 3,
-    nativeCommands: async () => ['compact', 'goal', 'permission'],
+    nativeCommands: async () => [
+      { name: 'compact', description: '压缩以上对话内容' },
+      { name: 'goal', description: '设置或查看长期任务目标' },
+      { name: 'permission', description: '切换权限预设' },
+    ],
     ...overrides,
   }
   return { ctx, cancelled, ended, run: (name: string, args = '') => runLocalCommand({ name, args }, ctx) }
@@ -134,6 +138,36 @@ describe('/help', () => {
     const result = await b.run('help')
 
     expect(result.text).toMatch(/cwd.*(尚未|未实现|not)/u)
+  })
+
+  it('separates every entry with a blank line', async () => {
+    // WeChat renders the text as markdown, where a single newline is a soft
+    // break that collapses into a space: a listing built with `\n` arrives as
+    // one run-on line even though the bytes are correct and copying it out
+    // shows the newlines. Only a blank line starts a new block, so this asserts
+    // the blank line rather than the newline - the newline alone was the bug.
+    const b = bench()
+
+    const result = await b.run('help')
+
+    const lines = (result.text ?? '').split('\n')
+    const adjacentEntries = lines.filter((line, index) => {
+      const next = lines[index + 1]
+      return next !== undefined && line.startsWith('/') && next.startsWith('/')
+    })
+    expect(adjacentEntries).toEqual([])
+  })
+
+  it('says so when the harness offers no commands', async () => {
+    // A peer that has never sent an ordinary message has no session, so there is
+    // no agent to resolve a command against and the list is empty. A bare
+    // heading with nothing under it reads as "no commands exist", which is a
+    // state no deployment reaches - so the empty answer is named.
+    const b = bench({ nativeCommands: async () => [] })
+
+    const result = await b.run('help')
+
+    expect(result.text).toMatch(/尚未建立|先发一条/u)
   })
 })
 

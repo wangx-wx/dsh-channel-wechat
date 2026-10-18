@@ -73,18 +73,34 @@ export function createNativeCommandExecutor(
   }
 }
 
+/** One harness command as `/help` presents it. */
+export interface NativeCommandRow {
+  /** Name without the leading slash. */
+  readonly name: string
+  /** The harness's own one-line summary; empty when it supplied none. */
+  readonly description: string
+}
+
 /**
  * Build the lister `/help` uses.
+ *
+ * The description travels with the name because the GUI's command menu shows
+ * one and a help listing that dropped it would leave `/compact` and `/goal`
+ * indistinguishable to someone who has not memorized them.
+ *
  * @param options - the command runtime.
- * @returns a function returning the command names available to one agent.
+ * @returns a function returning the commands available to one agent.
  */
 export function createNativeCommandLister(
   options: NativeCommandOptions,
-): (agent: unknown) => Promise<readonly string[]> {
+): (agent: unknown) => Promise<readonly NativeCommandRow[]> {
   return async (agent) => {
     if (agent === undefined) return []
     try {
-      return options.commands.list(agent).map(command => command.name)
+      return options.commands.list(agent).map(command => ({
+        name: command.name,
+        description: command.description,
+      }))
     } catch {
       // Help is not worth failing a message over; an empty list shows only the
       // channel's own commands.
