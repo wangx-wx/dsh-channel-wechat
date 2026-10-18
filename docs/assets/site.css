@@ -109,6 +109,28 @@ h2 {
 
 .lede { margin: 0 0 36px; color: var(--muted); max-width: 680px; }
 
+/* ---------- current release ---------- */
+
+.release-card {
+  max-width: 680px;
+  padding: 28px 32px;
+  border: 1px solid #B9D8C6;
+  border-radius: var(--radius);
+  background: var(--soft);
+}
+
+.release-card h2 { margin-bottom: 8px; }
+.release-card p { margin: 0 0 8px; }
+.release-card .eyebrow {
+  margin: 0 0 4px;
+  color: var(--green-dark);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.release-card .muted { color: var(--muted); font-size: 14px; }
+
 /* ---------- screenshots ---------- */
 
 .shots {
