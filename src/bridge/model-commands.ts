@@ -7,12 +7,17 @@
  * model the registry then refuses to run.
  *
  * **`/model` writes the plugin's own config, not the harness default.** The two
- * are different stores: this plugin's `provider`/`model` fields are what a new
- * session reads once, at creation, while the harness default is what the GUI's
- * own new sessions read. Writing this plugin's fields is therefore the narrow
- * change - a switch here cannot move the GUI's model out from under its user.
- * The cost is that the peer's *current* session keeps the model it recorded,
- * which is why the reply names `/new`.
+ * are different stores: this plugin's `provider`/`model` fields are passed as
+ * `agentOptions` on every create *and* every resume, while the harness default
+ * is what the GUI's own new sessions read. Writing this plugin's fields is
+ * therefore the narrow change - a switch here cannot move the GUI's model out
+ * from under its user.
+ *
+ * It takes effect on the next message, not on `/new`. A new loop instance seeds
+ * its first request from the declared route (`agentOptions`) and only folds the
+ * persisted `request/header` on later steps, so the resumed conversation picks
+ * the new pair up as soon as the config write re-runs `apply`. The one thing it
+ * does not move is a reply already being generated.
  *
  * @module dsh-channel-wechat/bridge/model-commands
  */

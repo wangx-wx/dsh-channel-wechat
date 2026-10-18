@@ -32,6 +32,8 @@ function fakeRegistry(options: {
   const created: string[] = []
   const resumed: string[] = []
   const disposed: string[] = []
+  /** Every selection fragment the registry was handed, create or resume. */
+  const asked: { kind: 'create' | 'resume'; sessionId: string; agentOptions?: unknown }[] = []
   const live = new Map<string, { agent: { id: string }; dispose: () => Promise<void> }>()
 
   const makeHandle = (sessionId: string) => {
@@ -52,23 +54,27 @@ function fakeRegistry(options: {
     created,
     resumed,
     disposed,
+    asked,
     live,
     registry: {
-      async create({ sessionId }: { sessionId: string }) {
+      async create({ sessionId, agentOptions }: { sessionId: string; agentOptions?: unknown }) {
         if (live.has(sessionId)) throw new Error(`already registered: ${sessionId}`)
         created.push(sessionId)
+        asked.push({ kind: 'create', sessionId, agentOptions })
         const handle = makeHandle(sessionId)
         live.set(sessionId, handle)
         return handle
       },
-      async resume({ resumeSessionId, setup }: {
+      async resume({ resumeSessionId, setup, agentOptions }: {
         resumeSessionId: string
+        agentOptions?: unknown
         setup?: (agentCtx: unknown, agent: { session: { header: { agentPreset?: string } } }) => unknown
       }) {
         if (!(options.existingSessions ?? []).includes(resumeSessionId)) {
           throw new Error(`session not found: ${resumeSessionId}`)
         }
         resumed.push(resumeSessionId)
+        asked.push({ kind: 'resume', sessionId: resumeSessionId, agentOptions })
         const handle = makeHandle(resumeSessionId)
         live.set(resumeSessionId, handle)
         // The real registry awaits setup before publishing the agent, handing it
@@ -86,6 +92,43 @@ function fakeRegistry(options: {
     },
   }
 }
+
+describe('the model selection handed to the registry', () => {
+  it('passes the configured selection to a resume, not only to a create', async () => {
+    // The selection is not a creation-time fact: a resumed session's next loop
+    // seeds its first request from `agentOptions`, so dropping it on resume
+    // would quietly keep the old model after a switch. The same pair goes to
+    // both calls.
+    const f = fakeRegistry({ existingSessions: ['channel-wechat-user-7'] })
+    const map = new PeerMap({
+      registry: f.registry as never,
+      sessionExists: async id => id === 'channel-wechat-user-7',
+      sessionOptions: { provider: 'provider-b', model: 'model-b1' },
+    })
+
+    await map.sessionFor('user-7')
+
+    expect(f.asked).toEqual([
+      { kind: 'resume', sessionId: 'channel-wechat-user-7', agentOptions: { provider: 'provider-b', model: 'model-b1' } },
+    ])
+  })
+
+  it('passes the configured selection to a create', async () => {
+    const f = fakeRegistry()
+    const map = new PeerMap({
+      registry: f.registry as never,
+      sessionExists: async () => false,
+      sessionOptions: { provider: 'provider-b', model: 'model-b1' },
+    })
+
+    await map.sessionFor('user-7')
+
+    expect(f.asked).toEqual([
+      { kind: 'create', sessionId: 'channel-wechat-user-7', agentOptions: { provider: 'provider-b', model: 'model-b1' } },
+    ])
+  })
+
+})
 
 describe('reusing a session for one peer', () => {
   it('creates the session on first contact and reuses it afterwards', async () => {

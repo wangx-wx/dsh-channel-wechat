@@ -1,13 +1,15 @@
 /**
  * The channel's own commands.
  *
- * Six of them, and they split by what this plugin can actually do today:
+ * Eight of them, and they split by what this plugin can actually do today:
  *
  *  - `/stop` cancels the running turn. This is the one the plan's M3 acceptance
  *    names, and it works because a command is handled outside the peer's queue.
  *  - `/status` reports which account is polling and how many peers have sessions.
  *  - `/new` ends the current session so the next message starts a fresh one.
  *  - `/help` lists what is available, including the harness's own commands.
+ *  - `/models` lists the live catalogue and `/model` switches this plugin's own
+ *    configured pair. Both are covered in full below.
  *  - `/cwd` and `/reconnect` are registered but not implemented. They report
  *    that plainly: a command that silently did nothing would be worse than one
  *    that says it is not ready.
@@ -131,14 +133,26 @@ describe('/help', () => {
 
     const result = await b.run('help')
 
-    for (const name of ['/stop', '/status', '/new', '/cwd', '/help', '/reconnect']) {
+    for (const name of ['/stop', '/status', '/new', '/cwd', '/help', '/reconnect', '/models', '/model']) {
       expect(result.text).toContain(name)
     }
   })
 
+  it('describes what each of the newer commands does', async () => {
+    // The name alone is not enough for `/models` and `/model`: the listing used
+    // to advertise `/model <序号|provider/model>` after the syntax was settled
+    // as `provider/model` only, and a bare name would have hidden that.
+    const b = bench()
+
+    const result = await b.run('help')
+
+    expect(result.text).toMatch(/\/models — 查看/u)
+    expect(result.text).toMatch(/\/model <provider\/model> — 切换/u)
+  })
+
   it('lists the harness commands available to the user', async () => {
     // The native surface is the larger half of what a user can type; a help
-    // that only listed this plugin's six would misrepresent it.
+    // that only listed this plugin's own eight would misrepresent it.
     const b = bench()
 
     const result = await b.run('help')
@@ -218,7 +232,7 @@ describe('commands that are not implemented yet', () => {
 
 describe('an unknown local name', () => {
   it('is not handled here', async () => {
-    // Routing sends only the six known names to this module; reaching it with
+    // Routing sends only the eight known names to this module; reaching it with
     // anything else is a routing bug and should be visible as one.
     const b = bench()
 
@@ -304,15 +318,18 @@ describe('/model', () => {
     expect(result.kind).toBe('success')
   })
 
-  it('tells the user the current session keeps its model until /new', async () => {
-    // The switch writes the plugin's config, which a session reads once at
-    // creation. A reply that stopped at "switched" would leave the user talking
-    // to the old model and believing otherwise.
+  it('says the switch applies to the next message, not only to a new session', async () => {
+    // The trap this asserts against is the opposite of the obvious guess: the
+    // reply used to tell the user to send `/new`, which was wrong. A resumed
+    // conversation seeds its first request from `agentOptions`, so the written
+    // config reaches the existing session. Asserting `/new` here would pass on
+    // the word inside "不必 `/new`" and describe the wrong behaviour anyway.
     const b = bench()
 
     const result = await b.run('model', 'provider-b/model-b1')
 
-    expect(result.text).toContain('/new')
+    expect(result.text).toMatch(/下一条消息/u)
+    expect(result.text).toContain('不必 `/new`')
   })
 
   it('refuses a model the catalogue does not offer, without writing', async () => {
