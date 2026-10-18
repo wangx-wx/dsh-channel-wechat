@@ -139,7 +139,7 @@ async function help(ctx: LocalCommandContext): Promise<CommandOutcome> {
     '',
     '/models — 查看可用的供应商与模型',
     '',
-    '/model <序号|provider/model> — 切换模型（写入插件配置）',
+    '/model <provider/model> — 切换模型（写入插件配置）',
     '',
     '/cwd <目录> — 切换工作目录（尚未实现）',
     '',

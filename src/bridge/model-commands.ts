@@ -152,7 +152,8 @@ export async function switchModel(ctx: ModelCommandContext, args: string): Promi
     text: [
       `已把插件模型切换为 ${target.provider}/${target.model}。`,
       '',
-      '当前会话仍在用切换前记录的模型；发送 `/new` 后再对话即生效。',
+      '写入配置会重启微信通道，所以下一条消息就会用新模型，不必 `/new`；',
+      '正在生成的那条回复仍由切换前的模型完成。',
     ].join('\n'),
   }
 }
