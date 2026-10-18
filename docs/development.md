@@ -32,4 +32,4 @@ DSH_CHECKOUT=/path/to/deepseek-harness pnpm test:integration
 
 `tsdown` 从 `src/index.ts` 生成 host half；`scripts/copy-client.mjs` 把手写的 `src/client/client.js` 复制到 `lib/`。`@deepseek-ai/*` 保持为宿主提供的运行时依赖，不能打包进插件。
 
-发布流程和 npm registry 切换步骤见 [release.md](./release.md)。
+发布流程见 [release.md](./release.md) 与 [.dsh/skills/release-workflow/SKILL.md](../.dsh/skills/release-workflow/SKILL.md)；npm registry 切换和发布细节在它的 `references/release-reference.md`。

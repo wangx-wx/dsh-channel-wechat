@@ -269,7 +269,8 @@ Agent 又开始请求本该不需要的批准（或反过来），而配置页�
 前者说「**下载**什么」，后者说「**加载**什么」，两者独立。只在 `dependencies` 里 → 包**装好但永不加载**：
 `--dump-config` 一行都没有，**且不报错**。`dsh plugin add` 两处都写；**手工 `link:` 只写前者**——
 这正是桌面端曾「装了却从不生效」的原因。升级已安装的 profile 还必须**带版本号**
-（`^0.1.0` 已满足新版本，pnpm 会判定「无需变更」→ 原样重装旧版并报成功），见 `docs/release.md` §四之二。
+（`^0.2.3` 已满足新版本，pnpm 会判定「无需变更」→ 原样重装旧版并报成功），
+步骤见 [`installation.md`](./installation.md#升级已安装的-profile)。
 
 ### 构建配置里两处不能改错
 
@@ -282,7 +283,7 @@ Agent 又开始请求本该不需要的批准（或反过来），而配置页�
 - **客户端半边靠 `scripts/copy-client.mjs` 拷贝**，`tsdown` 只构建宿主半边。手写 JS 就是
   浏览器要加载的最终产物，过一遍 ESM/target 处理只会改坏它。`files[]` 里的 `lib/` 覆盖它。
 
-**依据**：`docs/release.md` 附「两个历史陷阱」；plan-v1 §Q48、§Q50；`src/index.ts` / `tsdown.config.ts`。
+**依据**：plan-v1 §Q48、§Q50；`src/index.ts` / `tsdown.config.ts`；`tests/unit/manifest.spec.ts`。
 
 ---
 

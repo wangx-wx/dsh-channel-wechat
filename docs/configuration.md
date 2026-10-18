@@ -8,8 +8,8 @@
 |---|---|---|---|
 | `cwd` | 绝对路径字符串 | 无 | 新建微信会话记录的工作目录；必填，且会话创建后不可修改。修改只影响之后的新会话。 |
 | `cards` | `wechat` 或 `both` | `wechat` | 交互卡发送到微信，或同时保留 GUI 卡片。 |
-| `provider` | 字符串 | 空字符串 | 为空时沿用 profile 默认 provider；非空时只作用于本插件新建的会话。 |
-| `model` | 字符串 | 空字符串 | 为空时沿用 profile 默认模型；非空时只作用于本插件新建的会话。 |
+| `provider` | 字符串 | 空字符串 | 为空时沿用 profile 默认 provider；非空时只作用于本插件的微信会话，不影响 GUI。修改对已有会话的**下一条消息**生效。 |
+| `model` | 字符串 | 空字符串 | 为空时沿用 profile 默认模型；非空时只作用于本插件的微信会话，不影响 GUI。修改对已有会话的**下一条消息**生效。 |
 | `permission` | `read-only`、`workspace-write` 或 `danger-full-access` | `workspace-write` | 新建微信会话使用的 DSH 权限 preset。不会修改 GUI 会话。 |
 
 示例：

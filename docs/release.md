@@ -2,7 +2,7 @@
 
 发布操作流程已收敛到工作区 skill：
 
-- [skills/release-workflow/SKILL.md](../skills/release-workflow/SKILL.md)
+- [skills/release-workflow/SKILL.md](../.dsh/skills/release-workflow/SKILL.md)
 
 使用该 skill 执行版本发布时，它会依次处理：
 

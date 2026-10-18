@@ -64,6 +64,16 @@ src/vendor/        内联第三方代码
 - 重要行为应有变异验证：改坏实现时，声称覆盖该行为的测试必须失败。
 - 断言应保留清晰的失败形状；不要通过静默降级、删除测试或放宽检查规避问题。
 
+## 开发流程
+
+- 从 `origin/main` 切需求分支：`dev_<需求>_<yyMMdd>`。
+- 用 TDD 开发，每个小功能完成即提交；整体完成后**等用户确认**再合入 `main`。
+- 提交格式 `type(scope): desc`；type 取 `feat` / `fix` / `docs` / `style` / `refactor` / `test` / `chore` / `perf`。
+  历史提交是英文散文式描述，不追溯改写。
+- 代码规模：除测试文件外，单个生产代码文件原则上不超过 **500** 行，确有必要时不得无故超过 **700** 行。
+  统计物理行数（含空行和注释）。生成代码、声明式配置等确有合理原因的可例外，但不要借拆分制造过度设计。
+  `src/index.ts` 目前超过 700 行，拆分是独立改动。
+
 ## 文档与协作
 
 - README 只保留用户入门、配置、排障和文档索引；详细架构、协议、决策和历史放在 `docs/` 或 `spec/`。
@@ -71,7 +81,7 @@ src/vendor/        内联第三方代码
 - `docs/dev-log/` 记录版本变更、被推翻的判断和实测证据。
 - 变更前保留用户已有修改；未经明确授权，不执行破坏性清理、强制 reset、推送、发布或合并。
 - 完成文档或代码任务后，报告实际执行过的命令、通过项、失败原因和未验证事项。
-- 发布任务使用 [skills/release-workflow/SKILL.md](./skills/release-workflow/SKILL.md)；`docs/release.md` 只保存发布事实和历史陷阱。
+- 发布任务使用 [skills/release-workflow/SKILL.md](./.dsh/skills/release-workflow/SKILL.md)；`docs/release.md` 只保存发布事实和历史陷阱。
 
 ## 文档地图
 
@@ -79,10 +89,11 @@ src/vendor/        内联第三方代码
 |---|---|
 | [README.md](./README.md) | 用户安装、使用、数据位置和排障入口 |
 | [docs/configuration.md](./docs/configuration.md) | 配置字段、默认值和生效方式 |
+| [docs/commands.md](./docs/commands.md) | 微信内可用命令 |
 | [docs/development.md](./docs/development.md) | 开发、构建和测试 |
 | [docs/architecture.md](./docs/architecture.md) | 模块关系和运行时边界 |
 | [docs/invariants.md](./docs/invariants.md) | 不变量、后果和证据 |
 | [docs/plan-v1.md](./docs/plan-v1.md) | 决策台账、里程碑和技术债 |
 | [docs/protocol/protocol_zh_CN.md](./docs/protocol/protocol_zh_CN.md) | 腾讯 iLink 协议副本 |
-| [skills/release-workflow/SKILL.md](./skills/release-workflow/SKILL.md) | 发布主流程 |
+| [skills/release-workflow/SKILL.md](./.dsh/skills/release-workflow/SKILL.md) | 发布主流程 |
 | [docs/release.md](./docs/release.md) | 发布事实与历史陷阱 |

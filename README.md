@@ -8,7 +8,7 @@
 
 - 微信文本、图片、文件等消息与 DSH 双向收发。
 - 微信消息进入 DSH 会话，回复从 `session/event` 回到微信。
-- 微信内置命令、`/stop`、审批卡和提问卡。
+- 微信内置命令（含 `/models`、`/model`、`/help`）、`/stop`、审批卡和提问卡。
 - GUI 插件页扫码登录、退出登录、配置工作目录、卡片投递方式、模型和权限。
 - 长轮询与会话处理解耦；诊断写入终端和插件日志。
 
@@ -91,6 +91,8 @@ web/desktop profile 的启动器会先拒绝 `login` 位置参数，请改用 GU
 ### 用户指南
 
 - [安装方式补充](./docs/installation.md)
+- [微信内命令](./docs/commands.md)
+- [实践文章：一个通道插件里失败时不报错的坑](./docs/article/wechat-channel-internals.html)
 - [配置参考](./docs/configuration.md)
 - [兼容性与验证范围](./docs/compatibility.md)
 - [故障排查](./docs/troubleshooting.md)
