@@ -19,6 +19,7 @@ import { uploadToCdn } from '../wechat/cdn-upload.ts'
 import { CDN_BASE_URL } from '../wechat/cdn.ts'
 import type { PresentedFile } from '../bridge/deliverables.ts'
 import type { NativeCommandRow } from '../bridge/native-commands.ts'
+import type { ModelCommandContext } from '../bridge/model-commands.ts'
 import type { InboundMedia } from '../wechat/inbound.ts'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 
@@ -143,6 +144,8 @@ export interface RuntimeOptions {
   executeNativeCommand?: (line: string, agent: unknown) => Promise<{ kind: 'success' | 'error'; text?: string } | undefined>
   /** Resolve the commands the harness offers one agent, listed by `/help`. */
   nativeCommands?: ((agent: unknown) => Promise<readonly NativeCommandRow[]>) | undefined
+  /** What `/models` and `/model` read and write. */
+  models?: ModelCommandContext
 }
 
 /**
@@ -291,6 +294,7 @@ export async function startChannelFromStore(options: RuntimeOptions): Promise<vo
     accountId: account.accountId,
     ...(options.executeNativeCommand === undefined ? {} : { executeNativeCommand: options.executeNativeCommand }),
     ...(options.nativeCommands === undefined ? {} : { nativeCommands: options.nativeCommands }),
+    ...(options.models === undefined ? {} : { models: options.models }),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   })
 

@@ -14,6 +14,8 @@ import type { ReplySender } from '../../src/bridge/reply.ts'
 import type { InboundMedia } from '../../src/wechat/inbound.ts'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import type { ModelCommandContext, ModelListing } from '../../src/bridge/model-commands.ts'
+import { createModelCommands } from '../../src/channel/model-config.ts'
 
 /** Wait until a condition holds, so a background loop has a chance to run. */
 async function until(check: () => Promise<boolean> | boolean, timeoutMs = 5_000): Promise<void> {
@@ -90,6 +92,8 @@ function build(options: {
   sendDeliverables?: (peerId: string, files: readonly { path: string; description?: string }[]) => Promise<void>
   /** Observes a reference whose content never arrived. */
   onUnreadableQuote?: (detail: unknown) => void
+  /** What `/models` and `/model` read and write. */
+  models?: ModelCommandContext
 }) {
   const polls: (string | undefined)[] = []
   const sent: { peerId: string; text: string; token: string | undefined }[] = []
@@ -127,6 +131,7 @@ function build(options: {
     // existing is resumed rather than created - which is what proves a restart
     // lands on the new conversation.
     sessionExists: async sessionId => options.registry.exists(sessionId),
+    ...(options.models === undefined ? {} : { models: options.models }),
   })
   channels.push(channel)
   return { channel, polls, sent }
@@ -922,5 +927,102 @@ describe('stopping', () => {
 
     await expect(channel.run()).resolves.toBeUndefined()
     await channel.stop()
+  })
+})
+
+
+
+describe('/models and /model over the production wiring', () => {
+  const llm = {
+    listProviders: () => [
+      { id: 'provider-a', name: 'Provider A' },
+      { id: 'provider-b', name: 'Provider B' },
+    ],
+    listModels: async (provider: string) => provider === 'provider-a'
+      ? [{ id: 'model-a1', name: 'A1' }]
+      : [{ id: 'model-b1', name: 'B1' }],
+  }
+
+  /** A context with just what `createModelCommands` reads, plus a never-settling edit. */
+  function modelContext(options: { editNeverSettles?: boolean } = {}) {
+    const written: Record<string, unknown>[] = []
+    const reported: unknown[] = []
+    const ctx = {
+      get: (name: string) => name === 'configEditor'
+        ? {
+            edit: async (_entry: unknown, change: (current: Record<string, unknown>) => Record<string, unknown>) => {
+              written.push(change({ provider: '', model: '', cwd: '/work' }))
+              // A real reload disposes this run, whose teardown awaits in-flight
+              // commands - so from the command's side the write never settles.
+              if (options.editNeverSettles === true) await new Promise<void>(() => {})
+            },
+          }
+        : undefined,
+      fiber: { entry: {} },
+    }
+    const models = createModelCommands(
+      ctx as never,
+      { provider: { get: () => '' }, model: { get: () => '' } },
+      llm,
+      (message, detail) => { reported.push([message, detail]) },
+    )
+    return { models, written, reported }
+  }
+
+  it('answers /models without opening a session', async () => {
+    // A pure query must not create the conversation it asks about: the peer may
+    // have none, and creating one to answer "which models exist" is a side
+    // effect nobody asked for.
+    const f = fakeRegistry()
+    const { models } = modelContext()
+    const { channel, sent } = build({
+      registry: f,
+      messages: [{ message_id: 1, from_user_id: 'user-7', message_type: 1, item_list: [{ type: 1, text_item: { text: '/models' } }] }],
+      models,
+    })
+
+    await channel.run()
+    await channel.settled()
+
+    expect(sent.map(entry => entry.text).join('')).toContain('/provider-b/model-b1')
+    // No session was opened: the registry's live map is still empty.
+    expect([...f.live.keys()]).toEqual([])
+  })
+
+  it('answers /model and drains even though the write never settles', { timeout: 5_000 }, async () => {
+    // The deadlock this covers: a real write reloads this plugin's row, the
+    // reload disposes the row, the row's disposer awaits `Channel.stop()`, and
+    // `stop()` awaits every in-flight command - this one. Awaiting the write in
+    // the command would make `settled()` never return, which is what the Host's
+    // shutdown deadline then reports as a failed teardown.
+    const f = fakeRegistry()
+    const { models, written } = modelContext({ editNeverSettles: true })
+    const { channel, sent } = build({
+      registry: f,
+      messages: [{ message_id: 1, from_user_id: 'user-7', message_type: 1, item_list: [{ type: 1, text_item: { text: '/model provider-b/model-b1' } }] }],
+      models,
+    })
+
+    await channel.run()
+    await channel.settled()
+
+    expect(sent.map(entry => entry.text).join('')).toContain('provider-b/model-b1')
+    expect(written).toEqual([{ provider: 'provider-b', model: 'model-b1', cwd: '/work' }])
+  })
+
+  it('refuses an unknown model without writing', async () => {
+    const f = fakeRegistry()
+    const { models, written } = modelContext()
+    const { channel, sent } = build({
+      registry: f,
+      messages: [{ message_id: 1, from_user_id: 'user-7', message_type: 1, item_list: [{ type: 1, text_item: { text: '/model provider-a/nope' } }] }],
+      models,
+    })
+
+    await channel.run()
+    await channel.settled()
+
+    expect(written).toEqual([])
+    expect(sent.map(entry => entry.text).join('')).toContain('nope')
   })
 })

@@ -15,11 +15,23 @@
 
 import { describe, expect, it } from 'vitest'
 import { runLocalCommand, type LocalCommandContext } from '../../src/bridge/local-commands.ts'
+import type { ModelListing } from '../../src/bridge/model-commands.ts'
+
+/** The catalogue `/models` renders in these tests. */
+const CATALOG: ModelListing = {
+  options: [
+    { provider: 'provider-a', model: 'model-a1', label: 'A1', providerLabel: 'Provider A' },
+    { provider: 'provider-a', model: 'model-a2', label: 'A2', providerLabel: 'Provider A' },
+    { provider: 'provider-b', model: 'model-b1', label: 'B1', providerLabel: 'Provider B' },
+  ],
+  failures: [],
+}
 
 /** A bench with recording collaborators. */
 function bench(overrides: Partial<LocalCommandContext> = {}) {
   const cancelled: string[] = []
   const ended: string[] = []
+  const switched: { provider: string; model: string }[] = []
   const ctx: LocalCommandContext = {
     peerId: 'user-7',
     // Returns whether there was a turn to cancel; the reply has to differ,
@@ -33,9 +45,14 @@ function bench(overrides: Partial<LocalCommandContext> = {}) {
       { name: 'goal', description: '设置或查看长期任务目标' },
       { name: 'permission', description: '切换权限预设' },
     ],
+    models: {
+      listModels: async () => CATALOG,
+      switchModel: async selection => { switched.push(selection) },
+      current: () => ({ provider: 'provider-a', model: 'model-a1' }),
+    },
     ...overrides,
   }
-  return { ctx, cancelled, ended, run: (name: string, args = '') => runLocalCommand({ name, args }, ctx) }
+  return { ctx, cancelled, ended, switched, run: (name: string, args = '') => runLocalCommand({ name, args }, ctx) }
 }
 
 describe('/stop', () => {
@@ -206,6 +223,124 @@ describe('an unknown local name', () => {
     const b = bench()
 
     const result = await b.run('nonsense')
+
+    expect(result.kind).toBe('error')
+  })
+})
+
+describe('/models', () => {
+  it('lists every provider and model the registry reports', async () => {
+    const b = bench()
+
+    const result = await b.run('models')
+
+    expect(result.kind).toBe('success')
+    for (const row of CATALOG.options) {
+      expect(result.text).toContain(`/${row.provider}/${row.model}`)
+    }
+  })
+
+  it('marks the model this plugin currently has configured', async () => {
+    // The listing is what a user reads before switching; without the marker they
+    // cannot tell what they are changing from.
+    const b = bench()
+
+    const result = await b.run('models')
+
+    expect(result.text).toContain('（当前）')
+  })
+
+  it('separates every entry with a blank line', async () => {
+    // The same markdown rule `/help` had to obey: a single newline is a soft
+    // break and arrives as a space.
+    const b = bench()
+
+    const result = await b.run('models')
+
+    const lines = (result.text ?? '').split('\n')
+    const adjacent = lines.filter((line, index) => {
+      const next = lines[index + 1]
+      return next !== undefined && line.startsWith('/') && next.startsWith('/')
+    })
+    expect(adjacent).toEqual([])
+  })
+
+  it('names a provider it could not list instead of dropping it', async () => {
+    const b = bench({
+      models: {
+        listModels: async () => ({
+          ...CATALOG,
+          failures: [{ provider: 'provider-c', message: '连接超时' }],
+        }),
+        switchModel: async () => {},
+        current: () => ({ provider: '', model: '' }),
+      },
+    })
+
+    const result = await b.run('models')
+
+    expect(result.text).toContain('provider-c')
+    expect(result.text).toContain('连接超时')
+  })
+
+  it('says so when the deployment has no model catalogue', async () => {
+    const b = bench({
+      models: { listModels: undefined, switchModel: undefined, current: () => ({ provider: '', model: '' }) },
+    })
+
+    const result = await b.run('models')
+
+    expect(result.kind).toBe('error')
+  })
+})
+
+describe('/model', () => {
+  it('switches to a provider and model it can find in the catalogue', async () => {
+    const b = bench()
+
+    const result = await b.run('model', 'provider-b/model-b1')
+
+    expect(b.switched).toEqual([{ provider: 'provider-b', model: 'model-b1' }])
+    expect(result.kind).toBe('success')
+  })
+
+  it('tells the user the current session keeps its model until /new', async () => {
+    // The switch writes the plugin's config, which a session reads once at
+    // creation. A reply that stopped at "switched" would leave the user talking
+    // to the old model and believing otherwise.
+    const b = bench()
+
+    const result = await b.run('model', 'provider-b/model-b1')
+
+    expect(result.text).toContain('/new')
+  })
+
+  it('refuses a model the catalogue does not offer, without writing', async () => {
+    // This is the failure the detached write cannot report: a typo would only
+    // reach the log. Validating first is what keeps it visible in the chat.
+    const b = bench()
+
+    const result = await b.run('model', 'provider-a/does-not-exist')
+
+    expect(result.kind).toBe('error')
+    expect(b.switched).toEqual([])
+  })
+
+  it('rejects a line that does not name a provider and model', async () => {
+    for (const args of ['', 'model-a1', 'provider-a/', '/model-a1', 'a/b/c']) {
+      const b = bench()
+      const result = await b.run('model', args)
+      expect(result.kind, JSON.stringify(args)).toBe('error')
+      expect(b.switched, JSON.stringify(args)).toEqual([])
+    }
+  })
+
+  it('says so when the deployment has no writable config', async () => {
+    const b = bench({
+      models: { listModels: async () => CATALOG, switchModel: undefined, current: () => ({ provider: '', model: '' }) },
+    })
+
+    const result = await b.run('model', 'provider-b/model-b1')
 
     expect(result.kind).toBe('error')
   })

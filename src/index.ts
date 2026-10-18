@@ -33,6 +33,7 @@ import { createPanel } from './channel/panel.ts'
 import { startChannelFromStore } from './channel/runtime.ts'
 import { resolveModelSelection, resolvePermission } from './channel/session-policy.ts'
 import { buildModelOptions } from './channel/model-catalog.ts'
+import { createModelCommands } from './channel/model-config.ts'
 import { CURRENT_VERSION, createUpdateChecker } from './channel/update-check.ts'
 import { buildUpdateCommand } from './channel/update-command.ts'
 import { createUpdateRoutes } from './channel/update-routes.ts'
@@ -536,6 +537,11 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
     // tracking them.
     executeNativeCommand: createNativeCommandExecutor({ commands: commandsOf(ctx) }),
     nativeCommands: createNativeCommandLister({ commands: commandsOf(ctx) }),
+    // `/models` reads the live registry and `/model` writes this plugin's own two
+    // fields, so a switch here cannot move the GUI's model. `contextLlm` rather
+    // than `inject`: a deployment with no LLM registry is supported, and the
+    // command reports that instead of the row parking.
+    models: createModelCommands(ctx, config, contextLlm(ctx), report),
     onStarted: accountId => { report('polling as', accountId) },
     // These two are the ones that hid a live defect: every restart rejected the
     // session create and reported it here, where nothing could read it.

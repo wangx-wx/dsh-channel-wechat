@@ -35,7 +35,7 @@ export interface CommandOutcome {
 }
 
 /** The channel's own command names. */
-export const LOCAL_COMMANDS = ['stop', 'status', 'new', 'cwd', 'help', 'reconnect'] as const
+export const LOCAL_COMMANDS = ['stop', 'status', 'new', 'cwd', 'help', 'reconnect', 'models', 'model'] as const
 
 /**
  * The harness's command grammar, from its own parser.

@@ -13,6 +13,8 @@
  */
 
 import type { CommandOutcome, ParsedCommand } from './commands.ts'
+import type { ModelCommandContext } from './model-commands.ts'
+import { listModels, switchModel } from './model-commands.ts'
 import type { NativeCommandRow } from './native-commands.ts'
 
 /** What the channel's commands need to know. */
@@ -37,6 +39,14 @@ export interface LocalCommandContext {
    * agent's own scoped view: which plugins that agent mounted decides them.
    */
   nativeCommands: () => Promise<readonly NativeCommandRow[]>
+  /**
+   * What `/models` and `/model` read and write.
+   *
+   * The same shape both commands need; `undefined` for a deployment that
+   * composes no LLM registry or no writable config, where the commands report
+   * that plainly rather than pretending.
+   */
+  models: ModelCommandContext
 }
 
 /** Commands this channel has not implemented yet. */
@@ -64,6 +74,10 @@ export async function runLocalCommand(
       return startNew(ctx)
     case 'help':
       return help(ctx)
+    case 'models':
+      return listModels(ctx.models)
+    case 'model':
+      return switchModel(ctx.models, command.args)
     default: {
       const unimplemented = UNIMPLEMENTED[command.name]
       if (unimplemented !== undefined) return { kind: 'error', text: unimplemented }

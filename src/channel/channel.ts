@@ -27,6 +27,7 @@ import { ReplyQueue, extractAssistantText, type ReplySender } from '../bridge/re
 import { parseCommandLine, routeCommand } from '../bridge/commands.ts'
 import { runLocalCommand, type LocalCommandContext } from '../bridge/local-commands.ts'
 import type { NativeCommandRow } from '../bridge/native-commands.ts'
+import type { ModelCommandContext } from '../bridge/model-commands.ts'
 import { parseInboundMessage, type InboundMedia } from '../wechat/inbound.ts'
 import { presentedFilesFrom, type PresentedFile } from '../bridge/deliverables.ts'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
@@ -129,6 +130,16 @@ export interface ChannelOptions {
    * channel plugin cannot assume is set up for it.
    */
   sessionOptions?: { provider: string; model: string }
+  /**
+   * What `/models` and `/model` read and write.
+   *
+   * Optional because a deployment can compose no LLM registry or no writable
+   * profile; the commands then say so rather than the plugin refusing to load.
+   * Passing it through rather than reading the environment here keeps the
+   * channel free of the harness's model services, the same way the command
+   * forwarder keeps it free of `ctx.commands`.
+   */
+  models?: ModelCommandContext
   /**
    * Working directory every session this channel creates records.
    *
@@ -481,6 +492,11 @@ export class Channel {
         // through is deliberate - the lister owns that decision, so a deployment
         // answering from somewhere other than a live agent still can.
         return list(this.peers.handleFor(peerId)?.agent)
+      },
+      models: this.options.models ?? {
+        listModels: undefined,
+        switchModel: undefined,
+        current: () => ({ provider: '', model: '' }),
       },
     }
   }
