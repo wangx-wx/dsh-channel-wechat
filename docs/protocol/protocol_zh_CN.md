@@ -1,8 +1,8 @@
 # 微信后端 API 协议
 
-本文描述 `openclaw-weixin` 渠道插件使用的 HTTP JSON 协议，面向实现或对接兼容微信后端的开发者。普通用户只需阅读[项目 README](../README.zh_CN.md)。
+本文描述 `openclaw-weixin` 渠道插件使用的 HTTP JSON 协议，面向实现或对接兼容微信后端的开发者。普通用户只需阅读[项目 README](../../README.md)。
 
-[English](./protocol.md)
+[English protocol](https://github.com/Tencent/openclaw-weixin/blob/main/docs/protocol.md)
 
 ## 阅读约定
 
@@ -16,7 +16,7 @@
 
 除非另有说明，JSON 示例用于展示部分字段，不代表经过验证的最小可用请求或完整响应。使用时需要替换占位符。`channel_version` 来自包元数据，示例中的 `2.4.8` 仅为示例值。
 
-源码依据：[`src/api/api.ts`](../src/api/api.ts)、[`src/api/types.ts`](../src/api/types.ts) 和 [`src/auth/login-qr.ts`](../src/auth/login-qr.ts)。超出这些源码所体现范围的服务端要求，需要另行验证。
+源码依据：[`src/api/api.ts`](../../src/wechat/api.ts)、[`src/api/types.ts`](../../src/wechat/types.ts) 和 [`src/auth/login-qr.ts`](../../src/wechat/login-runner.ts)。超出这些源码所体现范围的服务端要求，需要另行验证。
 
 ## 协议范围和传输方式
 
@@ -430,7 +430,7 @@ POST /ilink/bot/msg/notifystop
 | `voice_item.encode_type` | `number` | 类型定义中的编码标识，不代表客户端能解码其中所有格式。 |
 | `voice_item.sample_rate` / `playtime` | `number` | 采样率（Hz）/ 时长（毫秒）。 |
 
-其他字段见[协议类型](../src/api/types.ts)，出站消息的构造见[消息发送实现](../src/messaging/send.ts)。
+其他字段见[协议类型](../../src/wechat/types.ts)，出站消息的构造见[消息发送实现](../../src/bridge/reply.ts)。
 
 ### CDN 媒体引用
 
@@ -477,14 +477,14 @@ POST /ilink/bot/msg/notifystop
 
 ## 源码索引
 
-- [API 请求实现](../src/api/api.ts)
-- [协议类型定义](../src/api/types.ts)
-- [二维码登录流程](../src/auth/login-qr.ts)
-- [CDN 上传实现](../src/cdn/upload.ts)
-- [CDN 加密工具](../src/cdn/aes-ecb.ts)
-- [消息发送实现](../src/messaging/send.ts)
-- [入站媒体处理](../src/media/media-download.ts)
-- [CDN 上传传输](../src/cdn/cdn-upload.ts)
-- [消息轮询与重试](../src/monitor/monitor.ts)
-- [配置缓存](../src/api/config-cache.ts)
-- [渠道生命周期](../src/channel.ts)
+- [API 请求实现](../../src/wechat/api.ts)
+- [协议类型定义](../../src/wechat/types.ts)
+- [二维码登录流程](../../src/wechat/login-runner.ts)
+- [CDN 上传实现](../../src/wechat/cdn-upload.ts)
+- [CDN 加密工具](../../src/wechat/crypto.ts)
+- [消息发送实现](../../src/bridge/reply.ts)
+- [入站媒体处理](../../src/wechat/media-download.ts)
+- [CDN 上传传输](../../src/wechat/cdn-upload.ts)
+- [消息轮询与重试](../../src/channel/monitor.ts)
+- [配置缓存](../../src/wechat/api.ts)
+- [渠道生命周期](../../src/channel/channel.ts)

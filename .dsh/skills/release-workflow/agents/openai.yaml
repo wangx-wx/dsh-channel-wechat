@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release workflow"
+  short_description: "dsh-channel-wechat 发布流程"
+  default_prompt: "按仓库发布流程更新 GitHub Pages、npm 和 GitHub Release"

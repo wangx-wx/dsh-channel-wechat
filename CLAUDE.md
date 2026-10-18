@@ -1,125 +1,88 @@
-# CLAUDE.md
+# dsh-channel-wechat 开发说明
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+本仓库把微信（腾讯 iLink / ClawBot）接入 DeepSeek Harness。它是一个同时提供 host bundle 和浏览器端的 channel 插件，运行在 Harness 进程内，不启动独立桥接进程。
 
-把微信（腾讯 iLink / ClawBot）接入 DeepSeek Harness 的 **channel 插件**。单包同时是插件与 bundle，
-运行在 Harness 进程内（没有独立桥接进程）。用户面说明见 [`README.md`](./README.md)。
+用户安装和使用说明见 [README.md](./README.md)；贡献流程见 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
 ## 常用命令
 
 ```bash
 pnpm install
-pnpm test              # 单元测试（毫秒级）
-pnpm test:integration  # 真组合：先 pnpm build，再用真实 launcher 启动隔离 DSH_HOME
-pnpm test:all
-pnpm build             # tsdown → lib/（prepack 自动执行）
+pnpm build             # 生成 lib/，并复制浏览器端 client.js
 pnpm typecheck
+pnpm test              # unit 项目
+pnpm test:integration  # integration 项目，真实 launcher + 隔离 DSH_HOME
+pnpm test:all
 
-# 单文件 / 单用例
+# 单文件或单用例
 pnpm exec vitest run --project unit tests/unit/reply.spec.ts
 pnpm exec vitest run --project unit -t 'the id space'
 ```
 
-⚠️ **干净 checkout 上 `pnpm typecheck` 会失败，直到 `pnpm build` 跑过一次**：集成测试 import
-`dsh-channel-wechat/startup`，该子路径经 `exports` 解析到 `lib/startup.d.ts`。
+干净 checkout 首次执行 `pnpm typecheck` 可能因 `exports` 指向尚未生成的 `lib/*.d.ts` 失败；先运行 `pnpm build`。集成测试默认使用 `tests/support/harness.ts` 中的本地 DeepSeek Harness checkout，可用 `DSH_CHECKOUT=/path/to/deepseek-harness` 覆盖；测试使用临时 `DSH_HOME`，不会修改真实 profile。
 
-集成测试要真实 launcher，默认用本地 DSH 仓库（`tests/support/harness.ts` 的 `DEFAULT_CHECKOUT`），
-`DSH_CHECKOUT=` 可覆盖，不存在时回退到 `DeepSeek Harness.app` 的 dsh shim。它们用临时目录作
-`DSH_HOME`，**不会触碰开发者的真实 profile**。
+发布步骤以 [docs/release.md](./docs/release.md) 为准，不要凭常识改写。
 
-**发版**：照 [`docs/release.md`](./docs/release.md) 走。那是实测步骤，含两个已踩过的陷阱，不要凭常识重写。
+## 代码分层
 
-## 分层
-
-```
-index.ts        装配点：name / inject / Config / apply，把下面各层接起来
-startup.ts      独立 entry（dsh-channel-wechat/startup），解析 app 参数并 provide wechatStartup
-login-command.ts / credentials.ts   CLI 登录动作 + 凭证读写（存 ctx.credentials）
-
-wechat/   协议层 —— 移植腾讯 @tencent-weixin/openclaw-weixin（MIT）。**不得 import 任何 @deepseek-ai/***
-          api / crypto / cdn / cdn-upload / media-download / inbound / login-* / qr / types
-channel/  通道层 —— monitor（长轮询，独立循环）/ channel（五件事的接线）/ runtime（从凭证起跑）
-          single-run（一次运行的所有权）/ mount + panel + login-routes（登录面板）
-          log-file + report（落盘诊断）/ cursor-store / peer-session-store（会话代次）
-bridge/   桥接层 —— peer-map（peer↔session + 串行化）/ dispatcher（消息→agent.followup）
-          reply（assistant/message→微信）/ commands + local-commands + native-commands
-          cards + pending-cards + cards-service / media / deliverables / send-file
-vendor/   内联的 qrcode-generator；MIT 头靠 tsdown 的 banner 保留，见 THIRD_PARTY_NOTICES.md
+```text
+src/index.ts       插件装配、Config、apply、命令行动作认领
+src/wechat/        iLink 协议、登录、媒体与 API
+src/channel/       长轮询运行时、面板、会话代次、诊断
+src/bridge/        消息分发、回复、命令、卡片、媒体与文件
+src/client/        GUI 浏览器端（手写 lazy-CJS）
+src/vendor/        内联第三方代码
 ```
 
-**三条分层纪律**：`wechat/` 不 import 任何 `@deepseek-ai/*`；`bridge/` 只用官方文档化的 API；
-所有 `@deepseek-ai/*` 走 peer + dev 声明。
+必须保持的边界：
+
+- `src/wechat/` 不得 import `@deepseek-ai/*`；协议层保持可独立测试。
+- `@deepseek-ai/*` 只能作为 peer + dev 依赖，不能进入 `dependencies` 或被打包复制；宿主必须共享同一运行时实例。
+- `src/client/client.js` 由 `scripts/copy-client.mjs` 复制到 `lib/`，不要为它引入 bundler。
+- 可选 host 服务通过 `ctx.get()` 获取；不要把 headless 合法缺失的服务加入 `inject`。
+- 所有诊断使用 `reporterFor(ctx)`，保证终端和日志文件都能看到。
+
+更完整的模块关系见 [docs/architecture.md](./docs/architecture.md)。
 
 ## 关键不变量
 
-这些规则的共同点是**违反后不会报错**——行为悄悄变错、启动静默失败，或到真实用户那里才暴露。
-一句话版本如下，**详细依据、违反后果与证据见 [`docs/invariants.md`](./docs/invariants.md)**：
+修改相关实现前先读 [docs/invariants.md](./docs/invariants.md) 和 [docs/plan-v1.md](./docs/plan-v1.md)。尤其注意：
 
-- **会话 id 是 peer 的纯函数**（`channel-wechat-<peerId>[~g<N>]`）；起跑前必须 `sessionExists` 探测，
-  否则每次重启丢掉本进程**全部**入站消息。`/new` 不是删会话（无删除 API），是代次 +1 并持久化。
-- **回复读 durable `assistant/message` 事件**（`session/event`）。不订阅 → 跑得完一轮却什么也不回，
-  且看起来完全健康。所以 `sessionEvents` 是必填。
-- **交互卡监听必须 `{ prepend: true }`**，否则 GUI 抢走请求且**无任何报错**；
-  **卡片回复必须绕过 peer 队列**，否则与提问中的那一轮**死锁**（`/stop` 同理）。
-  直接调 `handleMessage` 的测试看不见这个死锁，回归测试走真实 poll 循环。
-- **媒体失败绝不吞掉消息**——一律降级为追加在文本后的说明。
-- **出站文件只发 `deliverables/presented` 声明的**，绝不扫描目录；`workspace/changes` 正是绝不该发的那个，
-  **事件名是唯一判别依据**。
-- **`cwd` 必填且创建后不可变**（故意无默认值）；`/cwd`、`/reconnect` 已注册但未实现，会明确回复。
-- **可选服务用 `ctx.get()` 拿，不要写进 `inject`**（`attachments`/`llm`/`agentPresets`/`connection`
-  在 headless 上合法缺失，声明进 `inject` 会让整行 parking）。
-- **`ctx.agents` 不套用默认模型**，调用方须自己读 `ctx.agentDefaultModel.currentSelection()`。
-- **所有诊断走 `reporterFor(ctx)`**（终端 + 日志文件双写）：桌面端 stdout 不落盘，
-  绕过 reporter 的诊断在桌面端等于不存在。
-- **`startup.ts` 只认领已知动作词、永不报错**：`program.error()` 会中止整个 boot。
-- **`@deepseek-ai/*` 绝不进 `dependencies`**（须在 peer + dev）。装进 profile 会**分裂运行时身份**，
-  版本号一致、**只有 inode 能发现**，症状是每条消息都失败。`manifest.spec.ts` 有断言守着。
-- **`lib/` 是 gitignore 的**：本地目录 `add` 建 `link:`，而 `link:` 不跑构建 → 静默装成空包。
-  `dependencies`（下载）≠ `dsh.profile.bundles`（加载），只进前者则永不加载且不报错。
+- 会话 id 是 `channel-wechat-<peerId>[~g<N>]`；启动前必须探测既有 session，`/new` 只增加会话代次。
+- 回复必须订阅 durable `session/event` 的 `assistant/message`；不订阅会导致整轮完成但没有微信回复。
+- 交互卡监听需要 `{ prepend: true }`；卡片回复和 `/stop` 必须绕过 peer 队列，避免死锁。
+- 媒体失败要降级为文本说明，不得吞掉入站消息。
+- 出站文件只发送 `deliverables/presented` 声明的文件，不扫描工作目录。
+- `cwd` 必填且在会话创建后不可变；`/cwd` 与 `/reconnect` 已注册但尚未实现，必须明确回复。
+- `ctx.agents` 不会自动套用默认模型；创建会话时读取 `ctx.agentDefaultModel.currentSelection()`。
+- 命令行只认领 `login`、`logout`、`status`，不能因其他 app 的参数调用 `program.error()` 终止整个 boot。
 
 ## 测试纪律
 
-- `tests/unit/**` 是可注入协作者的单元测试；`tests/integration/**` 断言**发布产物**并用真实 launcher
-  启动隔离 `DSH_HOME`。
-- **本仓库反复复发的缺陷模式**：单测自己注入 sink/collaborator，于是**没有一个测试能观察到 `apply`
-  有没有把它接上**。已发生至少四次。**任何新增的生产接线，都要补一个「真实 `apply` 启动」的集成测试。**
-- **变异验证是惯例**：改坏实现后测试必须失败，否则那个测试没在测它声称的东西。
-- 断言失败要有形状：宁可启动失败也不静默降级。
+- `tests/unit/**` 验证可注入协作者；`tests/integration/**` 验证真实 `apply`、发布产物和隔离 launcher。
+- 新增生产接线必须有真实 `apply` 启动的集成测试，不能只在单测里注入同一个 sink。
+- 重要行为应有变异验证：改坏实现时，声称覆盖该行为的测试必须失败。
+- 断言应保留清晰的失败形状；不要通过静默降级、删除测试或放宽检查规避问题。
 
-## 开发规范
+## 文档与协作
 
-1. **提交**：完成一个任务、测试通过后**先提交**。格式 `type(scope): desc`，type 取 `feat` / `fix` /
-   `docs` / `style` / `refactor` / `test` / `chore` / `perf`。（历史提交是英文散文式描述，不追溯改写。）
-2. **需求规格归档**：`spec/` **只放需求规格**，文件名按日期递增（`YYYYMMDD-<slug>.md`），
-   格式参考 `/to-spec`。被推翻的规格**在原文打标记**（superseded + 指向取代者），不要删除。
-   文档与开发规范不进 `spec/`。
-3. **开发日志**：`docs/dev-log/`，**每个版本提交一次**，记录详细变更（含被推翻的判断与实测证据）。
-4. **开发流程**：确定需求 → **从 `origin/main` 切需求分支**（`dev_<需求>_<yyMMdd>`）→ 更新或归档规格 →
-   用 `/tdd` 开发并测试 → **每个小功能完成即提交** → 推送到远程 →
-   整体完成后**等用户确认**再合入 `main`。
-5. **发版**：记录开发日志 → `npm publish` → 打 tag → 建 GitHub Release。步骤以 `docs/release.md` 为准。
-6. **代码规模**：除测试文件外，单个生产代码文件原则上不超过 **500 行**，超过时应优先拆分职责；不得无故超过 **700 行**。统计物理行数，包含空行和注释。生成代码、必要的声明式配置及其他确有合理原因的情况可例外，但应避免借拆分制造过度设计。禁止仅为满足行数限制而牺牲可读性、内聚性或合理的代码结构。
-
-> [`docs/plan-v1.md`](./docs/plan-v1.md) 的决策台账（Q1–Q52）是这些规范的**既有先例**：每条决策都带依据、
-> 代价与实测证据，被推翻的判断也留在原地并注明。新决策照这个密度写。
+- README 只保留用户入门、配置、排障和文档索引；详细架构、协议、决策和历史放在 `docs/` 或 `spec/`。
+- `spec/` 只放按 `YYYYMMDD-<slug>.md` 命名的需求规格；被推翻的规格保留原文并标注取代关系。
+- `docs/dev-log/` 记录版本变更、被推翻的判断和实测证据。
+- 变更前保留用户已有修改；未经明确授权，不执行破坏性清理、强制 reset、推送、发布或合并。
+- 完成文档或代码任务后，报告实际执行过的命令、通过项、失败原因和未验证事项。
+- 发布任务使用 [skills/release-workflow/SKILL.md](./skills/release-workflow/SKILL.md)；`docs/release.md` 只保存发布事实和历史陷阱。
 
 ## 文档地图
 
-| 文档 | 内容 |
+| 文档 | 用途 |
 |---|---|
-| `docs/plan-v1.md` | **实施方案（定稿）**：决策台账 Q1–Q52、架构、里程碑、风险与技术债。改架构前先读。 |
-| `docs/invariants.md` | **不变量的详细依据**：为什么、违反后果、证据在哪个文件或哪条决策 |
-| `docs/release.md` | 发布实测步骤 + 两个历史陷阱 |
-| `docs/recon/01–13` | 13 份侦察报告：协议、构建、DSH 契约、同类实现评估。有精确行号依据。 |
-| `docs/recon/_analysis/` | 第三方源码只读证据，**gitignore，不进仓库** |
-| `docs/design.md` / `docs/事实核查.md` | 早期设计稿与协议性质核查（部分已被 plan-v1 取代） |
-| `docs/protocol/protocol_zh_CN.md` | 腾讯协议文档副本 |
-| `spec/` | **需求规格归档**，按日期递增 |
-| `docs/dev-log/` | 开发日志，每版本一份 |
-| `README.md` / `README.en.md` | 用户面：安装、用法、**数据落点**、已知问题、不做的事 |
-
-**数据落在哪里**（会话 / 插件状态 / 诊断日志 / 凭证四处路径）见 README 的「数据落在哪里」一节。
-要点：日志留 7 天，但**聊天记录永不删除**——`/new` 只是换一个会话目录。
-
-**已知问题（记录，未修）**：见 [`README.md`](./README.md) 的「已知问题」与 plan-v1 §Q45 / §Q52。
-动手前先读——两处都论证过「为什么现在不修」以及触发条件。
+| [README.md](./README.md) | 用户安装、使用、数据位置和排障入口 |
+| [docs/configuration.md](./docs/configuration.md) | 配置字段、默认值和生效方式 |
+| [docs/development.md](./docs/development.md) | 开发、构建和测试 |
+| [docs/architecture.md](./docs/architecture.md) | 模块关系和运行时边界 |
+| [docs/invariants.md](./docs/invariants.md) | 不变量、后果和证据 |
+| [docs/plan-v1.md](./docs/plan-v1.md) | 决策台账、里程碑和技术债 |
+| [docs/protocol/protocol_zh_CN.md](./docs/protocol/protocol_zh_CN.md) | 腾讯 iLink 协议副本 |
+| [skills/release-workflow/SKILL.md](./skills/release-workflow/SKILL.md) | 发布主流程 |
+| [docs/release.md](./docs/release.md) | 发布事实与历史陷阱 |
