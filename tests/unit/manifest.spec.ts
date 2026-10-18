@@ -461,4 +461,18 @@ describe('discovery metadata', () => {
       expect(existsSync(resolved), `${href} in ${page.pathname} must exist`).toBe(true)
     }
   })
+
+  it('references only screenshot files that are actually in the tree', () => {
+    // The landing page shows real screenshots. A renamed or missing file is a
+    // broken image on the published site and nothing else notices: the page
+    // builds, the test run stays green, and only a visitor sees the gap.
+    const page = new URL('../../docs/index.html', import.meta.url)
+    const html = readFileSync(page, 'utf8')
+    const sources = [...html.matchAll(/<img[^>]*\ssrc="([^"]+)"/gu)].map(match => match[1])
+    expect(sources.length, 'the landing page should show screenshots').toBeGreaterThan(0)
+    for (const source of sources) {
+      const resolved = new URL(String(source), page)
+      expect(existsSync(resolved), `${source} in docs/index.html must exist`).toBe(true)
+    }
+  })
 })

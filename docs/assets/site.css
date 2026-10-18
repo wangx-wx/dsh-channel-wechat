@@ -133,62 +133,94 @@ h2 {
 
 /* ---------- screenshots ---------- */
 
-.shots {
+/*
+  截图卡：三点窗口栏 + 等宽标题 + 1px 外框 + 内高光与投影。展示语言取自 dsh-plugins
+  落地页的 .lp-shot，底色仍用本站浅色，不引入它的深色主题。
+
+  图片是原图、不压缩。手机长图（1200×6772）在卡片里固定高度、从顶部开始裁，
+  完整内容点开看原图。别改成 height: auto——那样整页会被一张图拉长约八千像素。
+*/
+.shots { display: grid; gap: 24px; }
+
+.shots .pair {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 24px;
 }
 
-/*
-  截图位。图片文件放到位就自动显示，不需要改 HTML：
-  图片加载失败时 onerror 把它从 DOM 里删掉，:has(img) 随之失效，
-  ::before 的占位说明就透出来了。data-label 只是占位提示，不是最终文案。
-*/
 .shot {
   margin: 0;
-  min-height: 300px;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #D5DEE5;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 1px 0 0 rgba(255, 255, 255, .7) inset,
+              0 16px 40px -24px rgba(15, 23, 42, .45);
+}
+
+.shot-bar {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 14px;
-  padding: 18px;
-  text-align: center;
-  border: 1px dashed #B9D8C6;
-  border-radius: var(--radius);
-  background: var(--soft);
+  gap: 6px;
+  flex: none;
+  height: 36px;
+  padding: 0 14px;
+  background: var(--code-bg);
 }
 
-.shot::before {
-  content: attr(data-label);
-  font-size: 13px;
-  line-height: 1.9;
-  color: #6B8A79;
-  white-space: pre-line;
-}
+.shot-bar i { width: 9px; height: 9px; border-radius: 50%; background: #475569; }
+.shot-bar i:nth-child(1) { background: #F87171B3; }
+.shot-bar i:nth-child(2) { background: #FBBF24B3; }
+.shot-bar i:nth-child(3) { background: #34D399B3; }
 
-.shot:has(img)::before { display: none; }
+.shot-bar span {
+  margin-left: 8px;
+  overflow: hidden;
+  color: #94A3B8;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 
 /*
-  手机截图多是 9:19.5 的长图。按高度收能让三张并排时高度一致，但长图缩到 300px 宽
-  字就看不清了——所以这里只是缩略图，外面套 <a target="_blank"> 点开看原图。
+  .crop 负责「只露开头」：a 是相对定位的容器，::after 在底部压一层渐隐，
+  让人一眼看出下面还有内容、需要点开。没有渐隐时，长图会在某行文字中间硬切，
+  看起来像图片被截坏了。
 */
-.shot a { display: block; line-height: 0; }
-.shot a:hover img { opacity: .9; }
+.shot a { display: block; position: relative; line-height: 0; }
+.shot a:hover img { opacity: .94; }
 
 .shot img {
-  max-width: 100%;
-  max-height: 440px;
-  border-radius: 8px;
-  background: #fff;
+  display: block;
+  width: 100%;
+  height: auto;
+  object-fit: cover;
+  object-position: top;
+  transition: opacity .15s;
+}
+
+/* 手机长图：卡内只露出开头。 */
+.shot img.tall { height: 520px; }
+
+.shot .crop::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 96px;
+  background: linear-gradient(to bottom, rgba(255, 255, 255, 0), #fff);
+  pointer-events: none;
 }
 
 .shot figcaption {
-  width: 100%;
-  padding-top: 12px;
-  font-size: 13px;
-  color: var(--muted);
+  margin-top: auto;
+  padding: 14px 18px;
   border-top: 1px solid var(--line);
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--muted);
 }
 
 /* ---------- feature list ---------- */
@@ -347,13 +379,8 @@ footer li { margin-bottom: 6px; }
   .wrap { padding: 0 20px; }
   th, td { padding: 10px 8px; }
 
-  /*
-    窄屏一列显示。长截图按屏宽铺满会把页面拉到近万像素高，而 1080px 宽的截图缩到
-    330px 后字依然读不出来——既然两种方式都读不清，就选更省滚动的：限制高度，
-    点开看原图。.shot a 的 title 已写明「点开看原图」。
-  */
-  .shot { min-height: 0; padding: 14px; }
-  .shot img { max-height: 560px; }
+  /* 窄屏时手机长图再收一档，免得截图区比正文还长。 */
+  .shot img.tall { height: 380px; }
 }
 
 /* ---------- article（文章页 article/*.html 用） ---------- */
