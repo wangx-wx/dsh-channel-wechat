@@ -109,27 +109,75 @@ h2 {
 
 .lede { margin: 0 0 36px; color: var(--muted); max-width: 680px; }
 
-/* ---------- current release ---------- */
+/* ---------- release history ---------- */
 
-.release-card {
-  max-width: 680px;
-  padding: 28px 32px;
-  border: 1px solid #B9D8C6;
+/*
+  发布历史：一行一个版本，整行是链接。之前是一张「当前版本」大卡，只显示最新一版，
+  读者想找旧版本得自己跳到 GitHub；现在把 8 个版本平铺出来，扫一眼就知道节奏。
+
+  行内四列：版本徽章 / 名称 / （弹性空白）/ 日期。窄屏时日期换行到第二行。
+*/
+.releases {
+  margin: 0 0 24px;
+  padding: 0;
+  list-style: none;
+  border: 1px solid #D5DEE5;
   border-radius: var(--radius);
-  background: var(--soft);
+  overflow: hidden;
+  background: #fff;
 }
 
-.release-card h2 { margin-bottom: 8px; }
-.release-card p { margin: 0 0 8px; }
-.release-card .eyebrow {
-  margin: 0 0 4px;
+.releases li + li { border-top: 1px solid var(--line); }
+
+.releases a {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 12px;
+  padding: 13px 22px;
+  color: inherit;
+  transition: background .15s;
+}
+
+.releases a:hover { background: var(--soft); text-decoration: none; }
+
+.release-tag {
+  flex: none;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: rgba(7, 193, 96, .1);
   color: var(--green-dark);
   font-size: 13px;
   font-weight: 600;
-  letter-spacing: .04em;
-  text-transform: uppercase;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
-.release-card .muted { color: var(--muted); font-size: 14px; }
+
+.release-latest {
+  flex: none;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--green);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+
+.release-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.releases a:hover .release-name { color: var(--green-dark); }
+
+.release-date {
+  flex: none;
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
 
 /* ---------- screenshots ---------- */
 
@@ -250,6 +298,45 @@ h2 {
 .card h3 a:hover { color: var(--green-dark); }
 
 .card p { margin: 0; font-size: 15px; color: var(--muted); }
+
+/*
+  「文档与入口」那组卡片。.links 这个类名从落地页第一版就在 HTML 里，但**从来没有对应样式**，
+  所以整组看起来和上面的功能介绍一模一样——读者不知道这几张能点。
+  这里把整张卡片变成链接：<a class="card"> 铺满，箭头在悬停时右移一格作为可点的提示。
+*/
+.cards.links .card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: inherit;
+  transition: border-color .15s, box-shadow .15s;
+}
+
+.cards.links .card:hover {
+  border-color: var(--green);
+  text-decoration: none;
+  box-shadow: 0 12px 32px -22px rgba(7, 193, 96, .5);
+}
+
+.cards.links .card h3 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+}
+
+.cards.links .card h3::after {
+  content: "→";
+  flex: none;
+  color: var(--green);
+  opacity: .55;
+  transition: transform .15s, opacity .15s;
+}
+
+.cards.links .card:hover h3::after { transform: translateX(3px); opacity: 1; }
+
+.cards.links .card p { margin: 0; }
 
 /* ---------- code ---------- */
 
@@ -381,6 +468,24 @@ footer li { margin-bottom: 6px; }
 
   /* 窄屏时手机长图再收一档，免得截图区比正文还长。 */
   .shot img.tall { height: 380px; }
+
+  /*
+    发布历史在窄屏挤在一行时，行与行之间的换行位置不一致：名称长的独占一行，
+    名称短的却和徽章同行，日期又各自落在不同位置。改成两行网格：
+    第一行徽章 + 最新标，第二行名称，日期靠右与名称同行。
+  */
+  .releases a {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: baseline;
+    gap: 6px 12px;
+    padding: 14px 18px;
+  }
+
+  .releases .release-tag { grid-column: 1; grid-row: 1; justify-self: start; }
+  .releases .release-latest { grid-column: 2; grid-row: 1; justify-self: start; }
+  .releases .release-name { grid-column: 1 / -1; grid-row: 2; }
+  .releases .release-date { grid-column: 1 / -1; grid-row: 3; }
 }
 
 /* ---------- article（文章页 article/*.html 用） ---------- */

@@ -27,17 +27,6 @@
 <main>
   <section>
     <div class="wrap">
-      <div class="release-card">
-        <p class="eyebrow">当前版本</p>
-        <h2><a href="https://github.com/wangx-wx/dsh-channel-wechat/releases/tag/v0.2.4">v0.2.4</a></h2>
-        <p>新增 <code>/models</code> 与 <code>/model</code>：在微信里查看可用模型并切换；<code>/help</code> 改为空行分段，不再挤成一行。</p>
-        <p class="muted">继续支持 DSH <code>&gt;=0.2.0-rc.1</code>。完整变更说明见 <a href="https://github.com/wangx-wx/dsh-channel-wechat/releases">GitHub Releases</a>。</p>
-      </div>
-    </div>
-  </section>
-
-  <section>
-    <div class="wrap">
       <h2>它能做什么</h2>
       <div class="cards">
         <div class="card"><h3>消息双向收发</h3><p>微信消息进入 DSH 会话，助手回复和文件再回到微信。</p></div>
@@ -99,16 +88,84 @@
     <div class="wrap">
       <h2>文档与入口</h2>
       <div class="cards links">
-        <div class="card"><h3><a href="https://github.com/wangx-wx/dsh-channel-wechat/blob/main/README.md">README</a></h3><p>环境要求、配置、数据位置和常见问题。</p></div>
-        <div class="card"><h3><a href="https://github.com/wangx-wx/dsh-channel-wechat/blob/main/docs/configuration.md">配置参考</a></h3><p>字段、默认值和权限边界。</p></div>
-        <div class="card"><h3><a href="https://github.com/wangx-wx/dsh-channel-wechat/blob/main/docs/troubleshooting.md">故障排查</a></h3><p>按现象查日志、账号和会话状态。</p></div>
-        <div class="card"><h3><a href="article/wechat-channel-internals.html">实践文章</a></h3><p>一个通道插件里那些失败时不报错的坑。</p></div>
-        <div class="card"><h3><a href="market/index.json">插件市场索引</a></h3><p>把这个 URL 加到 DSH 的发现页即可搜索安装。</p></div>
-        <div class="card"><h3><a href="https://github.com/wangx-wx/dsh-channel-wechat/issues">报告问题</a></h3><p>提交 DSH 版本、插件版本、复现步骤和脱敏日志。</p></div>
-        <div class="card"><h3><a href="https://www.npmjs.com/package/dsh-channel-wechat">npm</a></h3><p>查看已发布版本和包内容。</p></div>
+        <a class="card" href="https://github.com/wangx-wx/dsh-channel-wechat/blob/main/README.md"><h3>README</h3><p>环境要求、配置、数据位置和常见问题。</p></a>
+        <a class="card" href="https://github.com/wangx-wx/dsh-channel-wechat/blob/main/docs/configuration.md"><h3>配置参考</h3><p>字段、默认值和权限边界。</p></a>
+        <a class="card" href="https://github.com/wangx-wx/dsh-channel-wechat/blob/main/docs/troubleshooting.md"><h3>故障排查</h3><p>按现象查日志、账号和会话状态。</p></a>
+        <a class="card" href="article/wechat-channel-internals.html"><h3>实践文章</h3><p>一个通道插件里那些失败时不报错的坑。</p></a>
+        <a class="card" href="market/index.json"><h3>插件市场索引</h3><p>把这个 URL 加到 DSH 的发现页即可搜索安装。</p></a>
+        <a class="card" href="https://github.com/wangx-wx/dsh-channel-wechat/issues"><h3>报告问题</h3><p>提交 DSH 版本、插件版本、复现步骤和脱敏日志。</p></a>
+        <a class="card" href="https://www.npmjs.com/package/dsh-channel-wechat"><h3>npm</h3><p>查看已发布版本和包内容。</p></a>
       </div>
     </div>
   </section>
+
+  <section id="releases">
+    <div class="wrap">
+      <h2>发布历史</h2>
+      <p class="lede">每个版本一行，点进去看该版本的完整变更与安装说明。</p>
+      <ol class="releases">
+        <li>
+          <a href="https://github.com/wangx-wx/dsh-channel-wechat/releases/tag/v0.2.4">
+            <span class="release-tag">v0.2.4</span>
+            <span class="release-latest">最新</span>
+            <span class="release-name">微信里查看与切换模型</span>
+            <time class="release-date" datetime="2026-10-18">2026-10-18</time>
+          </a>
+        </li>
+        <li>
+          <a href="https://github.com/wangx-wx/dsh-channel-wechat/releases/tag/v0.2.3">
+            <span class="release-tag">v0.2.3</span>
+            <span class="release-name">修好 0.2.2 里没生效的退出修复</span>
+            <time class="release-date" datetime="2026-10-17">2026-10-17</time>
+          </a>
+        </li>
+        <li>
+          <a href="https://github.com/wangx-wx/dsh-channel-wechat/releases/tag/v0.2.2">
+            <span class="release-tag">v0.2.2</span>
+            <span class="release-name">检查更新、Windows 路径修复</span>
+            <time class="release-date" datetime="2026-10-17">2026-10-17</time>
+          </a>
+        </li>
+        <li>
+          <a href="https://github.com/wangx-wx/dsh-channel-wechat/releases/tag/v0.2.1">
+            <span class="release-tag">v0.2.1</span>
+            <span class="release-name">版本号跟随 DSH，修长轮询 teardown</span>
+            <time class="release-date" datetime="2026-10-17">2026-10-17</time>
+          </a>
+        </li>
+        <li>
+          <a href="https://github.com/wangx-wx/dsh-channel-wechat/releases/tag/v0.1.3">
+            <span class="release-tag">v0.1.3</span>
+            <span class="release-name">插件页内配置默认模型与会话权限</span>
+            <time class="release-date" datetime="2026-10-16">2026-10-16</time>
+          </a>
+        </li>
+        <li>
+          <a href="https://github.com/wangx-wx/dsh-channel-wechat/releases/tag/v0.1.2">
+            <span class="release-tag">v0.1.2</span>
+            <span class="release-name">GUI 内登录与配置，插件只占一行</span>
+            <time class="release-date" datetime="2026-10-16">2026-10-16</time>
+          </a>
+        </li>
+        <li>
+          <a href="https://github.com/wangx-wx/dsh-channel-wechat/releases/tag/v0.1.1">
+            <span class="release-tag">v0.1.1</span>
+            <span class="release-name">修掉两个让每条消息都失败的缺陷</span>
+            <time class="release-date" datetime="2026-10-16">2026-10-16</time>
+          </a>
+        </li>
+        <li>
+          <a href="https://github.com/wangx-wx/dsh-channel-wechat/releases/tag/v0.1.0">
+            <span class="release-tag">v0.1.0</span>
+            <span class="release-name">首个发布版本：文本、媒体、卡片与扫码登录</span>
+            <time class="release-date" datetime="2026-10-15">2026-10-15</time>
+          </a>
+        </li>
+      </ol>
+      <p class="note">当前版本 v0.2.4，继续支持 DSH <code>&gt;=0.2.0-rc.1</code>。全部版本见 <a href="https://github.com/wangx-wx/dsh-channel-wechat/releases">GitHub Releases</a>。</p>
+    </div>
+  </section>
+
 </main>
 
 <footer>

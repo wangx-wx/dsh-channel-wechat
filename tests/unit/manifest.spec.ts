@@ -475,4 +475,68 @@ describe('discovery metadata', () => {
       expect(existsSync(resolved), `${source} in docs/index.html must exist`).toBe(true)
     }
   })
+
+  it('gives every class the landing page uses a rule in site.css', () => {
+    // `.links` sat in the markup from the first version of the page with no
+    // stylesheet rule behind it, so the entry cards rendered identically to the
+    // feature cards and did not look clickable. Nothing fails when a class has
+    // no rule: the browser applies none, and the page just looks flat. This
+    // catches the whole family, not that one instance.
+    const html = readFileSync(new URL('../../docs/index.html', import.meta.url), 'utf8')
+    const source = readFileSync(new URL('../../docs/assets/site.css', import.meta.url), 'utf8')
+    // Strip comments first. Without this the check greps prose: documenting a
+    // class in a comment would satisfy it even when no rule exists.
+    const css = source.replace(/\/\*[\s\S]*?\*\//gu, '')
+    const used = new Set<string>()
+    for (const match of html.matchAll(/\sclass="([^"]+)"/gu)) {
+      for (const name of String(match[1]).split(/\s+/u)) if (name) used.add(name)
+    }
+    const missing = [...used].filter(name => !css.includes(`.${name}`))
+    expect(missing, 'docs/index.html uses classes with no rule in site.css').toEqual([])
+  })
+
+  it('keeps the published release history internally consistent', () => {
+    // The release list is hand-written, like the market index and the changelog
+    // section before it. A row copied and not edited yields a link that points
+    // at the wrong tag, and the page still looks fine: the label is what the
+    // reader trusts, not the href. Offline checks only: the unit suite must not
+    // depend on the network or on `gh` being installed.
+    const html = readFileSync(new URL('../../docs/index.html', import.meta.url), 'utf8')
+    const list = html.match(/<ol class="releases">([\s\S]*?)<\/ol>/u)?.[1]
+    expect(list, 'docs/index.html must carry the release history list').toBeTypeOf('string')
+
+    const rows = [...String(list).matchAll(/<a href="([^"]+)">([\s\S]*?)<\/a>/gu)].map(match => ({
+      href: match[1],
+      tag: match[2].match(/class="release-tag">([^<]+)</u)?.[1],
+      date: match[2].match(/<time[^>]*datetime="([^"]+)"/u)?.[1],
+      latest: /class="release-latest"/u.test(match[2]),
+    }))
+    expect(rows.length, 'the release history should list the published versions').toBeGreaterThan(0)
+
+    for (const row of rows) {
+      expect(row.tag, 'every row needs a version tag').toBeTypeOf('string')
+      expect(row.href.endsWith(`/releases/tag/${row.tag}`), `${row.tag} must link to its own release`).toBe(true)
+      expect(row.date, `${row.tag} needs a publish date`).toMatch(/^\d{4}-\d{2}-\d{2}$/u)
+    }
+
+    // Newest first. Comparing by string would put v0.10.0 below v0.9.0, so
+    // compare the numeric segments.
+    const keys = rows.map(row => String(row.tag).slice(1).split('.').map(Number))
+    const descending = keys.every((key, index) => {
+      if (index === 0) return true
+      const previous = keys[index - 1]
+      for (let i = 0; i < Math.max(key.length, previous.length); i += 1) {
+        const a = previous[i] ?? 0
+        const b = key[i] ?? 0
+        if (a !== b) return a > b
+      }
+      return false
+    })
+    expect(descending, 'the release history must be newest first').toBe(true)
+
+    // Exactly one row carries the badge, and it has to be the first one.
+    const flagged = rows.filter(row => row.latest)
+    expect(flagged.length, 'exactly one release is current').toBe(1)
+    expect(rows[0].latest, 'the current release must be listed first').toBe(true)
+  })
 })
