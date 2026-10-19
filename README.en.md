@@ -9,6 +9,7 @@ A channel plugin that connects WeChat (Tencent iLink / ClawBot) to [DeepSeek Har
 - Two-way text, image, and file messaging.
 - Inbound WeChat messages become DSH turns; durable `session/event` messages are sent back to WeChat.
 - Harness commands (`/models`, `/model`, `/help` included), `/stop`, approval cards, and question cards.
+- An approval card can switch the current conversation to full access; WeChat shows "typing" while a turn runs.
 - QR login, sign-out, working directory, card delivery, model, and permission settings on the GUI plugin page.
 - Long polling decoupled from turn processing, with terminal and file diagnostics.
 
