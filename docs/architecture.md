@@ -11,6 +11,7 @@
 
 - 入站消息由 `agent.followup()` 注入 DSH 会话。
 - 出站回复读取 `session/event` 的 durable `assistant/message` 事件，再调用微信发送接口。
+- 一轮对话期间通过 `getconfig` 取得的票据周期上报 `sendtyping`，让微信显示「对方正在输入」；票据缺失或失败时静默跳过。
 - 会话 id 是 peer 的纯函数；`/new` 通过代次创建新会话，旧记录不会删除。
 - 可选 host 服务（例如 GUI connection、attachments、llm）按需通过 `ctx.get()` 获取，缺失时不阻塞 headless 通道。
 - 浏览器端配置注册在 `plugins.bundle.config`，页面路由位于 `/api/channel-wechat`，复用宿主的 token fence。

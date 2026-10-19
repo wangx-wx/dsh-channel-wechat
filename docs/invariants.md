@@ -240,6 +240,50 @@ Agent 又开始请求本该不需要的批准（或反过来），而配置页�
 `permission-presets/src/index.ts`（预设定义）；`src/channel/session-policy.ts` 的 `DEFAULT_PERMISSION`；
 `tests/integration/client-half-form.spec.ts`（驱动真实组件，两个变异均被捕获）。
 
+### 审批卡的提权选项必须写明「不再弹卡」和 `/new` 恢复
+
+**规则**：卡片第 3 项（`session`）的文案**必须**同时说明：本会话之后不再弹审批卡，以及 `/new` 后恢复。
+微信侧**不加**二次确认（个人使用），因此这段文案是唯一的风险告知。
+
+**为什么**：选项等价于 `danger-full-access`，会走上面那条不变量——卡片立即消失。只说「全部权限」
+会让用户以为那是一次性放行。
+
+**提权的两个顺序约束**：
+1. **先 `settle` 再改权限**。输掉竞争时不得提升权限，否则一条没有生效的回答也放宽了会话。
+2. **session id 经 `ctx.agents` 解析成活动 session 对象**。回答到达时那一轮可能已结束；拿不到就报失败，
+   不能退化成「随便找当前会话」。
+
+**依据**：`src/bridge/cards-service.ts`（`answer` 的提权分支、`elevateSession`）、
+`src/index.ts` 的 `sessionElevatorOf`；`tests/unit/cards-service.spec.ts`（4 条，含输掉竞争）；
+`tests/integration/session-policy-wiring.spec.ts`（真实 `apply` 接线，变异已验证）。
+
+### 输入状态必须能降级，且不能超过一轮的生命周期
+
+**规则**：票据缺失、票据获取失败、状态上报被拒——一律降级为**不显示**，绝不能阻塞或失败一轮回复。
+`start` 放在命令与卡片回复的提前 `return` **之后**；`stop` 放在 `finally` 里。
+
+**为什么**：
+- 输入状态是装饰。为了一个失败的票据请求而延迟回复，是用有用的部分换装饰。
+- `stop` 不进 `finally` 的话，失败的一轮会留下一个「正在输入」的假象，看起来像卡死。
+- 命令与卡片回复都不是「机器人在生成回复」，显示输入状态是假的。
+- 上报被拒是票据在 TTL 之前失效的**唯一证据**，因此要主动 `invalidate`，否则会一直发送已知无效的值。
+
+**依据**：`src/channel/typing-indicator.ts`、`src/wechat/typing.ts`、`src/channel/channel.ts` 的
+`handleMessage`；协议 `docs/protocol/protocol_zh_CN.md:301-349`；
+官方实现 `openclaw-weixin/src/messaging/process-message.ts:311-341`（5 秒续期、无票据即空操作）。
+
+### 轮询循环没有默认运行上限
+
+**规则**：生产路径**不得**给 `monitorLoop` 一个有限默认值。上限只能由调用方显式给出。
+
+**为什么**：`DEFAULT_MAX_RUN_MS` 曾是 24 小时且 `src/index.ts` 从未覆盖它，通道因此会在启动满一天后
+**静默停止轮询**——循环正常 `return`，没有任何错误，从用户侧与「今天没人说话」无法区分。而运行上限
+到期不是 abort，`SingleRun` 曾因此保留 `current`，让 `live()` 谎报为真。
+
+**依据**：`src/channel/monitor.ts`（`DEFAULT_MAX_RUN_MS = Infinity`）；
+`src/channel/single-run.ts`（launch settle 时按 controller 身份清理槽位）；
+`tests/unit/monitor-run-limit.spec.ts`、`tests/unit/single-run.spec.ts`。
+
 ---
 
 ## 二、打包与依赖（会以发布事故的形式惩罚）
