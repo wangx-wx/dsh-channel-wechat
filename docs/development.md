@@ -46,6 +46,8 @@ pnpm build
 
 测试把 `DSH_HOME` 指向临时目录，不会修改开发者正在使用的 profile。只有 macOS 才会回退到 `DeepSeek Harness.app` 中的 dsh shim；其他平台找不到 checkout 时直接报错。
 
+`client-half-runs.spec.ts` 要从 checkout 里读 React 和主题样式表，而打包端不带源码，所以它要求一个真实的 checkout：只找到 `DeepSeek Harness.app` 时该套件直接报错并提示设置 `DSH_CHECKOUT`，不会因为路径拼不出来就整组跳过——跳过的用例在报告里看起来和通过一样。
+
 ## 持续集成
 
 `.github/workflows/ci.yml` 在 ubuntu 与 windows 两个 runner 上跑 `pnpm build`、`pnpm typecheck` 和 `pnpm test`。两个平台都要跑，是因为测试里有一部分断言只有特定平台能证伪：POSIX 权限位（`0o600`）在 Windows 上会被跳过，而路径分隔符与 CRLF 行为只在 Windows 上才暴露。

@@ -18,7 +18,16 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { DSH_CHECKOUT, REPO_ROOT } from '../support/harness.ts'
+import { REAL_DEPS, requireCheckout } from '../support/launcher.ts'
+import { REPO_ROOT } from '../support/harness.ts'
+
+/**
+ * Inspecting the theme means reading its sources, which the packaged
+ * application does not ship. Resolving here - rather than letting the two
+ * lookups below miss their paths and skip every case - keeps a suite that
+ * cannot run from reporting as a suite that passed.
+ */
+const DSH_CHECKOUT = requireCheckout(process.env, REAL_DEPS)
 
 /**
  * React, borrowed from the checkout that supplies the rest of the harness.

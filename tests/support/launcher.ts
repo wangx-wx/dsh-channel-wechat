@@ -74,6 +74,36 @@ export function resolveCheckout(env: Record<string, string | undefined>, deps: L
   // where it has no checkout to report.
   return ''
 }
+
+/**
+ * The checkout a suite that reads source files needs.
+ *
+ * {@link resolveCheckout} returns an empty string when the packaged application
+ * is the launcher, and that bundle carries no sources. A suite that reads
+ * `react` or the theme stylesheets from the checkout cannot run there, and
+ * failing is the point: its own `existsSync` guards turned the empty string into
+ * a relative path, found nothing, and skipped every case while the run stayed
+ * green.
+ *
+ * @param env - the environment to read `DSH_CHECKOUT` from.
+ * @param deps - filesystem and platform facts.
+ * @returns the checkout directory.
+ * @throws when only the packaged application was found, naming what to provide.
+ */
+export function requireCheckout(env: Record<string, string | undefined>, deps: LauncherDeps): string {
+  const checkout = resolveCheckout(env, deps)
+  if (checkout !== '') return checkout
+  // Throws its own "no launcher at all" message when there is none; when this
+  // returns, the packaged application is what the suites would launch.
+  launcherCommand(checkout, deps)
+  throw new Error(
+    'This suite reads sources from a DeepSeek Harness checkout, but only the packaged ' +
+      'application was found and it ships no sources.\n' +
+      'Set DSH_CHECKOUT to a built checkout (see docs/development.md), or run this suite ' +
+      'where one is available.',
+  )
+}
+
 /**
  * The command that runs the launcher, as `[executable, ...leading arguments]`.
  *

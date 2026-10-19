@@ -13,7 +13,7 @@
 
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { launcherCommand, resolveCheckout } from '../support/launcher.ts'
+import { launcherCommand, requireCheckout, resolveCheckout } from '../support/launcher.ts'
 
 /** Repository root stand-in; `resolveCheckout` resolves siblings against it. */
 const REPO_ROOT = '/repo/dsh-channel-wechat'
@@ -90,5 +90,28 @@ describe('resolving the checkout to launch', () => {
     const absent = { exists: existing([]), platform: 'linux' as NodeJS.Platform, repoRoot: REPO_ROOT }
     expect(() => launcherCommand('', absent)).toThrowError(/^No DeepSeek Harness launcher/u)
     expect(() => launcherCommand('', absent)).not.toThrowError(/checkout exists at/u)
+  })
+})
+
+describe('requiring a checkout for suites that read its sources', () => {
+  it('returns the checkout when there is one', () => {
+    const deps = { exists: existing([launcherIn(BUILT_CHECKOUT)]), platform: 'linux' as NodeJS.Platform, repoRoot: REPO_ROOT }
+    expect(requireCheckout({ DSH_CHECKOUT: BUILT_CHECKOUT }, deps)).toBe(BUILT_CHECKOUT)
+  })
+
+  it('fails when only the packaged app was found, rather than yielding no sources', () => {
+    // The packaged bundle carries no `node_modules/.pnpm` and no theme sources,
+    // so a suite that joins those paths onto the resolved checkout found
+    // nothing and skipped every case - a green run that proved nothing.
+    // `resolveCheckout`'s empty string is the signal, and this must not pass it
+    // through as if it were a directory.
+    const app = '/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh'
+    const mac = { exists: existing([app]), platform: 'darwin' as NodeJS.Platform, repoRoot: REPO_ROOT }
+    expect(() => requireCheckout({}, mac)).toThrowError(/DSH_CHECKOUT[^]*checkout/u)
+  })
+
+  it('fails the same way when nothing at all was found', () => {
+    const nowhere = { exists: existing([]), platform: 'linux' as NodeJS.Platform, repoRoot: REPO_ROOT }
+    expect(() => requireCheckout({}, nowhere)).toThrowError(/DSH_CHECKOUT/u)
   })
 })
