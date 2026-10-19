@@ -78,7 +78,22 @@ export function createSingleRun(options: SingleRunOptions): SingleRun {
         const launched = options.launch(controller.signal)
         settled = launched === undefined
           ? undefined
-          : Promise.resolve(launched).catch((error: unknown) => { options.onError?.(error) })
+          : Promise.resolve(launched)
+            .catch((error: unknown) => { options.onError?.(error) })
+            .then(() => {
+              // The loop can finish without anyone stopping it - the run limit,
+              // a poll that gave up. Releasing the slot here is what keeps
+              // `live()` honest and lets a later start launch again; without it
+              // the finished run blocked every replacement by name alone.
+              //
+              // Guarded by identity: a forced replacement or a stop has already
+              // cleared `current`, and this must not clear the run that replaced
+              // it.
+              if (current === controller) {
+                current = undefined
+                settled = undefined
+              }
+            })
       } catch (error) {
         // A launch that throws must not leave the run marked live, or no later
         // start could ever succeed.
