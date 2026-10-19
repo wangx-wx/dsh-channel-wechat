@@ -107,6 +107,39 @@ describe('one polling run at a time', () => {
     expect(run.live()).toBe(false)
   })
 
+  it('is not left live when the run ends on its own', async () => {
+    // A loop can finish without anyone stopping it - the run limit, a poll that
+    // decided to give up. Leaving `current` in place made `live()` claim the
+    // channel was running and every later start return early, so the only way
+    // to bring it back was to restart the process.
+    let finish: () => void = () => {}
+    const run = createSingleRun({ launch: () => new Promise<void>(resolve => { finish = resolve }) })
+
+    await run.start()
+    expect(run.live()).toBe(true)
+
+    finish()
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(run.live()).toBe(false)
+  })
+
+  it('starts again after a run ended on its own', async () => {
+    // The half that matters to a user: the state must not merely read as free,
+    // a later start has to actually launch.
+    let finish: () => void = () => {}
+    const launch = vi.fn(() => new Promise<void>(resolve => { finish = resolve }))
+    const run = createSingleRun({ launch })
+
+    await run.start()
+    finish()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    await run.start()
+
+    expect(launch).toHaveBeenCalledTimes(2)
+    expect(run.live()).toBe(true)
+  })
+
   it('is not left live when the launch throws', () => {
     // A launch failure the caller swallows must not wedge the channel: a run
     // marked live that never started would refuse every later start, so the

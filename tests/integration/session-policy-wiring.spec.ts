@@ -111,6 +111,10 @@ interface World {
   readonly sent: { peerId: string; text: string }[]
   /** Polls the wire has answered, so a test can wait for delivery to have happened. */
   polls: () => number
+  /** Raise one waterfall exactly as the approval seam does. */
+  waterfall: (name: string, request: unknown) => Promise<string>
+  /** Every typing-shaped request the run made, in order. */
+  typingCalls: readonly { kind: 'getconfig' | 'sendtyping'; userId: string; status: number }[]
   /**
    * Apply a config change the way the GUI does.
    *
@@ -160,6 +164,8 @@ async function boot(
 
   const messages = options.messages ?? [INBOUND]
   const sent: { peerId: string; text: string }[] = []
+  /** Every typing-shaped request the run made, in order. */
+  const typingCalls: { kind: 'getconfig' | 'sendtyping'; userId: string; status: number }[] = []
   let polls = 0
   // The message the wire hands over on its next poll, consumed once and then
   // reset. A reconfigure test needs to inject a second message *after* the
@@ -216,11 +222,36 @@ async function boot(
       })
       return new Response('{}', { status: 200 })
     }
+    if (url.includes('getconfig')) {
+      // The ticket the indicator needs. Answering it is what lets the assertion
+      // below be about the *status* reports rather than about a missing ticket.
+      typingCalls.push({ kind: 'getconfig', userId: '', status: 0 })
+      return new Response(JSON.stringify({ ret: 0, typing_ticket: 'ticket-1' }), { status: 200 })
+    }
+    if (url.includes('sendtyping')) {
+      const parsed = JSON.parse(String(init?.body ?? '{}')) as {
+        ilink_user_id?: string, typing_ticket?: string, status?: number
+      }
+      typingCalls.push({
+        kind: 'sendtyping',
+        userId: parsed.ilink_user_id ?? '',
+        status: parsed.status ?? 0,
+      })
+      return new Response(JSON.stringify({ ret: 0 }), { status: 200 })
+    }
     return new Response('{}', { status: 200 })
   }) as unknown as typeof fetch)
 
   const fiber = ctx.plugin(module, { cwd: '/work', ...config })
   await fiber
+
+  /** The real dispatch, narrowed to what this suite raises. */
+  const waterfall = ctx.waterfall.bind(ctx) as unknown as (
+    thisArg: unknown,
+    name: string,
+    request: unknown,
+    fallback: () => Promise<string>,
+  ) => Promise<string>
 
   return {
     ctx,
@@ -228,6 +259,15 @@ async function boot(
     permissionCalls,
     sent,
     polls: () => polls,
+    typingCalls,
+    waterfall: (name, request) => waterfall(
+      request as never,
+      name,
+      request,
+      // The seam's own "nobody claimed it" value. A card the channel did not
+      // send would resolve immediately to this instead of hanging the test.
+      async () => 'unavailable',
+    ),
     reconfigure: async next => {
       await (fiber as never as { update: (config: unknown) => Promise<void> }).update({ cwd: '/work', ...config, ...next })
     },
@@ -309,6 +349,61 @@ describe('the permission preset this channel configures', () => {
 
     expect(world.permissionCalls).toEqual([])
   })
+})
+
+describe('the session-wide choice on an approval card', () => {
+  it('widens the session the card belongs to, through the real wiring', async () => {
+    // The card's third option existed in the unit suite only until this case:
+    // the service was handed a fake `elevate`, so nothing observed whether
+    // `apply` connected one. A missing wiring here degrades to "the option
+    // reports failure", which looks like a permission problem rather than a
+    // plugin one.
+    const world = await boot({ permission: 'workspace-write' }, { withPermission: true })
+    await until(() => sessionOf(world.ctx) !== undefined)
+
+    const sessionId = 'channel-wechat-user-7'
+    const settled = world.waterfall('approval/request', {
+      agent: { id: 'a1', session: { id: sessionId } },
+      toolName: 'bash',
+      reason: 'run: rm -rf build',
+    })
+    await until(() => world.sent.some(text => text.text.includes('需要权限确认')))
+
+    const card = world.sent.find(text => text.text.includes('需要权限确认'))?.text ?? ''
+    const cardId = /回复：(\S+)/u.exec(card)?.[1] ?? ''
+    world.deliver([{
+      message_id: 9, from_user_id: 'user-7', message_type: 1,
+      context_token: 'ctx-9', item_list: [{ type: 1, text_item: { text: `${cardId} 3` } }],
+    }])
+
+    await expect(settled).resolves.toBe('allowed-once')
+    await until(() => world.permissionCalls.some(call => call.preset === 'danger-full-access'))
+
+    // The preset lands on the *live* session object, not on an id: `set` is how
+    // the host records a durable knob, and a call carrying `undefined` would
+    // pass a weaker assertion while changing nothing.
+    const widened = world.permissionCalls.find(call => call.preset === 'danger-full-access')
+    expect(widened?.session).toBe(sessionOf(world.ctx))
+    expect(world.sent.at(-1)?.text).toMatch(/不再弹出审批卡/u)
+  }, 30_000)
+})
+
+describe('the typing indicator, through the real wiring', () => {
+  it('shows it around a turn and withdraws it, with a ticket fetched once', async () => {
+    // The unit suites cover the cache and the lifecycle separately; this is the
+    // only case that observes `apply` building the indicator from the run's own
+    // account. Without that wiring every unit still passes and the user sees
+    // nothing, which is the failure mode this repository keeps repeating.
+    const world = await boot({})
+
+    await until(() => world.typingCalls.some(call => call.kind === 'sendtyping' && call.status === 2))
+    await until(() => world.sent.length > 0)
+
+    const kinds = world.typingCalls.map(call => call.kind === 'getconfig' ? 'getconfig' : `sendtyping:${String(call.status)}`)
+    // One ticket, then the indicator on and off. The order is the point: a
+    // cancel that arrived first would leave the indicator showing.
+    expect(kinds).toEqual(['getconfig', 'sendtyping:1', 'sendtyping:2'])
+  }, 30_000)
 })
 
 describe('saving the page while the channel is running', () => {

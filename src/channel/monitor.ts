@@ -82,8 +82,17 @@ export const DEFAULT_POLL_TIMEOUT_MS = 35_000
 /** Pause between polls when the server returned nothing to wait on. */
 const IDLE_INTERVAL_MS = 1_000
 
-/** How long a single call may run before it gives up. */
-const DEFAULT_MAX_RUN_MS = 24 * 60 * 60 * 1_000
+/**
+ * How long a single call may run before it gives up: no limit.
+ *
+ * A finite default used to live here, and the production wiring never
+ * overrode it, so a channel meant to answer for as long as the process was up
+ * went silent one day after boot. The deadline stays available as an explicit
+ * option - the tests name small values, and a caller that wants a backstop can
+ * still ask for one - but an ordinary deployment must not acquire a limit by
+ * doing nothing.
+ */
+export const DEFAULT_MAX_RUN_MS = Infinity
 
 /**
  * Poll for messages until stopped, aborted, or the run limit is reached.

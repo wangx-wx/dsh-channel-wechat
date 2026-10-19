@@ -89,8 +89,21 @@ export interface MessageApi {
 /** Media kinds the server accepts for an upload. */
 export const UploadMediaType = { IMAGE: 1, VIDEO: 2, FILE: 3, VOICE: 4 } as const
 
+/**
+ * The typing indicator, which only a deployment that composes one needs.
+ *
+ * Kept apart from {@link MessageApi} so a transport that does not implement it
+ * - every test stub, and the login path - still satisfies the message surface.
+ */
+export interface TypingApi {
+  /** Fetch one user's typing ticket; an empty string means the server declined. */
+  getConfig(params: GetConfigParams): Promise<string>
+  /** Report one user's typing status. */
+  sendTyping(params: SendTypingParams): Promise<void>
+}
+
 /** The complete API surface. */
-export interface ApiClient extends ApiTransport, MessageApi {}
+export interface ApiClient extends ApiTransport, MessageApi, TypingApi {}
 
 /** One long poll. */
 export interface GetUpdatesParams {
@@ -135,6 +148,36 @@ export interface SendTextParams {
   contextToken?: string | undefined
   /** Request timeout. */
   timeoutMs?: number
+}
+
+/** One typing-ticket request. */
+export interface GetConfigParams {
+  /** API base URL. */
+  baseUrl: string
+  /** Bot token. */
+  token: string
+  /** The user the ticket is bound to. */
+  userId: string
+  /** The conversation's token, when the caller has one. */
+  contextToken?: string | undefined
+  /** Request timeout. */
+  timeoutMs?: number | undefined
+}
+
+/** One typing-status report. */
+export interface SendTypingParams {
+  /** API base URL. */
+  baseUrl: string
+  /** Bot token. */
+  token: string
+  /** The user the indicator is shown to. */
+  userId: string
+  /** The ticket {@link GetConfigParams} returned. */
+  ticket: string
+  /** See `TypingStatus`: 1 shows the indicator, 2 withdraws it. */
+  status: number
+  /** Request timeout. */
+  timeoutMs?: number | undefined
 }
 
 /** One upload authorization request. */
@@ -519,6 +562,46 @@ export function createApiClient(options: ApiClientOptions = {}): ApiClient {
       const code = parsed.errcode ?? parsed.ret
       if (typeof code === 'number' && code !== 0) {
         throw new BusinessError('sendmessage', code, parsed.errmsg ?? '')
+      }
+    },
+    async getConfig(params) {
+      const raw = await this.post({
+        baseUrl: params.baseUrl,
+        endpoint: 'ilink/bot/getconfig',
+        body: JSON.stringify({
+          ilink_user_id: params.userId,
+          ...(params.contextToken === undefined ? {} : { context_token: params.contextToken }),
+          base_info: buildBaseInfo({ channelVersion, ...(options.botAgent === undefined ? {} : { botAgent: options.botAgent }) }),
+        }),
+        token: params.token,
+        ...(params.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
+        label: 'getconfig',
+      })
+      const parsed = JSON.parse(raw) as { ret?: number; typing_ticket?: unknown }
+      // Only `ret === 0` is a ticket. Caching a message from a refusal would
+      // put server prose into a status report.
+      if (parsed.ret !== 0) return ''
+      return typeof parsed.typing_ticket === 'string' ? parsed.typing_ticket : ''
+    },
+    async sendTyping(params) {
+      const raw = await this.post({
+        baseUrl: params.baseUrl,
+        endpoint: 'ilink/bot/sendtyping',
+        body: JSON.stringify({
+          ilink_user_id: params.userId,
+          typing_ticket: params.ticket,
+          status: params.status,
+          base_info: buildBaseInfo({ channelVersion, ...(options.botAgent === undefined ? {} : { botAgent: options.botAgent }) }),
+        }),
+        token: params.token,
+        ...(params.timeoutMs === undefined ? {} : { timeoutMs: params.timeoutMs }),
+        label: 'sendtyping',
+      })
+      const parsed = JSON.parse(raw) as { ret?: number; errmsg?: string }
+      // Unlike the reference client, a rejection is surfaced: it is the only
+      // evidence that a cached ticket went stale.
+      if (typeof parsed.ret === 'number' && parsed.ret !== 0) {
+        throw new BusinessError('sendtyping', parsed.ret, parsed.errmsg ?? '')
       }
     },
     async get(params) {

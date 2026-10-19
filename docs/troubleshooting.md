@@ -12,6 +12,8 @@
 2. 查看 `~/.dsh/channel-wechat/log/channel-wechat-YYYY-MM-DD.log`。
 3. 确认 `cwd` 是绝对路径，并且新消息对应的是修改配置后新建的会话。
 4. 若是交互卡，确认 `cards` 没有被改成与使用场景不符的值；发送 `/status` 可查看通道状态。
+5. 若某个会话突然不再弹审批卡：它多半被切到了「本会话全部权限」（卡片第 3 项或 `/permission danger-full-access`），该预设捆绑 `approval: never`。发送 `/new` 会按配置的权限重新创建会话。
+6. 若微信界面一直显示「对方正在输入」却没有回复：说明那一轮没有正常结束。发送 `/stop`，必要时重启进程；输入状态本身有有效期，不会永久停留。
 
 ## `dsh <profile> login` 报参数错误
 

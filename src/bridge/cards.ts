@@ -21,7 +21,7 @@ import type { CardKind, PendingCard } from './pending-cards.ts'
 export const MAX_CARD_CHARS = 1_800
 
 /** The option labels an approval card offers, in the order it presents them. */
-export const APPROVAL_OPTIONS = ['once', 'reject'] as const
+export const APPROVAL_OPTIONS = ['once', 'reject', 'session'] as const
 
 /** One approval choice, as the user may type it. */
 export type ApprovalChoice = (typeof APPROVAL_OPTIONS)[number]
@@ -73,7 +73,17 @@ function formatApproval(card: PendingCard): string {
 
 /** The Chinese explanation of one approval choice. */
 function describeApproval(choice: ApprovalChoice): string {
-  return choice === 'once' ? '仅允许这一次' : '拒绝这次调用'
+  switch (choice) {
+    case 'once': return '仅允许这一次'
+    case 'reject': return '拒绝这次调用'
+    case 'session':
+      // Both halves are required. `danger-full-access` bundles `approval:
+      // never`, so choosing this removes the cards for the rest of the
+      // conversation; a label that only said "full access" would hide that.
+      // There is no second confirmation on this surface, so the loss and the
+      // way back are stated here.
+      return '本会话全部权限（之后不再弹审批卡，/new 恢复）'
+  }
 }
 
 /**
@@ -174,6 +184,15 @@ export function parseCardReply(
 /** What one approval reply means, or why it is not usable. */
 export type ApprovalReply =
   | { readonly kind: 'decided'; readonly outcome: 'allowed-once' | 'rejected' }
+  /**
+   * A grant that also switches the session to full access.
+   *
+   * Distinct from `decided` because the caller has more to do than return an
+   * outcome: it has to change the session's permission, and it has to tell the
+   * user the cards will stop appearing. Folding this into `decided` would make
+   * that step easy to skip silently.
+   */
+  | { readonly kind: 'elevate' }
   | { readonly kind: 'invalid'; readonly text: string }
 
 /**
@@ -188,6 +207,7 @@ export function readApprovalReply(selections: readonly string[]): ApprovalReply 
   if (first === undefined || selections.length !== 1) return invalidApproval()
   const choice = APPROVAL_OPTIONS[Number(first) - 1]
   if (choice === undefined) return invalidApproval()
+  if (choice === 'session') return { kind: 'elevate' }
   return { kind: 'decided', outcome: choice === 'once' ? 'allowed-once' : 'rejected' }
 }
 

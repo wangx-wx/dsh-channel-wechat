@@ -33,10 +33,12 @@ function bench(overrides: {
   peerOfSession?: (sessionId: string) => string | undefined
   shareWithGui?: boolean
   timeoutMs?: number
+  elevate?: (sessionId: string) => boolean
 } = {}) {
   const sent: { peerId: string; text: string }[] = []
   const cardsSent: string[] = []
   const expired: string[] = []
+  const elevated: string[] = []
   const f = fakeContext()
   const service = new CardService({
     context: f.context as never,
@@ -46,6 +48,12 @@ function bench(overrides: {
     peerOfSession: overrides.peerOfSession ?? (sessionId => (sessionId === 's1' ? 'user-7' : undefined)),
     send: async (peerId, text) => void sent.push({ peerId, text }),
     timeoutMs: overrides.timeoutMs ?? 0,
+    ...(overrides.elevate === undefined ? {} : {
+      elevate: (sessionId: string) => {
+        elevated.push(sessionId)
+        return overrides.elevate!(sessionId)
+      },
+    }),
     onCardSent: card => void cardsSent.push(card.id),
     onExpired: card => void expired.push(card.id),
   })
@@ -60,7 +68,7 @@ function bench(overrides: {
     if (entry === undefined) throw new Error(`no listener registered for ${event}`)
     return await entry.listener(request as never, next as never)
   }
-  return { service, sent, cardsSent, expired, fire, listeners: f.listeners }
+  return { service, sent, cardsSent, expired, elevated, fire, listeners: f.listeners }
 }
 
 /** An approval request as the seam raises it for a session this channel owns. */
@@ -179,6 +187,79 @@ describe('answering a card from chat', () => {
     await b.service.answer('user-7', 'P1 2')
 
     await expect(pending).resolves.toBe('rejected')
+  })
+
+  it('elevates the session and still allows this call', async () => {
+    // The choice means two things at once: switch the session to full access,
+    // and let the tool call that raised the card proceed. Doing only the second
+    // would make the card a plain grant under a misleading label; doing only
+    // the first would refuse the very call the user just approved.
+    const b = bench({ elevate: () => true })
+    const pending = b.fire('approval/request', approvalRequest())
+    await Promise.resolve()
+
+    await b.service.answer('user-7', 'P1 3')
+
+    await expect(pending).resolves.toBe('allowed-once')
+    expect(b.elevated).toEqual(['s1'])
+  })
+
+  it('says the cards will stop and how to get them back', async () => {
+    // There is no second confirmation, so this message is the last chance to
+    // tell the user what the choice did.
+    const b = bench({ elevate: () => true })
+    void b.fire('approval/request', approvalRequest())
+    await Promise.resolve()
+
+    await b.service.answer('user-7', 'P1 3')
+
+    expect(b.sent.at(-1)?.text).toMatch(/不再弹出审批卡/u)
+    expect(b.sent.at(-1)?.text).toMatch(/\/new/u)
+  })
+
+  it('says the elevation failed rather than claiming it worked', async () => {
+    // `permissionPresets.set` can throw on a session the service does not know.
+    // Reporting success would leave the user believing cards were off while
+    // they keep arriving.
+    const b = bench({ elevate: () => false })
+    const pending = b.fire('approval/request', approvalRequest())
+    await Promise.resolve()
+
+    await b.service.answer('user-7', 'P1 3')
+
+    await expect(pending).resolves.toBe('allowed-once')
+    expect(b.sent.at(-1)?.text).toMatch(/未能切换/u)
+  })
+
+  it('reports a missing permission service instead of granting silently', async () => {
+    // `elevate` is absent on a composition without `permissionPresets`. The card
+    // still renders the option - it is built from a constant - so the user has
+    // to learn it did nothing rather than believe the session was widened.
+    //
+    // The call still proceeds: refusing it would punish the tool for a choice
+    // the user did make, and a one-shot grant is strictly narrower than the
+    // session-wide access they asked for.
+    const b = bench()
+    const pending = b.fire('approval/request', approvalRequest())
+    await Promise.resolve()
+
+    await b.service.answer('user-7', 'P1 3')
+
+    await expect(pending).resolves.toBe('allowed-once')
+    expect(b.sent.at(-1)?.text).toMatch(/未能切换/u)
+  })
+
+  it('does not widen the session when the answer loses the race', async () => {
+    // The card was already answered. Settling is what decides the race, so the
+    // permission change has to happen only after a win; doing it first would
+    // widen a session for an answer that did not count.
+    const b = bench({ elevate: () => true })
+    void b.fire('approval/request', approvalRequest())
+    await Promise.resolve()
+    await b.service.answer('user-7', 'P1 1')
+    await b.service.answer('user-7', 'P1 3')
+
+    expect(b.elevated).toEqual([])
   })
 
   it('settles a question with the chosen labels', async () => {

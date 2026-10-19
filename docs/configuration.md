@@ -34,4 +34,8 @@
 
 ## 权限边界
 
-插件使用 DSH 自身的 permission preset，不建立第二套权限系统。微信消息按单用户通道处理；在微信会话中发送 `/permission danger-full-access` 会沿用 DSH 原生命令并关闭该会话的审批卡。这个选择只作用于当前会话，`/new` 会重新按默认值创建会话。
+插件使用 DSH 自身的 permission preset，不建立第二套权限系统。微信消息按单用户通道处理。
+
+审批卡的第 3 个选项「本会话全部权限」会把当前会话切到 `danger-full-access`，效果等同于在会话里发送 `/permission danger-full-access`：该会话之后不再弹出审批卡（该预设捆绑 `approval: never`），`/new` 之后按配置的 `permission` 重新创建会话。这个选择只作用于当前会话。
+
+详情见 [命令参考](./commands.md#审批卡)。

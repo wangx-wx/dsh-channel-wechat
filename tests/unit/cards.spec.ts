@@ -55,6 +55,18 @@ describe('rendering an approval card', () => {
 
     expect(text).toContain('1. once')
     expect(text).toContain('2. reject')
+    expect(text).toContain('3. session')
+  })
+
+  it('says what the session-wide choice costs and how it ends', () => {
+    // The option disables approval cards for the rest of the conversation,
+    // because `danger-full-access` bundles `approval: never`. There is no
+    // second confirmation on this surface, so the label is the only warning:
+    // it has to name both the loss and the way back.
+    const text = formatCard(approval())
+
+    expect(text).toContain('之后不再弹审批卡')
+    expect(text).toContain('/new')
   })
 
   it('shows the complete reply the user has to type, not just the id', () => {
@@ -214,8 +226,15 @@ describe('reading an approval reply', () => {
     expect(readApprovalReply(['2'])).toEqual({ kind: 'decided', outcome: 'rejected' })
   })
 
+  it('turns 3 into a session-wide elevation', () => {
+    // A distinct kind rather than a second flavour of `decided`: the caller has
+    // to change the session's permission as well as allow this call, and a
+    // value it could confuse with a plain grant would quietly skip that.
+    expect(readApprovalReply(['3'])).toEqual({ kind: 'elevate' })
+  })
+
   it('refuses a number that is offered nowhere', () => {
-    expect(readApprovalReply(['3']).kind).toBe('invalid')
+    expect(readApprovalReply(['4']).kind).toBe('invalid')
   })
 
   it('refuses two choices at once', () => {
@@ -238,7 +257,7 @@ describe('reading an approval reply', () => {
   it('offers exactly the choices the card renders', () => {
     // The parse and the render have to agree, or the card teaches a reply the
     // reader rejects.
-    expect(APPROVAL_OPTIONS).toHaveLength(2)
+    expect(APPROVAL_OPTIONS).toHaveLength(3)
     expect(readApprovalReply(['1', '2']).kind).toBe('invalid')
   })
 })
