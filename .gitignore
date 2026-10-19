@@ -17,3 +17,6 @@ docs/recon/_analysis/
 
 # Local notes kept out of the tree (e.g. posting guides written for a specific site).
 docs/ignore/
+
+# Scratch files left behind by manual probes; they must never reach a commit.
+*.tmp

@@ -1,0 +1,10 @@
+# Keep the icon's working-tree bytes identical on every platform.
+#
+# `tests/unit/manifest.spec.ts` pins `docs/market/index.json`'s inlined icon and
+# `docs/favicon.svg` to the bytes of `icon.svg`. The index is generated from the
+# published package, which was packed on a checkout with LF endings, so a
+# Windows clone with `core.autocrlf=true` produced CRLF here and the comparison
+# failed for a reason that has nothing to do with the artwork. Pinning the
+# endings removes the platform from the equation instead of loosening the
+# assertion to a normalized comparison, which would stop catching real drift.
+*.svg text eol=lf

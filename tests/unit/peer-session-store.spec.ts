@@ -93,7 +93,12 @@ describe('the peer session store', () => {
     expect(await store.generation('user-8')).toBe(1)
   })
 
-  it('writes the file with owner-only permissions', async () => {
+  // POSIX mode bits are the mechanism this asserts; Windows has none - Node
+  // reports 0o666 for every file and protection comes from the directory's
+  // ACL, which the harness's own suites likewise do not assert on win32 (see
+  // `packages/util/atomic-write/tests/atomic-write.spec.ts`). Skipped rather
+  // than loosened so the POSIX guarantee stays covered.
+  it.skipIf(process.platform === 'win32')('writes the file with owner-only permissions', async () => {
     const dir = tempDir()
     await new PeerSessionStore(dir).startNew('user-7')
 

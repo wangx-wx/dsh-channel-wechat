@@ -12,7 +12,7 @@
 
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CursorStore, cursorFilePath } from '../../src/channel/cursor-store.ts'
 
@@ -34,22 +34,28 @@ function tempDir(): string {
 }
 
 describe('the cursor file', () => {
+  // The state directory is compared through `dirname` rather than a string
+  // prefix: `join` renders the separators of the host, so on Windows
+  // `/tmp/state` becomes `\tmp\state` and a prefix assertion against the
+  // POSIX spelling fails for a path that is correct.
   it('lives under the state directory this plugin owns', () => {
-    const path = cursorFilePath('/tmp/state', 'bot-9')
+    const stateDir = join('/tmp/state')
+    const path = cursorFilePath(stateDir, 'bot-9')
 
     // The account id is part of the name: two accounts must not share a cursor,
     // or one resets the other's position.
-    expect(path.startsWith('/tmp/state')).toBe(true)
+    expect(dirname(path)).toBe(stateDir)
     expect(path).toContain('bot-9')
   })
 
   it('is safe for an account id that is not a plain filename', () => {
     // The server's ids are opaque; one containing a separator must not escape
     // the state directory.
-    const path = cursorFilePath('/tmp/state', 'a/b')
+    const stateDir = join('/tmp/state')
+    const path = cursorFilePath(stateDir, 'a/b')
 
     expect(path).not.toContain('a/b')
-    expect(path.startsWith('/tmp/state')).toBe(true)
+    expect(dirname(path)).toBe(stateDir)
   })
 })
 
@@ -142,7 +148,9 @@ describe('reading and writing', () => {
     expect(await store.load('bot-9')).toBeUndefined()
   })
 
-  it('writes the file with owner-only permissions', async () => {
+  // See the note in `peer-session-store.spec.ts`: Windows has no POSIX mode
+  // bits, so the 0o600 guarantee is asserted where it can be observed.
+  it.skipIf(process.platform === 'win32')('writes the file with owner-only permissions', async () => {
     // The cursor names a conversation position; nothing else on the machine
     // needs it.
     const dir = tempDir()
