@@ -1,0 +1,98 @@
+# The quality gate that was missing.
+#
+# The 0.2.4 release shipped with `tsc --noEmit` failing, because nothing ran the
+# check except a developer remembering to. Two jobs, on purpose: the unit suite
+# carries assertions that only Windows can falsify (path separators, POSIX mode
+# bits) and only Linux can falsify (the 0o600 guarantee those cases skip), so a
+# single ubuntu job would leave half of them unverified.
+
+name: CI
+
+on:
+  push:
+    branches: ['main', 'dev_*']
+  pull_request:
+    branches: ['main']
+  workflow_dispatch:
+
+# A newer push to the same branch makes the older run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: check (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # One platform failing is the signal; do not hide it behind the other
+      # still running, and do not cancel a result we want to read.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The suite reads the committed blobs of `icon.svg` and
+          # `docs/favicon.svg` only through the working tree, and `.gitattributes`
+          # pins those to LF; the default checkout honours it.
+          persist-credentials: false
+
+      # Node 22 is the floor `engines` declares; 24 is what development uses.
+      # Pinning one version keeps the run reproducible, and 22 is the stricter
+      # of the two to satisfy.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+
+      # `packageManager` pins the pnpm version, so the action reads it from the
+      # manifest rather than duplicating the number here.
+      - uses: pnpm/action-setup@v4
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Must precede typecheck: package.json `exports` point at `lib/*.d.ts`,
+      # and a clean checkout has not built them yet, so `tsc` would fail on
+      # missing declarations rather than on a real type error.
+      - name: Build
+        run: pnpm build
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit tests
+        run: pnpm test
+
+      # The icon assertions compare working-tree bytes to committed bytes, and
+      # the original Windows failure came from `core.autocrlf=true` rewriting
+      # the SVGs. The runner's git config is not something to depend on, so
+      # reproduce the setting explicitly and prove `.gitattributes` wins over
+      # it: a regression here would otherwise only surface on developers'
+      # machines, which is exactly how it reached 0.2.4 unnoticed.
+      #
+      # `git ls-files --eol` reports the working-tree ending per path, so this
+      # fails on the actual condition rather than on a reimplementation of it.
+      - name: Verify the SVGs keep LF with core.autocrlf=true
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          git config --local core.autocrlf true
+          Remove-Item icon.svg, docs/favicon.svg -Force
+          git checkout -- icon.svg docs/favicon.svg
+          $expected = @('icon.svg', 'docs/favicon.svg')
+          $rows = git ls-files --eol -- @expected
+          $rows
+          $bad = @($rows | Where-Object { $_ -notmatch '^i/lf\s+w/lf\s' })
+          if ($bad.Count -gt 0) {
+            throw "core.autocrlf=true changed the working-tree bytes of: $($bad -join '; ')"
+          }
+
+      # The integration suites need a DeepSeek Harness checkout that has been
+      # built, which CI does not have. Rather than let them fail for that
+      # reason, the job stops at the unit suite; the integration run is
+      # documented in docs/development.md and recorded in
+      # docs/compatibility.md.
