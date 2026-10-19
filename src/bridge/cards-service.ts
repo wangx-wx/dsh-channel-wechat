@@ -96,6 +96,18 @@ export interface CardServiceOptions {
   send: (peerId: string, text: string) => Promise<void>
   /** How long a card stays open; `0` leaves it open until the turn ends. */
   timeoutMs: number
+  /**
+   * Switch one session to full access, for the card's session-wide choice.
+   *
+   * Absent on a deployment that composes no permission service. The card still
+   * offers the choice - it is rendered from a constant - so the answer has to
+   * fail closed rather than quietly becoming a one-shot grant.
+   *
+   * @param sessionId - the session whose turn raised the card.
+   * @returns whether the switch took effect; a service that throws is reported
+   *   the same way, because the user needs to know either way.
+   */
+  elevate?: (sessionId: string) => boolean
   /** Observe a card being sent, for diagnostics. */
   onCardSent?: (card: PendingCard) => void
   /** Observe a card expiring unanswered. */
@@ -222,6 +234,17 @@ export class CardService {
         await this.options.send(peerId, parsed.text)
         return true
       }
+      if (parsed.kind === 'elevate') {
+        // Elevation is two effects, and losing the race must still prevent the
+        // permission change: settling first is what makes this order safe.
+        const won = this.approvals.settle(reply.cardId, peerId, 'allowed-once')
+        if (!won) {
+          await this.options.send(peerId, '这张卡片已被其他地方处理了。')
+          return true
+        }
+        await this.options.send(peerId, this.elevateSession(approval.sessionId))
+        return true
+      }
       const won = this.approvals.settle(reply.cardId, peerId, parsed.outcome)
       await this.options.send(peerId, won ? '已收到，正在继续。' : '这张卡片已被其他地方处理了。')
       return true
@@ -236,6 +259,30 @@ export class CardService {
     const won = this.questions.settle(reply.cardId, peerId, { answers: parsed.answers })
     await this.options.send(peerId, won ? '已收到，正在继续。' : '这张卡片已被其他地方处理了。')
     return true
+  }
+
+  /**
+   * Widen one session and describe what happened.
+   *
+   * A missing service and a throwing one are the same outcome to the user: the
+   * session did not change. Both are reported rather than swallowed, because
+   * silence would let them believe the cards were off while they keep arriving.
+   *
+   * @param sessionId - the session whose card offered the choice.
+   * @returns the message to send back.
+   */
+  private elevateSession(sessionId: string): string {
+    const elevate = this.options.elevate
+    if (elevate === undefined) return '权限未能切换：这个部署没有权限服务。本次调用已放行。'
+    let widened: boolean
+    try {
+      widened = elevate(sessionId)
+    } catch {
+      widened = false
+    }
+    return widened
+      ? '已切换本会话为完全权限，之后不再弹出审批卡；/new 之后恢复配置的权限。'
+      : '权限未能切换。本次调用已放行，但后续仍会弹出审批卡。'
   }
 
   /** Offer an approval to the peer that owns its session. */

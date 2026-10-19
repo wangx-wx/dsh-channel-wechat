@@ -31,7 +31,7 @@ import { createReporter, type Report } from './channel/report.ts'
 import { createLogFileSink, logDirPath } from './channel/log-file.ts'
 import { createPanel } from './channel/panel.ts'
 import { startChannelFromStore } from './channel/runtime.ts'
-import { resolveModelSelection, resolvePermission } from './channel/session-policy.ts'
+import { resolveModelSelection, resolvePermission, type PermissionPreset } from './channel/session-policy.ts'
 import { buildModelOptions } from './channel/model-catalog.ts'
 import { createModelCommands } from './channel/model-config.ts'
 import { CURRENT_VERSION, createUpdateChecker } from './channel/update-check.ts'
@@ -55,6 +55,16 @@ import { CDN_BASE_URL } from './wechat/cdn.ts'
  * for the life of the process.
  */
 const CARD_TIMEOUT_MS = 30 * 60 * 1_000
+
+/**
+ * The preset an approval card's session-wide choice switches to.
+ *
+ * Taken from the same list the config field validates, so the card cannot offer
+ * a name the preset service would refuse. It is deliberately not the configured
+ * default: this is the widest preset, and the one whose `approval: never` is
+ * why the card warns that the cards will stop.
+ */
+const ELEVATED_PERMISSION: PermissionPreset = 'danger-full-access'
 
 /** Plugin name reported in boot audits and `pending (waiting for service: …)` lines. */
 export const name = 'channel-wechat'
@@ -455,6 +465,10 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
     shareWithGui: config.cards.get() === 'both',
     peerOfSession: sessionId => channelRef.current?.peerOfSession(sessionId),
     send: async (peerId, text) => { await channelRef.current?.sendToPeer(peerId, text) },
+    // The card's session-wide choice. Built here rather than inside the service
+    // because resolving a session id to its live session is the registry's
+    // business, not the card registry's.
+    elevate: sessionElevatorOf(ctx, report),
     // Finite so an ignored card cannot hold its turn open for the life of the
     // process; long enough that a person can read it and answer.
     timeoutMs: CARD_TIMEOUT_MS,
@@ -734,6 +748,51 @@ export function permissionApplierOf(
       report('permission preset not applied; the session keeps its default', {
         preset, error: String(error),
       })
+    }
+  }
+}
+
+/** The slice of `ctx.agents` the elevator needs. */
+interface AgentLookupLike {
+  /** The live agent for one session id, carrying its session. */
+  get: (sessionId: never) => { readonly session?: unknown } | undefined
+}
+
+/**
+ * Build the callback that widens one live session to full access.
+ *
+ * The card names a session id, while `permissionPresets.set` takes the session
+ * object, so the live agent is the bridge between them. Resolving through the
+ * registry rather than remembering a session at card-send time is what makes a
+ * reply for a turn that has since ended fail honestly instead of widening
+ * whatever the peer happens to be in now.
+ *
+ * The comparison with {@link permissionApplierOf} is deliberate: that one runs
+ * inside session creation and must not throw, this one runs on a user's answer
+ * and must not throw either - an exception here would leave the turn released
+ * with no message to the user.
+ *
+ * @param ctx - the plugin's cordis context.
+ * @param report - the diagnostic sink.
+ * @returns a callback answering whether the session was widened.
+ */
+export function sessionElevatorOf(ctx: Context, report: Report): (sessionId: string) => boolean {
+  const permissions = ctx.get('permissionPresets') as PermissionPresetsLike | undefined
+  if (permissions === undefined) return () => false
+  return sessionId => {
+    const agents = ctx.get('agents') as AgentLookupLike | undefined
+    const session = agents?.get(sessionId as never)?.session
+    // A session that is no longer live cannot be widened. Reporting failure is
+    // the honest answer: the user asked for something that did not happen.
+    if (session === undefined) return false
+    try {
+      permissions.set(session, ELEVATED_PERMISSION)
+      return true
+    } catch (error: unknown) {
+      report('permission preset not applied; the session keeps its default', {
+        preset: ELEVATED_PERMISSION, error: String(error),
+      })
+      return false
     }
   }
 }
