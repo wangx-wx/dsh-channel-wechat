@@ -505,26 +505,34 @@ describe('discovery metadata', () => {
     const list = html.match(/<ol class="releases">([\s\S]*?)<\/ol>/u)?.[1]
     expect(list, 'docs/index.html must carry the release history list').toBeTypeOf('string')
 
-    const rows = [...String(list).matchAll(/<a href="([^"]+)">([\s\S]*?)<\/a>/gu)].map(match => ({
-      href: match[1],
-      tag: match[2].match(/class="release-tag">([^<]+)</u)?.[1],
-      date: match[2].match(/<time[^>]*datetime="([^"]+)"/u)?.[1],
-      latest: /class="release-latest"/u.test(match[2]),
-    }))
+    const rows = [...String(list).matchAll(/<a href="([^"]+)">([\s\S]*?)<\/a>/gu)].map(match => {
+      // The capture groups are `string | undefined` under
+      // `noUncheckedIndexedAccess`; group 1 is non-optional in the pattern, and
+      // the inner ones may genuinely be absent - a row missing its tag or date
+      // is what the assertions below have to report.
+      const [, href = '', body = ''] = match
+      return {
+        href,
+        tag: body.match(/class="release-tag">([^<]+)</u)?.[1],
+        date: body.match(/<time[^>]*datetime="([^"]+)"/u)?.[1],
+        latest: /class="release-latest"/u.test(body),
+      }
+    })
     expect(rows.length, 'the release history should list the published versions').toBeGreaterThan(0)
 
     for (const row of rows) {
       expect(row.tag, 'every row needs a version tag').toBeTypeOf('string')
-      expect(row.href.endsWith(`/releases/tag/${row.tag}`), `${row.tag} must link to its own release`).toBe(true)
-      expect(row.date, `${row.tag} needs a publish date`).toMatch(/^\d{4}-\d{2}-\d{2}$/u)
+      const tag = String(row.tag)
+      expect(row.href.endsWith(`/releases/tag/${tag}`), `${tag} must link to its own release`).toBe(true)
+      expect(row.date, `${tag} needs a publish date`).toMatch(/^\d{4}-\d{2}-\d{2}$/u)
     }
 
     // Newest first. Comparing by string would put v0.10.0 below v0.9.0, so
     // compare the numeric segments.
     const keys = rows.map(row => String(row.tag).slice(1).split('.').map(Number))
     const descending = keys.every((key, index) => {
-      if (index === 0) return true
       const previous = keys[index - 1]
+      if (previous === undefined) return true
       for (let i = 0; i < Math.max(key.length, previous.length); i += 1) {
         const a = previous[i] ?? 0
         const b = key[i] ?? 0
@@ -537,6 +545,6 @@ describe('discovery metadata', () => {
     // Exactly one row carries the badge, and it has to be the first one.
     const flagged = rows.filter(row => row.latest)
     expect(flagged.length, 'exactly one release is current').toBe(1)
-    expect(rows[0].latest, 'the current release must be listed first').toBe(true)
+    expect(rows[0]?.latest, 'the current release must be listed first').toBe(true)
   })
 })
