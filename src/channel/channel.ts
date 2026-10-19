@@ -101,6 +101,19 @@ export interface ChannelOptions {
   onUnreadableQuote?: (detail: unknown) => void
   /** Observe a turn beginning, so a caller can tell work is in flight. */
   onTurnStarted?: () => void
+  /**
+   * Show and withdraw the typing indicator around one delivered turn.
+   *
+   * Only conversational turns use it: a command is answered locally and a card
+   * reply unblocks a turn that is already running, so neither is "the bot is
+   * typing". Absent when this deployment composes no typing transport.
+   */
+  typing?: {
+    /** Begin the indicator for one peer. */
+    start: (peerId: string) => Promise<void>
+    /** Withdraw it. Called even when the turn failed. */
+    stop: (peerId: string) => Promise<void>
+  }
   /** Cancel one peer's running turn; defaults to cancelling the live agent. */
   cancelRunning?: (peerId: string) => Promise<boolean>
   /**
@@ -591,13 +604,24 @@ export class Channel {
     }
     const prepared = await this.prepareMedia(parsed.media)
     this.options.onTurnStarted?.()
-    deliverInbound(agentOf(handle), { ...parsed, ...prepared }, { isLive: () => this.peers.has(parsed.peerId) })
+    // Started only now: the commands and card replies above returned already,
+    // and neither is the bot working on a prompt. Awaited so the indicator is
+    // visible before the first model token could be, and silent on failure
+    // because the indicator must never cost a reply.
+    await this.options.typing?.start(parsed.peerId)
+    try {
+      deliverInbound(agentOf(handle), { ...parsed, ...prepared }, { isLive: () => this.peers.has(parsed.peerId) })
 
-    // Wait for the turn this message started. The answer is read from the
-    // committed `assistant/message`, which only exists once the turn settles,
-    // and the poll loop is detached from this work — so returning here
-    // would let the channel report itself settled with the turn still running.
-    await agentOf(handle).whenIdle?.()
+      // Wait for the turn this message started. The answer is read from the
+      // committed `assistant/message`, which only exists once the turn settles,
+      // and the poll loop is detached from this work — so returning here
+      // would let the channel report itself settled with the turn still running.
+      await agentOf(handle).whenIdle?.()
+    } finally {
+      // In `finally` because a turn that failed still has to take the
+      // indicator down; an indicator left running reads as a hung bot.
+      await this.options.typing?.stop(parsed.peerId)
+    }
   }
 }
 

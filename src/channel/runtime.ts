@@ -61,6 +61,15 @@ export interface RuntimeOptions {
   onReplyError?: (error: unknown, peerId: string, text: string) => void
   /** Observe a handler failure. */
   onMessageError?: (error: unknown, message: unknown) => void
+  /**
+   * Build the typing indicator for the account this run polls as.
+   *
+   * A factory rather than a built indicator because the base URL and token are
+   * resolved here, from the stored account; a caller would have to duplicate
+   * both to construct one. Absent when this deployment has no typing transport.
+   */
+  createTyping?: (account: { baseUrl: string; token: string }) =>
+    { start: (peerId: string) => Promise<void>; stop: (peerId: string) => Promise<void> } | undefined
   /** Pause between polls; defaults to a real timer. */
   sleep?: (ms: number) => Promise<void>
   /** Monotonic milliseconds; defaults to `Date.now`. */
@@ -240,6 +249,7 @@ export async function startChannelFromStore(options: RuntimeOptions): Promise<vo
   const token = account.botToken
   const baseUrl = account.baseUrl ?? LOGIN_BASE_URL
   options.onStarted?.(account.accountId)
+  const typing = options.createTyping?.({ baseUrl, token })
 
   const channel = new Channel({
     registry: options.createRegistry(),
@@ -295,6 +305,7 @@ export async function startChannelFromStore(options: RuntimeOptions): Promise<vo
     ...(options.executeNativeCommand === undefined ? {} : { executeNativeCommand: options.executeNativeCommand }),
     ...(options.nativeCommands === undefined ? {} : { nativeCommands: options.nativeCommands }),
     ...(options.models === undefined ? {} : { models: options.models }),
+    ...(typing === undefined ? {} : { typing }),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   })
 

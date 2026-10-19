@@ -31,6 +31,8 @@ import { createReporter, type Report } from './channel/report.ts'
 import { createLogFileSink, logDirPath } from './channel/log-file.ts'
 import { createPanel } from './channel/panel.ts'
 import { startChannelFromStore } from './channel/runtime.ts'
+import { createTypingIndicator } from './channel/typing-indicator.ts'
+import { TypingTicketCache } from './wechat/typing.ts'
 import { resolveModelSelection, resolvePermission, type PermissionPreset } from './channel/session-policy.ts'
 import { buildModelOptions } from './channel/model-catalog.ts'
 import { createModelCommands } from './channel/model-config.ts'
@@ -492,9 +494,29 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
   // sessions created from here on.
   const applyPermission = permissionApplierOf(ctx, resolvePermission(config.permission.get()), report)
 
+  const api = createApiClient()
+
   await startChannelFromStore({
     listAccounts: async () => (account === undefined ? [] : [account]),
-    api: createApiClient(),
+    api,
+    // Built per run from the account it polls as. The ticket cache lives only as
+    // long as the indicator: tickets are per user and cheap to refetch, so
+    // carrying them across runs would risk a stale value to save one request.
+    createTyping: endpoint => {
+      const tickets = new TypingTicketCache({
+        getConfig: params => api.getConfig({
+          ...endpoint,
+          userId: params.userId,
+          ...(params.contextToken === undefined ? {} : { contextToken: params.contextToken }),
+        }),
+      })
+      return createTypingIndicator({
+        ticket: userId => tickets.ticket(userId),
+        report: async params => { await api.sendTyping({ ...endpoint, ...params }) },
+        invalidate: userId => { tickets.invalidate(userId) },
+        onError: (error, userId) => { report('typing indicator failed', { userId, error: String(error) }) },
+      })
+    },
     createRegistry: () => ctx.agents as never,
     // A peer's session id is a pure function of the peer, so after any restart it
     // already has persisted state. Without this probe the map defaults to "never

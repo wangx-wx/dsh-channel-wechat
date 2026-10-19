@@ -94,6 +94,8 @@ function build(options: {
   onUnreadableQuote?: (detail: unknown) => void
   /** What `/models` and `/model` read and write. */
   models?: ModelCommandContext
+  /** The typing indicator, when the test observes its lifecycle. */
+  typing?: { start: (peerId: string) => Promise<void>; stop: (peerId: string) => Promise<void> }
 }) {
   const polls: (string | undefined)[] = []
   const sent: { peerId: string; text: string; token: string | undefined }[] = []
@@ -127,6 +129,7 @@ function build(options: {
     ...(options.prepareMedia === undefined ? {} : { prepareMedia: options.prepareMedia }),
     ...(options.sendDeliverables === undefined ? {} : { sendDeliverables: options.sendDeliverables }),
     ...(options.onUnreadableQuote === undefined ? {} : { onUnreadableQuote: options.onUnreadableQuote }),
+    ...(options.typing === undefined ? {} : { typing: options.typing }),
     // Wired from the registry's own record, so a rotated id the test declares
     // existing is resumed rather than created - which is what proves a restart
     // lands on the new conversation.
@@ -867,6 +870,87 @@ describe('answering a card while the turn holds the queue', () => {
     }
 
     expect(answered).toEqual(['P1 1'])
+  })
+})
+
+describe('the typing indicator around a turn', () => {
+  /** Records the lifecycle calls a turn made. */
+  function spyTyping() {
+    const calls: string[] = []
+    return {
+      calls,
+      typing: {
+        start: async (peerId: string) => { calls.push(`start:${peerId}`) },
+        stop: async (peerId: string) => { calls.push(`stop:${peerId}`) },
+      },
+    }
+  }
+
+  it('shows the indicator for a delivered turn and withdraws it after', async () => {
+    // Both halves matter: an indicator that never goes away reads as a hung
+    // bot, and one that never appears is the state this feature replaces.
+    const f = fakeRegistry()
+    const spy = spyTyping()
+    const { channel } = build({
+      registry: f,
+      messages: [{ message_id: 1, from_user_id: 'user-7', message_type: 1, item_list: [{ type: 1, text_item: { text: 'hi' } }] }],
+      typing: spy.typing,
+    })
+
+    await channel.run()
+    await channel.settled()
+
+    expect(spy.calls).toEqual(['start:user-7', 'stop:user-7'])
+  })
+
+  it('does not show it for a command, which is answered without a turn', async () => {
+    // `/status` is answered by the channel itself. Showing "typing" while
+    // nothing is being generated would be a lie, and the command path returns
+    // before the turn begins.
+    const f = fakeRegistry()
+    const spy = spyTyping()
+    const { channel } = build({
+      registry: f,
+      messages: [{ message_id: 1, from_user_id: 'user-7', message_type: 1, context_token: 'ctx-1', item_list: [{ type: 1, text_item: { text: '/status' } }] }],
+      typing: spy.typing,
+    })
+
+    await channel.run()
+    await channel.settled()
+
+    expect(spy.calls).toEqual([])
+  })
+
+  it('withdraws the indicator when the turn fails', async () => {
+    // A failed turn is exactly when an indicator left running is most
+    // misleading: the user waits for a reply that is never coming.
+    const calls: string[] = []
+    const f = fakeRegistry()
+    // The turn fails where the channel waits for it, which is the path a
+    // provider error takes: `whenIdle` is where the channel learns the turn
+    // settled, so throwing there is the failure the indicator must survive.
+    f.registry.create = async ({ sessionId }: { sessionId: string }) => {
+      const agent = {
+        id: sessionId,
+        followup: () => {},
+        whenIdle: async () => { throw new Error('turn failed') },
+      }
+      f.live.set(sessionId, agent)
+      return { agent, dispose: async () => void f.live.delete(sessionId) }
+    }
+    const { channel } = build({
+      registry: f,
+      messages: [{ message_id: 1, from_user_id: 'user-7', message_type: 1, item_list: [{ type: 1, text_item: { text: 'hi' } }] }],
+      typing: {
+        start: async (peerId: string) => { calls.push(`start:${peerId}`) },
+        stop: async (peerId: string) => { calls.push(`stop:${peerId}`) },
+      },
+    })
+
+    await channel.run()
+    await channel.settled()
+
+    expect(calls).toEqual(['start:user-7', 'stop:user-7'])
   })
 })
 

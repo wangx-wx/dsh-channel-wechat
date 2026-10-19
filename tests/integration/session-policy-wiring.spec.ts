@@ -113,6 +113,8 @@ interface World {
   polls: () => number
   /** Raise one waterfall exactly as the approval seam does. */
   waterfall: (name: string, request: unknown) => Promise<string>
+  /** Every typing-shaped request the run made, in order. */
+  typingCalls: readonly { kind: 'getconfig' | 'sendtyping'; userId: string; status: number }[]
   /**
    * Apply a config change the way the GUI does.
    *
@@ -162,6 +164,8 @@ async function boot(
 
   const messages = options.messages ?? [INBOUND]
   const sent: { peerId: string; text: string }[] = []
+  /** Every typing-shaped request the run made, in order. */
+  const typingCalls: { kind: 'getconfig' | 'sendtyping'; userId: string; status: number }[] = []
   let polls = 0
   // The message the wire hands over on its next poll, consumed once and then
   // reset. A reconfigure test needs to inject a second message *after* the
@@ -218,6 +222,23 @@ async function boot(
       })
       return new Response('{}', { status: 200 })
     }
+    if (url.includes('getconfig')) {
+      // The ticket the indicator needs. Answering it is what lets the assertion
+      // below be about the *status* reports rather than about a missing ticket.
+      typingCalls.push({ kind: 'getconfig', userId: '', status: 0 })
+      return new Response(JSON.stringify({ ret: 0, typing_ticket: 'ticket-1' }), { status: 200 })
+    }
+    if (url.includes('sendtyping')) {
+      const parsed = JSON.parse(String(init?.body ?? '{}')) as {
+        ilink_user_id?: string, typing_ticket?: string, status?: number
+      }
+      typingCalls.push({
+        kind: 'sendtyping',
+        userId: parsed.ilink_user_id ?? '',
+        status: parsed.status ?? 0,
+      })
+      return new Response(JSON.stringify({ ret: 0 }), { status: 200 })
+    }
     return new Response('{}', { status: 200 })
   }) as unknown as typeof fetch)
 
@@ -238,6 +259,7 @@ async function boot(
     permissionCalls,
     sent,
     polls: () => polls,
+    typingCalls,
     waterfall: (name, request) => waterfall(
       request as never,
       name,
@@ -363,6 +385,24 @@ describe('the session-wide choice on an approval card', () => {
     const widened = world.permissionCalls.find(call => call.preset === 'danger-full-access')
     expect(widened?.session).toBe(sessionOf(world.ctx))
     expect(world.sent.at(-1)?.text).toMatch(/不再弹出审批卡/u)
+  }, 30_000)
+})
+
+describe('the typing indicator, through the real wiring', () => {
+  it('shows it around a turn and withdraws it, with a ticket fetched once', async () => {
+    // The unit suites cover the cache and the lifecycle separately; this is the
+    // only case that observes `apply` building the indicator from the run's own
+    // account. Without that wiring every unit still passes and the user sees
+    // nothing, which is the failure mode this repository keeps repeating.
+    const world = await boot({})
+
+    await until(() => world.typingCalls.some(call => call.kind === 'sendtyping' && call.status === 2))
+    await until(() => world.sent.length > 0)
+
+    const kinds = world.typingCalls.map(call => call.kind === 'getconfig' ? 'getconfig' : `sendtyping:${String(call.status)}`)
+    // One ticket, then the indicator on and off. The order is the point: a
+    // cancel that arrived first would leave the indicator showing.
+    expect(kinds).toEqual(['getconfig', 'sendtyping:1', 'sendtyping:2'])
   }, 30_000)
 })
 
