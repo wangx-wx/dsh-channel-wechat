@@ -153,6 +153,8 @@ export interface RuntimeOptions {
   executeNativeCommand?: (line: string, agent: unknown) => Promise<{ kind: 'success' | 'error'; text?: string } | undefined>
   /** Resolve the commands the harness offers one agent, listed by `/help`. */
   nativeCommands?: ((agent: unknown) => Promise<readonly NativeCommandRow[]>) | undefined
+  /** Resolve the skills one agent can invoke, listed by `/skills`. */
+  skills?: ((agent: unknown, cwd: string | undefined) => Promise<readonly string[]>) | undefined
   /** What `/models` and `/model` read and write. */
   models?: ModelCommandContext
 }
@@ -304,6 +306,7 @@ export async function startChannelFromStore(options: RuntimeOptions): Promise<vo
     accountId: account.accountId,
     ...(options.executeNativeCommand === undefined ? {} : { executeNativeCommand: options.executeNativeCommand }),
     ...(options.nativeCommands === undefined ? {} : { nativeCommands: options.nativeCommands }),
+    ...(options.skills === undefined ? {} : { skills: options.skills }),
     ...(options.models === undefined ? {} : { models: options.models }),
     ...(typing === undefined ? {} : { typing }),
     ...(options.signal === undefined ? {} : { signal: options.signal }),

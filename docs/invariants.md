@@ -110,14 +110,28 @@
 
 ### `cwd` 必填且会话创建后不可变
 
-**规则**：`Config.cwd` 故意**没有默认值**（schema 里 `required`）。`/cwd` 与 `/reconnect` 已注册但
-**未实现**，会明确回复而不是静默失败。
+**规则**：`Config.cwd` 故意**没有默认值**（schema 里 `required`）。`/cwd` 已实现，语义是
+**结束当前会话、在新目录开始新对话**——因为会话的 `cwd` 写入后不可修改。`/reconnect` 仍未实现，
+会明确回复而不是静默失败。
 
 **为什么必填**：会话的 `cwd` 一经写入就不可迁移，而 web app 的系统提示词通过 `{{cwd}}` 读它——
 没有值的提示词变量会在调用 provider 之前就让这一轮失败。给默认值等于把一个操作者从未选择的目录
 悄悄写进改不了的会话，把部署错误藏起来。
 
-**依据**：plan-v1 §5.5、§Q47；`src/index.ts` 的 `Config`、`src/bridge/local-commands.ts`。
+**`/cwd` 的持久化**：按 peer 记在 `~/.dsh/channel-wechat/peer-sessions.json` 的 `cwds` 字段里，
+与代次同文件、同一读-改-写队列。只存内存的话，重启会把切换悄悄退回配置的默认目录——
+和 `/new` 当初那个缺陷同形。
+
+**校验必须发生在拆会话之前**：路径要绝对、要存在、要是目录、要 realpath 规范化。写进 header 的
+`cwd` 改不了，所以打错字只该损失一条消息，不该损失正在进行的对话。相对路径直接拒绝：
+进程自己的目录在手机上不可见。
+
+**已知边界**：`sandbox-policy` 的 `workspaceRoot` 读的是 `session.header.cwd`，不是
+`workingDirectory`。所以 `workspace-write` 下切到新目录后，写文件仍按**旧**边界判定。
+`danger-full-access` 没有这个限制。这一点写在 `docs/commands.md` 里，不是缺陷掩盖。
+
+**依据**：plan-v1 §5.5、§Q47、§Q53；`src/index.ts` 的 `Config`、`src/bridge/local-commands.ts`、
+`src/bridge/peer-map.ts` 的 `startNewIn`、`src/channel/directory.ts`。
 
 ### 可选服务用 `ctx.get()`，不要写进 `inject`
 

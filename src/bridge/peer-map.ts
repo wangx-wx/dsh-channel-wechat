@@ -167,6 +167,21 @@ export interface PeerGenerationsLike {
   generation(peerId: string): Promise<number>
   /** Advance one peer's generation and return the new value. */
   startNew(peerId: string): Promise<number>
+  /**
+   * Read the directory this peer's next session should record.
+   *
+   * Optional so a caller that keeps no per-peer directories can supply only the
+   * rotation methods; the map then falls back to its configured `cwd`.
+   * @returns the stored absolute directory, or `undefined` for "no switch".
+   */
+  cwd?: (peerId: string) => Promise<string | undefined>
+  /**
+   * Persist one peer's working directory for its next session.
+   *
+   * Optional alongside {@link cwd}: without it a `/cwd` switch lasts one
+   * process, which is reported rather than silently accepted.
+   */
+  setCwd?: (peerId: string, path: string) => Promise<void>
 }
 
 /**
@@ -228,6 +243,19 @@ export function sessionIdFor(peerId: string, generation = 0): SessionId {
   return `${escaped}${GENERATION_SEPARATOR}${String(generation)}` as SessionId
 }
 
+/**
+ * The session header behind one handle, when the handle carries a session.
+ *
+ * Structural because several tests build handles without one, and a handle with
+ * no session simply has no recorded directory to report.
+ * @param handle - the handle to read.
+ * @returns the header, or `undefined` when this handle carries no session.
+ */
+function sessionHeaderOf(handle: AgentHandleLike): { cwd?: string } | undefined {
+  const session = handle.agent.session as { header?: { cwd?: string } } | undefined
+  return session?.header
+}
+
 /** One peer's session. */
 interface Entry {
   handle: AgentHandleLike
@@ -262,6 +290,14 @@ export class PeerMap {
    * mid-conversation cannot move a turn already in flight to another session.
    */
   private readonly currentGeneration = new Map<string, number>()
+  /**
+   * The directory each peer's next session records.
+   *
+   * Resolved once and kept, for the same reason as the generation: a `/cwd`
+   * landing mid-conversation must not move a turn already in flight to another
+   * directory, and a session's `cwd` is written at creation only.
+   */
+  private readonly currentCwd = new Map<string, string>()
   private readonly entries = new Map<string, Entry>()
   /**
    * Session creations still in flight, per peer.
@@ -319,10 +355,19 @@ export class PeerMap {
     const agentOptions = this.sessionOptions === undefined
       ? {}
       : { agentOptions: { provider: this.sessionOptions.provider, model: this.sessionOptions.model } }
+    // Resolved before the existence probe, because the directory decides where a
+    // *created* session runs: a resume reads the header it already recorded, so
+    // this is the only chance to apply it.
+    //
+    // A peer that never switched and a deployment with no directory store take
+    // the synchronous path on purpose. An extra await here is not free: it
+    // delays when the turn starts, and that ordering is observable.
+    const switched = this.currentCwd.has(peerId) || this.generations?.cwd !== undefined
+    const cwd = switched ? (await this.cwdOf(peerId)) ?? this.cwd : this.cwd
     const resumed = await this.sessionExists(sessionId)
     const handle = resumed
       ? await this.resumeSession(sessionId, agentOptions)
-      : await this.createNewSession(sessionId, agentOptions)
+      : await this.createNewSession(sessionId, agentOptions, cwd)
     // Only on creation: a resumed session's permission knobs are already durable,
     // and may hold a preset the user changed with `/permission`. See
     // {@link PeerMapOptions.applyPermission}.
@@ -350,6 +395,77 @@ export class PeerMap {
   }
 
   /**
+   * The directory one peer's next session should record.
+   *
+   * Seeded once from durable state and then kept, for the same reason as the
+   * generation: re-reading per message would move a turn to another directory
+   * the moment `/cwd` landed, and a session's `cwd` is written at creation.
+   *
+   * A peer that never switched resolves to `undefined`, which means "use the
+   * configured `cwd`" - so this deployment keeps working exactly as before for
+   * every existing peer.
+   * @param peerId - the WeChat sender id.
+   * @returns the stored directory, or `undefined` when the peer never switched.
+   */
+  private async cwdOf(peerId: string): Promise<string | undefined> {
+    if (this.currentCwd.has(peerId)) return this.currentCwd.get(peerId)
+    const stored = this.generations?.cwd === undefined ? undefined : await this.generations.cwd(peerId)
+    if (stored !== undefined) this.currentCwd.set(peerId, stored)
+    return stored
+  }
+
+  /**
+   * The directory one peer's conversation currently runs in.
+   *
+   * The live session's own directory wins when there is one: it is the durable
+   * answer, and it covers a session created before this deployment configured a
+   * different default. Otherwise the stored switch, otherwise the configured
+   * directory - so the answer is never a guess.
+   * @param peerId - the WeChat sender id.
+   * @returns the absolute directory, or `undefined` when nothing is known.
+   */
+  async cwdFor(peerId: string): Promise<string | undefined> {
+    const handle = this.handleFor(peerId)
+    if (handle !== undefined) {
+      const header = sessionHeaderOf(handle)
+      if (header !== undefined && header.cwd !== undefined) return header.cwd
+    }
+    return (await this.cwdOf(peerId)) ?? this.cwd
+  }
+
+  /**
+   * Move one peer to a new working directory.
+   *
+   * The directory is recorded for the *next* session and the peer is moved to a
+   * new conversation, because a session's header `cwd` cannot be rewritten: the
+   * only way to run somewhere else is to start a different session. The
+   * rotation is not optional here - recording the directory alone would leave
+   * the current conversation running where it was, and the next message would
+   * still address a session that already exists.
+   *
+   * The caller validates the directory and disposes the old handle; this only
+   * records the switch and rotates, which is the part that must stay consistent
+   * with the store.
+   * @param peerId - the WeChat sender id.
+   * @param path - the absolute directory the next session records.
+   * @returns the generation the peer now addresses.
+   */
+  async startNewIn(peerId: string, path: string): Promise<number> {
+    // Recorded before the rotation: a crash between the two leaves the peer on
+    // the old generation but with the new directory stored, so the next session
+    // it creates is the one the user asked for.
+    this.currentCwd.set(peerId, path)
+    if (this.generations?.setCwd === undefined) {
+      // No store to persist into. The rotation still happens, so the switch is
+      // true for this process rather than silently ignored; a restart then falls
+      // back to the configured directory, which is the same trade `/new` makes.
+    } else {
+      await this.generations.setCwd(peerId, path)
+    }
+    return await this.startNew(peerId)
+  }
+
+  /**
    * Move one peer to a new conversation.
    *
    * Forgets the live handle without disposing it - the caller owns that, because
@@ -369,6 +485,11 @@ export class PeerMap {
    * @returns the generation the peer now addresses.
    */
   async startNew(peerId: string): Promise<number> {
+    // The handle is dropped here rather than left for the caller to remember:
+    // a rotation that left it in place would make the very next `cwdFor` (and
+    // `handleFor`) answer from the conversation being ended. Disposal stays with
+    // the caller, which is what {@link forget} means.
+    this.forget(peerId)
     const next = (await this.generationOf(peerId)) + 1
     this.currentGeneration.set(peerId, next)
     if (this.generations !== undefined) await this.generations.startNew(peerId)
@@ -423,16 +544,18 @@ export class PeerMap {
    * never ran in. Both come from the single `resolve` below.
    * @param sessionId - the session id to create.
    * @param agentOptions - the selected provider and model, when configured.
+   * @param cwd - the directory to record; omitted means the deployment recorded none.
    * @returns the live handle.
    */
   private async createNewSession(
     sessionId: SessionId,
     agentOptions: SelectionFragment,
+    cwd: string | undefined,
   ): Promise<AgentHandleLike> {
     // Only `create` takes metadata. A resume reads the header the session already
     // recorded, so passing a cwd there would be silently ignored - and a session
     // created before this was configured keeps no cwd for its whole life.
-    const meta = this.cwd === undefined ? {} : { cwd: this.cwd }
+    const meta = cwd === undefined ? {} : { cwd }
     const presets = this.presets
     if (presets === undefined) {
       // Omitted rather than an empty object when nothing is configured, so the
@@ -440,7 +563,7 @@ export class PeerMap {
       return this.registry.create({
         sessionId,
         ...agentOptions,
-        ...(this.cwd === undefined ? {} : { meta }),
+        ...(cwd === undefined ? {} : { meta }),
       })
     }
     const preset = await presets.resolve()
@@ -559,6 +682,11 @@ export class PeerMap {
     const entries = [...this.entries.values()]
     this.entries.clear()
     this.tails.clear()
+    // Both resolved caches are dropped with the map: they are seeded from
+    // durable state on the next run, and keeping a stale copy would outlive the
+    // sessions they describe.
+    this.currentGeneration.clear()
+    this.currentCwd.clear()
     await Promise.all(entries.map(entry => entry.handle.dispose()))
   }
 }

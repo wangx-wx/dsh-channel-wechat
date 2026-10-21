@@ -108,3 +108,72 @@ export function createNativeCommandLister(
     }
   }
 }
+
+/**
+ * The slice of the harness's skill registry `/skills` reads.
+ *
+ * Structural rather than imported, for the same reason the command runtime is:
+ * this plugin must also load where the registry is absent, and a composition
+ * without `@deepseek-ai/dsh-skill` is a supported deployment.
+ */
+export interface SkillRegistryLike {
+  /**
+   * List the skills visible to one lookup.
+   *
+   * `cwd` selects the project roots to scan and `scope` selects the agent's own
+   * layers; both matter, because a preset can mount skills the global layer
+   * does not have.
+   */
+  list(options: {
+    cwd?: string
+    scope?: unknown
+    signal?: AbortSignal
+  }): Promise<readonly { name: string; invocation: { userInvocable: boolean } }[]>
+}
+
+/** Options for the skill lister. */
+export interface SkillListerOptions {
+  /** The harness's skill registry. */
+  skills: SkillRegistryLike
+}
+
+/**
+ * Build the lister `/skills` uses.
+ *
+ * Returns names only, by the user's own decision: a full listing with
+ * descriptions fills several phone screens, and the name is what the
+ * `/skill-name` invocation gesture needs. Only user-invocable skills are
+ * returned, because the others cannot be invoked from a chat line at all.
+ *
+ * **A peer with no live session still gets a listing.** The agent is the
+ * lookup's scope, and passing `undefined` reads the global layer alone - which
+ * is exactly what the harness's own catalog does for a session it can only
+ * address cold (`session-controller`'s skill catalog resolves the same way).
+ * Returning nothing instead would make `/skills` report "no skills" before the
+ * user has sent their first ordinary message, which is a false statement about
+ * the deployment rather than about that peer.
+ *
+ * @param options - the skill registry.
+ * @returns a function returning the skill names available to one agent.
+ */
+export function createSkillLister(
+  options: SkillListerOptions,
+): (agent: unknown, cwd: string | undefined) => Promise<readonly string[]> {
+  return async (agent, cwd) => {
+    try {
+      const skills = await options.skills.list({
+        ...(cwd === undefined ? {} : { cwd }),
+        // Omitted rather than passed as `undefined`: an explicit key would be a
+        // scope value the registry cannot interpret, while an absent one is the
+        // documented "global layer alone".
+        ...(agent === undefined ? {} : { scope: agent }),
+      })
+      return skills.filter(skill => skill.invocation.userInvocable).map(skill => skill.name)
+    } catch {
+      // A listing that fails is not worth failing the command over with a stack
+      // trace; an empty answer says "none available", which is the closest
+      // truthful thing this boundary can report.
+      return []
+    }
+  }
+}

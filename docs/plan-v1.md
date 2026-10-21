@@ -780,6 +780,56 @@ README 按用户裁定做成 **中文 `README.md` + 英文 `README.en.md`**（�
 | **主动推送需历史会话** | `context_token` 只来自入站 | README 写明；v2 实现 |
 | **微信侧无补投** | 发送失败即丢 | 自建出站队列 |
 
+### Q53：`/cwd` 用「换会话」实现，而不是会话内 `cd`
+
+**问题**：用户要求支持工作空间切换。DSH 有两条路，语义完全不同：
+
+1. **会话内 `cd`**（`ctx.workingDirectory.set`，0.2.1-alpha.2 起提供）：追加
+   `working-directory/change` 事件，改变后续工具调用的当前目录，header 里的原始项目目录不动。
+2. **换会话**：结束当前会话，在新目录新建一个。
+
+**选择 2，理由是方案 1 有一条说不通的边界。** `sandbox-policy` 的 `workspaceRoot` 读的是
+`session.header.cwd`，不是 `workingDirectory`：
+
+```ts
+workspaceRoot: resolveWorkspaceRoot(session?.header.cwd ?? this.workspaceRoot)
+```
+
+所以 `workspace-write` 权限下，会话内 `cd` 到别处后写文件仍按**旧**边界判定——用户会看到
+「目录切过去了但写不了」，而且是静默失败。`danger-full-access` 没有这个问题，但把权限当成
+功能的前置条件，等于要求用户先放宽权限才能切目录。
+
+方案 2 没有半截状态：新会话的 header `cwd` 就是新目录，`{{cwd}}`、沙箱、文件工具、
+presented 相对路径全部自洽。
+
+**代价**：会话历史从头开始，用户必须理解「切换 = 新对话」。回复里明说这一点，并且 `/new` 也会
+报告新会话的工作目录——header 改不了，用户必须能确认自己在哪。
+
+**实现要点**：
+
+- 按 peer 持久化在 `peer-sessions.json` 的 `cwds` 字段，与代次同文件、同一读-改-写队列
+  （两个字段共用一个文档，分两次写会互相覆盖）。
+- 校验（绝对、存在、是目录、realpath）**在拆会话之前**完成：写进 header 的 `cwd` 改不了，
+  打错字只该损失一条消息。
+- 只接受绝对路径：进程自己的目录在手机上不可见。
+- 不挂 `workspaceRegistry`：它只在 web-app bundle 上，headless 没有；直接给绝对路径不依赖它。
+
+**为什么不用 `workingDirectory.set` 做 `/cwd`**：上面的沙箱边界。将来若 `sandbox-policy`
+改为读 `workingDirectory`，可以再加一个 `/cd` 做会话内切换，两者并存。
+
+**依据**：`docs/recon/11-多工作区机制.md`（Q19 答复）、DSH `packages/session/working-directory/src/index.ts`、
+`packages/sandbox/sandbox-policy/src/index.ts:168`；实测确认已安装的 0.2.1-rc.2 同时带
+`workingDirectory.set` 和旧的 `workspaceRoot` 读法。
+
+### Q54：`/skills` 只列名称
+
+`/skills` 只输出 skill name，不带 description。理由：完整描述会占满好几屏手机屏幕，而
+`/技能名` 调用需要的正是名称。只列 `userInvocable` 的——只给模型用的技能没法从聊天里调用，
+列出来等于承诺一个做不到的操作。
+
+查找上下文与模型看到的一致：`cwd` 取会话当前目录，`scope` 取 agent，两者都传下去，
+否则列出的集合会和模型看到的目录不一致。
+
 ## 8. 不做的事（明确边界）
 
 - ❌ 群聊（协议无依据，recon/10）
@@ -788,7 +838,7 @@ README 按用户裁定做成 **中文 `README.md` + 英文 `README.en.md`**（�
 - ❌ 主动推送（v2，接口预留）
 - ❌ 独立 HTTP 面板（用客户端插件替代）
 - ❌ 自建权限体系（Q1）
-- ❌ `/cwd` 与 `/reconnect`（v1 仅注册并明确回报「尚未实现」，见 Q47）
+- ❌ `/reconnect`（仅注册并明确回报「尚未实现」，见 Q47）
 - ❌ 设置页卡片（v1 无客户端插件，v2 再做，见 Q47）
 
 > **提问卡不在此列**：它在 v1 已实现（见 Q42/Q47）——不认领 `ask_user_question` 会让整轮永久卡住。
@@ -799,13 +849,15 @@ v1 的里程碑（M0–M7）已全部收敛，剩余项都属**新增能力**而
 
 | 项 | 为什么推后 |
 |---|---|
-| **`/cwd`** | 要按 peer 持久化 cwd，是对现有状态模型的一次扩展（Q47） |
 | **设置页卡片** | v1 客户端插件零代码，需从零搭客户端构建管线（Q47） |
 | **`svr_id` 引用还原** | 要自建消息缓存，且救不了历史消息（Q45①） |
 | **`message_id` 精度** | 只在成为查表 key 后才有真实后果，届时与引用缓存一起修（Q45②） |
 | **主动推送** | 接口已预留，需历史 `context_token`（Q10） |
 | **`errcode -14` 行为** | 会话过期需真机复现（§7） |
 | **`/reconnect`** | 需在当前进程内重建长轮询连接 |
+| **`/workspaces` 列表选择** | 依赖 `ctx.workspaceRegistry`，而它只在 web-app bundle 挂载；headless 上没有。当前 `/cwd` 只接受绝对路径（Q53） |
+
+> **`/cwd` 已移出此表**：v0.2.6 实现为「结束当前会话 + 在新目录新建」，按 peer 持久化。见 Q53。
 
 ---
 

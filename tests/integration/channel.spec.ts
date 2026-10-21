@@ -378,6 +378,168 @@ describe('a profile boot with the login action', () => {
     expect(asked[0]).toEqual({ cwd: '/work' })
   }, 30_000)
 
+  it('switches the working directory when /cwd runs, and keeps it across a restart', async () => {
+    // The production half of `/cwd`. Two things only this suite can observe:
+    //
+    //  - `index.ts` wires the per-peer directory store at all, and
+    //  - the directory is recorded on the *next* session's header, which is the
+    //    only place it can live - a session's `cwd` is immutable once written.
+    //
+    // Read back through a fresh `PeerSessionStore` over the same DSH_HOME,
+    // which is precisely what the next process does. A switch kept only in
+    // memory would pass every unit test and be undone by a restart.
+    const previous = process.env['DSH_HOME']
+    const home = tempHome('dsh-wechat-cwdswitch-')
+    process.env['DSH_HOME'] = home
+
+    // The directory the user switches to has to exist: the command refuses a
+    // path it cannot stat, and that refusal is the behaviour under test.
+    const target = mkdtempSync(join(tmpdir(), 'dsh-wechat-target-'))
+    const asked: { cwd?: string }[] = []
+    const live = new Map<string, unknown>()
+    let polls = 0
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes('getupdates')) {
+        polls += 1
+        return new Response(JSON.stringify({
+          ret: 0,
+          msgs: polls === 1
+            ? [{
+              message_id: 1, from_user_id: 'user-7', message_type: 1,
+              context_token: 'ctx-1',
+              item_list: [{ type: 1, text_item: { text: `/cwd ${target}` } }],
+            }]
+            : [],
+          get_updates_buf: `c${polls}`,
+        }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ ret: 0 }), { status: 200 })
+    }) as unknown as typeof fetch)
+
+    const ctx = new Context()
+    provideCmdline(ctx, { args: [], exit: () => {}, ready: { commit() {}, await: async () => {} } } as never)
+    await ctx.plugin(CredentialsLocal as never, {} as never)
+    await ctx.plugin(CommandRuntime)
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
+    })
+    ctx.provide('agents', {
+      async create({ sessionId, meta }: { sessionId: string; meta?: { cwd?: string } }) {
+        asked.push(meta ?? {})
+        const agent = { id: sessionId, followup: () => {}, whenIdle: async () => {} }
+        live.set(sessionId, agent)
+        return { agent, dispose: async () => void live.delete(sessionId) }
+      },
+      async resume() { throw new Error('no persisted session') },
+      get: (id: string) => live.get(id),
+    })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
+
+    let stored: string | undefined
+    try {
+      // The reply is sent before the store is observable on disk, so wait on the
+      // file the switch is supposed to leave behind rather than on the reply.
+      await until(async () => (await new PeerSessionStore().cwd('user-7')) !== undefined, 5_000)
+      // Read while DSH_HOME still points at this test's home: the store resolves
+      // it per call, so a read after the restore would consult the real profile.
+      stored = await new PeerSessionStore().cwd('user-7')
+    } finally {
+      await ctx.fiber.dispose()
+      rmSync(target, { recursive: true, force: true })
+      if (previous === undefined) delete process.env['DSH_HOME']
+      else process.env['DSH_HOME'] = previous
+    }
+
+    // The command canonicalizes the path, so the stored value is the realpath of
+    // the temporary directory rather than the string this test typed.
+    expect(stored).toBeTruthy()
+    expect(stored).toContain('dsh-wechat-target-')
+  }, 30_000)
+
+  it('answers /skills with the names the harness skill registry reports', async () => {
+    // `/skills` reads a service this plugin does not own, through `ctx.get()`
+    // rather than `inject` - so nothing but a real `apply` can observe whether
+    // `index.ts` wires it. The registry is provided here because a unit test
+    // that injected the lister itself would prove only that the lister works.
+    const previous = process.env['DSH_HOME']
+    const home = tempHome('dsh-wechat-skills-')
+    process.env['DSH_HOME'] = home
+
+    const sent: string[] = []
+    let polls = 0
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const href = String(url)
+      if (href.includes('getupdates')) {
+        polls += 1
+        return new Response(JSON.stringify({
+          ret: 0,
+          msgs: polls === 1
+            ? [{
+              message_id: 1, from_user_id: 'user-7', message_type: 1,
+              context_token: 'ctx-1',
+              item_list: [{ type: 1, text_item: { text: '/skills' } }],
+            }]
+            : [],
+          get_updates_buf: `c${polls}`,
+        }), { status: 200 })
+      }
+      // The outbound send carries the command's answer; the wire spells it
+      // `msg.item_list[].text_item.text`, not a bare body string.
+      if (href.includes('sendmessage')) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          msg?: { item_list?: { text_item?: { text?: string } }[] }
+        }
+        const text = body.msg?.item_list?.[0]?.text_item?.text
+        if (typeof text === 'string') sent.push(text)
+      }
+      return new Response(JSON.stringify({ ret: 0 }), { status: 200 })
+    }) as unknown as typeof fetch)
+
+    const ctx = new Context()
+    provideCmdline(ctx, { args: [], exit: () => {}, ready: { commit() {}, await: async () => {} } } as never)
+    await ctx.plugin(CredentialsLocal as never, {} as never)
+    await ctx.plugin(CommandRuntime)
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
+    })
+    ctx.provide('agents', {
+      async create({ sessionId }: { sessionId: string }) {
+        const agent = { id: sessionId, followup: () => {}, whenIdle: async () => {} }
+        return { agent, dispose: async () => {} }
+      },
+      async resume() { throw new Error('no persisted session') },
+      get: () => undefined,
+    })
+    // The shape `ctx.skills.list` has, including the policy field the command
+    // filters on: a fake that omitted it would make the filter vacuous.
+    ctx.provide('skills', {
+      async list() {
+        return [
+          { name: 'release-workflow', description: 'x', invocation: { modelInvocable: true, userInvocable: true } },
+          { name: 'model-only', description: 'y', invocation: { modelInvocable: true, userInvocable: false } },
+        ]
+      },
+    })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
+
+    try {
+      await until(async () => sent.some(body => body.includes('release-workflow')), 5_000)
+    } finally {
+      await ctx.fiber.dispose()
+      if (previous === undefined) delete process.env['DSH_HOME']
+      else process.env['DSH_HOME'] = previous
+    }
+
+    const answer = sent.join('\n')
+    expect(answer).toContain('/release-workflow')
+    // A skill a human cannot invoke must not be advertised: it cannot be typed.
+    expect(answer).not.toContain('model-only')
+  }, 30_000)
+
   it("mounts the profile's agent preset on a new session", async () => {
     // The web app disables every model-facing tool row on the host plane and
     // moves them behind agent presets ("the agent plane moves behind agent

@@ -28,20 +28,28 @@ function fakeRegistry(options: {
   existingSessions?: string[]
   /** Preset ids the stored sessions recorded, read back on resume. */
   recordedPresets?: Record<string, string>
+  /** Directories the stored sessions recorded, read back on resume. */
+  recordedCwds?: Record<string, string>
 } = {}) {
   const created: string[] = []
   const resumed: string[] = []
   const disposed: string[] = []
   /** Every selection fragment the registry was handed, create or resume. */
   const asked: { kind: 'create' | 'resume'; sessionId: string; agentOptions?: unknown }[] = []
+  /** Every metadata object the registry was handed, create only. */
+  const metas: { sessionId: string; meta?: { cwd?: string; agentPreset?: string } }[] = []
   const live = new Map<string, { agent: { id: string }; dispose: () => Promise<void> }>()
 
-  const makeHandle = (sessionId: string) => {
+  const makeHandle = (sessionId: string, cwd?: string) => {
     const handle = {
       // The session is what a permission preset is recorded on, so the fake
       // carries one: a handle without it would make the permission assertions
-      // below pass vacuously.
-      agent: { id: sessionId, session: { id: sessionId } },
+      // below pass vacuously. Its header is where `/cwd` reads the directory a
+      // conversation actually runs in.
+      agent: {
+        id: sessionId,
+        session: { id: sessionId, header: cwd === undefined ? {} : { cwd } },
+      },
       dispose: async () => {
         disposed.push(sessionId)
         live.delete(sessionId)
@@ -55,13 +63,19 @@ function fakeRegistry(options: {
     resumed,
     disposed,
     asked,
+    metas,
     live,
     registry: {
-      async create({ sessionId, agentOptions }: { sessionId: string; agentOptions?: unknown }) {
+      async create({ sessionId, agentOptions, meta }: {
+        sessionId: string
+        agentOptions?: unknown
+        meta?: { cwd?: string; agentPreset?: string }
+      }) {
         if (live.has(sessionId)) throw new Error(`already registered: ${sessionId}`)
         created.push(sessionId)
         asked.push({ kind: 'create', sessionId, agentOptions })
-        const handle = makeHandle(sessionId)
+        metas.push({ sessionId, ...(meta === undefined ? {} : { meta }) })
+        const handle = makeHandle(sessionId, meta?.cwd)
         live.set(sessionId, handle)
         return handle
       },
@@ -75,7 +89,7 @@ function fakeRegistry(options: {
         }
         resumed.push(resumeSessionId)
         asked.push({ kind: 'resume', sessionId: resumeSessionId, agentOptions })
-        const handle = makeHandle(resumeSessionId)
+        const handle = makeHandle(resumeSessionId, options.recordedCwds?.[resumeSessionId])
         live.set(resumeSessionId, handle)
         // The real registry awaits setup before publishing the agent, handing it
         // the session it loaded - which is where a resume reads the recorded
@@ -533,5 +547,153 @@ describe('the permission preset a new session records', () => {
     const map = new PeerMap({ registry: f.registry as never })
 
     await expect(map.sessionFor('user-7')).resolves.toBeDefined()
+  })
+})
+
+describe('the working directory a session records', () => {
+  it('records the configured directory when the peer never switched', async () => {
+    // The behaviour every existing deployment relies on: `/cwd` not used means
+    // nothing changed.
+    const f = fakeRegistry()
+    const map = new PeerMap({ registry: f.registry as never, cwd: 'D:\\work\\default' })
+
+    await map.sessionFor('user-7')
+
+    expect(f.metas).toEqual([{ sessionId: 'channel-wechat-user-7', meta: { cwd: 'D:\\work\\default' } }])
+  })
+
+  it('records the directory the peer switched to instead of the configured one', async () => {
+    // The configured `cwd` is the fallback, not an override: a switch that the
+    // config outranked would be silently ignored.
+    const f = fakeRegistry()
+    const map = new PeerMap({
+      registry: f.registry as never,
+      cwd: 'D:\\work\\default',
+      generations: {
+        generation: async () => 1,
+        startNew: async () => 2,
+        cwd: async () => 'D:\\work\\switched',
+      },
+    })
+
+    await map.sessionFor('user-7')
+
+    expect(f.metas[0]?.meta?.cwd).toBe('D:\\work\\switched')
+  })
+
+  it('reports the live session\u2019s own directory', async () => {
+    // The header is what tool calls actually use, so it is the only answer that
+    // cannot disagree with where the agent is working.
+    const f = fakeRegistry()
+    const map = new PeerMap({ registry: f.registry as never, cwd: 'D:\\work\\default' })
+    await map.sessionFor('user-7')
+
+    expect(await map.cwdFor('user-7')).toBe('D:\\work\\default')
+  })
+
+  it('reports the stored directory for a peer with no live session', async () => {
+    const f = fakeRegistry()
+    const map = new PeerMap({
+      registry: f.registry as never,
+      cwd: 'D:\\work\\default',
+      generations: {
+        generation: async () => 0,
+        startNew: async () => 1,
+        cwd: async () => 'D:\\work\\switched',
+      },
+    })
+
+    expect(await map.cwdFor('user-7')).toBe('D:\\work\\switched')
+  })
+
+  it('falls back to the configured directory when nothing is stored', async () => {
+    const f = fakeRegistry()
+    const map = new PeerMap({ registry: f.registry as never, cwd: 'D:\\work\\default' })
+
+    expect(await map.cwdFor('user-7')).toBe('D:\\work\\default')
+  })
+
+  it('persists the switch and rotates the conversation together', async () => {
+    // Both halves are needed: recording the directory alone would leave the
+    // current session running where it was, and rotating alone would create the
+    // next session in the old directory - a session that cannot be moved after.
+    const f = fakeRegistry()
+    const recorded: { peerId: string; path: string }[] = []
+    const map = new PeerMap({
+      registry: f.registry as never,
+      cwd: 'D:\\work\\default',
+      generations: {
+        generation: async () => 0,
+        startNew: async () => 1,
+        cwd: async () => undefined,
+        setCwd: async (peerId, path) => { recorded.push({ peerId, path }) },
+      },
+    })
+    await map.sessionFor('user-7')
+
+    const generation = await map.startNewIn('user-7', 'D:\\work\\next')
+
+    expect(recorded).toEqual([{ peerId: 'user-7', path: 'D:\\work\\next' }])
+    expect(generation).toBe(1)
+    expect(await map.cwdFor('user-7')).toBe('D:\\work\\next')
+  })
+
+  it('makes the next session record the new directory', async () => {
+    // End to end through the map: after a switch, the session created for the
+    // next message must carry the new directory in its header metadata.
+    const f = fakeRegistry()
+    const map = new PeerMap({
+      registry: f.registry as never,
+      cwd: 'D:\\work\\default',
+      generations: { generation: async () => 0, startNew: async () => 1 },
+    })
+    await map.sessionFor('user-7')
+    map.forget('user-7')
+
+    await map.startNewIn('user-7', 'D:\\work\\next')
+    await map.sessionFor('user-7')
+
+    // The second create is the rotated generation, recording the new directory.
+    expect(f.metas).toHaveLength(2)
+    expect(f.metas[1]?.meta?.cwd).toBe('D:\\work\\next')
+    expect(f.metas[1]?.sessionId).toBe(sessionIdFor('user-7', 1))
+  })
+
+  it('still switches when the deployment persists nothing', async () => {
+    // A map built without a store cannot persist, but refusing to switch would
+    // make `/cwd` silently do nothing - worse than a switch that lasts one
+    // process, which is the same trade `/new` already makes.
+    const f = fakeRegistry()
+    const map = new PeerMap({ registry: f.registry as never, cwd: 'D:\\work\\default' })
+
+    await map.startNewIn('user-7', 'D:\\work\\next')
+
+    expect(await map.cwdFor('user-7')).toBe('D:\\work\\next')
+  })
+
+  it('does not hand a resumed session a directory it did not record', async () => {
+    // A resume reads the header the session already has. Passing metadata there
+    // is silently ignored by the registry, so the map must not claim otherwise.
+    const f = fakeRegistry({
+      existingSessions: [sessionIdFor('user-7', 0)],
+      recordedCwds: { [sessionIdFor('user-7', 0)]: 'D:\\work\\original' },
+    })
+    const map = new PeerMap({
+      registry: f.registry as never,
+      sessionExists: async () => true,
+      cwd: 'D:\\work\\default',
+      generations: {
+        generation: async () => 0,
+        startNew: async () => 1,
+        cwd: async () => 'D:\\work\\switched',
+      },
+    })
+
+    await map.sessionFor('user-7')
+
+    expect(f.resumed).toHaveLength(1)
+    // The resumed session keeps what it recorded, and `/cwd` reports that - not
+    // the stored switch, which only applies to a session this map creates.
+    expect(await map.cwdFor('user-7')).toBe('D:\\work\\original')
   })
 })

@@ -32,6 +32,7 @@ import { parseInboundMessage, type InboundMedia } from '../wechat/inbound.ts'
 import { presentedFilesFrom, type PresentedFile } from '../bridge/deliverables.ts'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { monitorLoop, type MonitorResponse } from './monitor.ts'
+import { resolveDirectory } from './directory.ts'
 
 /** The event surface the reply path subscribes to. */
 export interface SessionEventsLike {
@@ -136,6 +137,15 @@ export interface ChannelOptions {
    * that can answer without one still may.
    */
   nativeCommands?: (agent: unknown) => Promise<readonly NativeCommandRow[]>
+  /**
+   * Resolve the skills this peer can invoke, listed by `/skills`.
+   *
+   * Takes the agent and the peer's current directory: the harness's own skill
+   * catalog resolves against both, so a listing that ignored either would show
+   * a different set than the model sees. Absent when this deployment composes no
+   * skill registry, where the command says so instead of reporting "none".
+   */
+  skills?: (agent: unknown, cwd: string | undefined) => Promise<readonly string[]>
   /**
    * Provider and model each new session selects.
    *
@@ -497,6 +507,19 @@ export class Channel {
       endSession: async () => { await this.endPeerSession(peerId) },
       accountId: this.options.accountId,
       sessionCount: this.peers.size,
+      // The live session's own header is the durable answer and the only one a
+      // tool call actually uses, so it wins over the configured value. After
+      // `/new` there is no live handle, and the stored switch is what the next
+      // session will record - which is why this goes through the map's own
+      // resolution rather than reading only what exists.
+      currentCwd: async () => await this.peers.cwdFor(peerId),
+      changeCwd: async path => {
+        // Validated before anything is torn down: a typo must cost the user a
+        // message, not the conversation they were in.
+        const resolved = await this.resolveDirectory(path)
+        await this.endPeerSessionIn(peerId, resolved)
+        return resolved
+      },
       nativeCommands: async () => {
         const list = this.options.nativeCommands
         if (list === undefined) return []
@@ -506,12 +529,54 @@ export class Channel {
         // answering from somewhere other than a live agent still can.
         return list(this.peers.handleFor(peerId)?.agent)
       },
+      ...(this.options.skills === undefined ? {} : {
+        skills: async () => {
+          // The same resolution `/cwd` reports, so the listing scans the
+          // directory the conversation is actually in.
+          const cwd = await this.peers.cwdFor(peerId)
+          return this.options.skills!(this.peers.handleFor(peerId)?.agent, cwd)
+        },
+      }),
       models: this.options.models ?? {
         listModels: undefined,
         switchModel: undefined,
         current: () => ({ provider: '', model: '' }),
       },
     }
+  }
+
+  /**
+   * Check that a path names an existing directory, and return it canonically.
+   *
+   * The rules live in {@link resolveDirectory}, which is tested on its own; this
+   * wrapper exists only so the command context does not import filesystem
+   * modules.
+   * @param path - the path the user typed.
+   * @returns the canonical absolute directory.
+   * @throws when the path is relative, missing, or not a directory.
+   */
+  private async resolveDirectory(path: string): Promise<string> {
+    return await resolveDirectory(path)
+  }
+
+  /**
+   * Move a peer to a new directory, ending its session.
+   *
+   * The order matters: the directory is recorded first, then the generation is
+   * advanced, then the old handle is disposed. Recording last would leave a
+   * window where the next message creates a session in the old directory under
+   * the new id - a session the user cannot move afterwards.
+   * @param peerId - the peer to move.
+   * @param path - the canonical directory the next session records.
+   */
+  private async endPeerSessionIn(peerId: string, path: string): Promise<void> {
+    const handle = this.peers.handleFor(peerId)
+    this.peers.forget(peerId)
+    await this.peers.startNewIn(peerId, path)
+    if (handle === undefined) return
+    const id = String(handle.agent.id)
+    this.sessionToPeer.delete(id)
+    await handle.dispose()
   }
 
   /** Cancel a peer's running turn through its live agent. */

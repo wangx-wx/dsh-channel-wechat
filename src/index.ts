@@ -22,7 +22,7 @@ import { runStartupAction } from './login-command.ts'
 import { claimAppArgument } from './cmdline.ts'
 import { createApiClient } from './wechat/api.ts'
 import type { AgentPresetsLike } from './bridge/peer-map.ts'
-import { createNativeCommandExecutor, createNativeCommandLister, type CommandRuntimeLike } from './bridge/native-commands.ts'
+import { createNativeCommandExecutor, createNativeCommandLister, createSkillLister, type CommandRuntimeLike, type SkillRegistryLike } from './bridge/native-commands.ts'
 import { CursorStore } from './channel/cursor-store.ts'
 import { PeerSessionStore } from './channel/peer-session-store.ts'
 import { createSingleRun, type SingleRun } from './channel/single-run.ts'
@@ -573,6 +573,10 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
     // tracking them.
     executeNativeCommand: createNativeCommandExecutor({ commands: commandsOf(ctx) }),
     nativeCommands: createNativeCommandLister({ commands: commandsOf(ctx) }),
+    // `/skills` lists names only. Read through `get` rather than injected: a
+    // deployment that composes no skill registry is supported, and `inject`
+    // would park this row there instead of letting the command report it.
+    ...(skillsOf(ctx) === undefined ? {} : { skills: createSkillLister({ skills: skillsOf(ctx)! }) }),
     // `/models` reads the live registry and `/model` writes this plugin's own two
     // fields, so a switch here cannot move the GUI's model. `contextLlm` rather
     // than `inject`: a deployment with no LLM registry is supported, and the
@@ -851,6 +855,19 @@ function commandsOf(ctx: Context): CommandRuntimeLike {
     throw new Error('channel-wechat: ctx.commands is not mounted')
   }
   return commands
+}
+
+/**
+ * The harness's skill registry, when this deployment composes one.
+ *
+ * Read through `get` rather than declared in `inject`: a profile that mounts no
+ * skill provider is a supported composition, and parking the whole row on it
+ * would take the channel down over a command nobody typed.
+ * @param ctx - the plugin's cordis context.
+ * @returns the registry, or undefined when there is none.
+ */
+function skillsOf(ctx: Context): SkillRegistryLike | undefined {
+  return ctx.get('skills') as SkillRegistryLike | undefined
 }
 
 /**

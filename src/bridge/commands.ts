@@ -34,8 +34,15 @@ export interface CommandOutcome {
   text?: string
 }
 
-/** The channel's own command names. */
-export const LOCAL_COMMANDS = ['stop', 'status', 'new', 'cwd', 'help', 'reconnect', 'models', 'model'] as const
+/**
+ * The channel's own command names.
+ *
+ * `h` is an alias for `help`: the two letter spelling is what a phone keyboard
+ * produces most easily, and an alias costs one entry here rather than a second
+ * implementation. It is listed as its own name so the router accepts it; the
+ * help listing advertises `/h` beside `/help` instead of as a separate command.
+ */
+export const LOCAL_COMMANDS = ['stop', 'status', 'new', 'cwd', 'help', 'h', 'reconnect', 'models', 'model', 'skills'] as const
 
 /**
  * The harness's command grammar, from its own parser.
