@@ -66,6 +66,47 @@ describe('the fields the GUI form is built from', () => {
     expect(field('model')?.meta.required).toBeFalsy()
   })
 
+  it('refuses an outbound limit that cannot send anything', () => {
+    // `maxMessageChars: 0` is not "no limit" here: the splitter returns an empty
+    // list for a non-positive ceiling, so every answer would be silently dropped
+    // - the failure mode this whole field exists to prevent, reached by a typo.
+    // The schema is where it has to fail, because a profile is the only thing
+    // that writes this value and nothing downstream can tell it apart from a
+    // deliberate choice.
+    // Volatile fields resolve to references rather than raw values, so the
+    // accepted case is read through `.get()` - the same way the plugin reads it.
+    const resolve = (value: unknown): { maxMessageChars: { get: () => number } } =>
+      (Config as unknown as (v: unknown) => never)({ cwd: '/work', ...(value as object) })
+
+    expect(() => resolve({ maxMessageChars: 0 })).toThrow(/maxMessageChars/u)
+    expect(() => resolve({ maxMessageChars: -5 })).toThrow(/maxMessageChars/u)
+    expect(resolve({ maxMessageChars: 1 }).maxMessageChars.get()).toBe(1)
+  })
+
+  it('refuses a pacing gap or attempt count that disables the protection', () => {
+    // A negative gap is nonsense; zero attempts means a throttled reply is
+    // abandoned on its first refusal, which is the silent-drop this policy was
+    // added to stop.
+    const resolve = (value: unknown): { minSendIntervalMs: { get: () => number } } =>
+      (Config as unknown as (v: unknown) => never)({ cwd: '/work', ...(value as object) })
+
+    expect(() => resolve({ minSendIntervalMs: -1 })).toThrow(/minSendIntervalMs/u)
+    expect(() => resolve({ maxThrottleAttempts: 0 })).toThrow(/maxThrottleAttempts/u)
+    // Zero pacing stays legal: it is how a deployment says "do not pace me",
+    // and the retry policy still covers the throttle it then hits.
+    expect(resolve({ minSendIntervalMs: 0 }).minSendIntervalMs.get()).toBe(0)
+  })
+
+  it('defaults the send gap to the value the throttle evidence supports', () => {
+    // `docs/invariants.md` records the live failure: 18 messages in 9 minutes,
+    // then the 1225-character conclusion refused with `-2` three times in a row.
+    // The reference implementation that survives this paces at **2000 ms**, and
+    // that is the number the evidence supports. 1000 was chosen when the field
+    // was added and never re-checked against the measurement it cites, so a
+    // fresh profile would pace at half the rate known to work.
+    expect(field('minSendIntervalMs')?.meta.default).toBe(2_000)
+  })
+
   it('defaults the permission to the preset that keeps approval cards working', () => {
     // `danger-full-access` bundles `approval: never`, which the approval service
     // settles before the waterfall this plugin's cards join. Defaulting to it

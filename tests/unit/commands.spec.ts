@@ -125,4 +125,45 @@ describe('routing a command', () => {
 
     expect(result).toEqual({ kind: 'error', text: 'nope: bad argument' })
   })
+
+  it('hands a line naming a skill back to the caller instead of rejecting it', async () => {
+    // `/release-workflow` is not a command anywhere: the harness's skill gesture
+    // is a scan of the *delivered user message*, so a line claimed here as an
+    // unknown command never reaches the agent and the skill can never load.
+    // Returning `undefined` says "not mine" and lets the caller deliver it.
+    const claimed: string[] = []
+    const result = await routeCommand('/release-workflow now', {
+      handleLocal: () => ({ kind: 'success', text: 'local' }),
+      executeNative: async () => undefined,
+      claimSkill: async command => { claimed.push(command.name); return true },
+    })
+
+    expect(claimed).toEqual(['release-workflow'])
+    expect(result).toBeUndefined()
+  })
+
+  it('still reports a typo that names no skill', async () => {
+    // The fallback must not turn every mistyped command into a model turn.
+    const result = await routeCommand('/nonsence', {
+      handleLocal: () => ({ kind: 'success', text: 'local' }),
+      executeNative: async () => undefined,
+      claimSkill: async () => false,
+    })
+
+    expect(result?.kind).toBe('error')
+    expect(result?.text).toContain('nonsence')
+  })
+
+  it('lets a local command win over a skill of the same name', async () => {
+    // `/stop` means stop, whatever a skill happens to be called.
+    let asked = false
+    const result = await routeCommand('/stop', {
+      handleLocal: () => ({ kind: 'success', text: 'local' }),
+      executeNative: async () => undefined,
+      claimSkill: async () => { asked = true; return true },
+    })
+
+    expect(result).toEqual({ kind: 'success', text: 'local' })
+    expect(asked).toBe(false)
+  })
 })

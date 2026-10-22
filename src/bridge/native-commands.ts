@@ -160,20 +160,59 @@ export function createSkillLister(
   options: SkillListerOptions,
 ): (agent: unknown, cwd: string | undefined) => Promise<readonly string[]> {
   return async (agent, cwd) => {
-    try {
-      const skills = await options.skills.list({
-        ...(cwd === undefined ? {} : { cwd }),
-        // Omitted rather than passed as `undefined`: an explicit key would be a
-        // scope value the registry cannot interpret, while an absent one is the
-        // documented "global layer alone".
-        ...(agent === undefined ? {} : { scope: agent }),
-      })
-      return skills.filter(skill => skill.invocation.userInvocable).map(skill => skill.name)
-    } catch {
-      // A listing that fails is not worth failing the command over with a stack
-      // trace; an empty answer says "none available", which is the closest
-      // truthful thing this boundary can report.
-      return []
-    }
+    const skills = await listSkills(options, agent, cwd)
+    return skills.map(skill => skill.name)
   }
+}
+
+/**
+ * Build the predicate that recognizes a `/name` line as a skill invocation.
+ *
+ * The harness's gesture is a scan of the **delivered user message**
+ * (`tool-skill/src/index.ts`, `agent/pre-step`), so a line the channel answers
+ * as an unknown command never reaches it. This predicate is what lets the
+ * router hand such a line back to be delivered instead.
+ *
+ * It answers from the same `list()` the `/skills` listing uses, so the two
+ * cannot disagree: a name the listing showed is a name this accepts, and a name
+ * it left out - a model-only skill, say - is not. Answering from `get()` would
+ * be a second opinion about the same question.
+ *
+ * A failing lookup **throws**, and the channel treats that as "not a skill":
+ * the user then sees the unknown-command error, which is actionable, instead of
+ * a turn that carries text no skill will consume.
+ * @param options - the skill registry.
+ * @returns a predicate taking a name and the same `(agent, cwd)` lookup.
+ */
+export function createSkillClaimer(
+  options: SkillListerOptions,
+): (name: string, agent: unknown, cwd: string | undefined) => Promise<boolean> {
+  return async (name, agent, cwd) => {
+    const skills = await listSkills(options, agent, cwd)
+    return skills.some(skill => skill.name === name)
+  }
+}
+
+/**
+ * The user-invocable skills one lookup sees, in registry order.
+ *
+ * A failure is **not** caught here. An empty list and a broken registry are
+ * different facts, and only the command has the words to tell them apart:
+ * swallowing the error made `/skills` report "no skills" for a registry that
+ * had just thrown, which is both false and unfixable by the user. Both callers
+ * therefore propagate, and each reports in its own terms.
+ */
+async function listSkills(
+  options: SkillListerOptions,
+  agent: unknown,
+  cwd: string | undefined,
+): Promise<readonly { name: string; invocation: { userInvocable: boolean } }[]> {
+  const skills = await options.skills.list({
+    ...(cwd === undefined ? {} : { cwd }),
+    // Omitted rather than passed as `undefined`: an explicit key would be a
+    // scope value the registry cannot interpret, while an absent one is the
+    // documented "global layer alone".
+    ...(agent === undefined ? {} : { scope: agent }),
+  })
+  return skills.filter(skill => skill.invocation.userInvocable)
 }

@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest'
-import { createNativeCommandExecutor, createNativeCommandLister, createSkillLister } from '../../src/bridge/native-commands.ts'
+import { createNativeCommandExecutor, createNativeCommandLister, createSkillClaimer, createSkillLister } from '../../src/bridge/native-commands.ts'
 
 /** A stand-in for `ctx.commands`, recording what it was asked. */
 function fakeCommands(outcome: { kind: 'success' | 'error'; text?: string } | undefined) {
@@ -241,14 +241,72 @@ describe('the skill list', () => {
     expect(seen).toEqual([undefined])
   })
 
-  it('reports nothing rather than failing when the registry throws', async () => {
-    // The same posture as the command lister: a listing failure must not become
-    // an error the user cannot act on.
+  it('lets a failing registry surface, so the command can report it', async () => {
+    // Swallowing this into `[]` made `/skills` answer "当前没有可用的技能" for a
+    // registry that had just thrown - a false statement about the deployment,
+    // and one that hides the only evidence of the failure. `/help` may degrade
+    // to its own command list; `/skills` *is* the listing, so it must not.
     const list = createSkillLister({
       skills: { list: async () => { throw new Error('broken') } } as never,
     })
 
-    await expect(list({ id: 'agent-1' }, '/work')).resolves.toEqual([])
+    await expect(list({ id: 'agent-1' }, '/work')).rejects.toThrow('broken')
+  })
+})
+
+describe('recognising a skill invocation', () => {
+  /** A registry answering with the given skills. */
+  function registry(skills: readonly { name: string; invocation: { userInvocable: boolean } }[]) {
+    return { list: async () => skills }
+  }
+
+  it('accepts a name the listing would have shown', async () => {
+    // The two must agree: a name `/skills` advertises and this rejects is a
+    // gesture that cannot work, which is the defect this exists to fix.
+    const claims = createSkillClaimer({
+      skills: registry([
+        { name: 'release-workflow', invocation: { userInvocable: true } },
+      ]) as never,
+    })
+
+    await expect(claims('release-workflow', { id: 'agent-1' }, '/work')).resolves.toBe(true)
+  })
+
+  it('rejects a name the listing would have left out', async () => {
+    // A model-only skill cannot be typed as a command, so claiming it would
+    // deliver text no skill consumes and no answer ever arrives.
+    const claims = createSkillClaimer({
+      skills: registry([
+        { name: 'model-only', invocation: { userInvocable: false } },
+      ]) as never,
+    })
+
+    await expect(claims('model-only', { id: 'agent-1' }, '/work')).resolves.toBe(false)
+  })
+
+  it('rejects an ordinary mistyped command', async () => {
+    const claims = createSkillClaimer({
+      skills: registry([{ name: 'tdd', invocation: { userInvocable: true } }]) as never,
+    })
+
+    await expect(claims('stpo', { id: 'agent-1' }, '/work')).resolves.toBe(false)
+  })
+
+  it('looks up against the same agent scope and directory as the listing', async () => {
+    const seen: { cwd?: string; scope?: unknown }[] = []
+    const agent = { id: 'agent-1' }
+    const claims = createSkillClaimer({
+      skills: {
+        async list(options: { cwd?: string; scope?: unknown }) {
+          seen.push({ ...(options.cwd === undefined ? {} : { cwd: options.cwd }), scope: options.scope })
+          return [{ name: 'tdd', invocation: { userInvocable: true } }]
+        },
+      } as never,
+    })
+
+    await claims('tdd', agent, '/work/project')
+
+    expect(seen).toEqual([{ cwd: '/work/project', scope: agent }])
   })
 })
 

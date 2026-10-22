@@ -53,7 +53,7 @@ src/vendor/        内联第三方代码
 - 交互卡监听需要 `{ prepend: true }`；卡片回复和 `/stop` 必须绕过 peer 队列，避免死锁。
 - 媒体失败要降级为文本说明，不得吞掉入站消息。
 - 出站文件只发送 `deliverables/presented` 声明的文件，不扫描工作目录。
-- `cwd` 必填且在会话创建后不可变；`/cwd` 与 `/reconnect` 已注册但尚未实现，必须明确回复。
+- `cwd` 必填且在会话创建后不可变；`/cwd` 已实现（结束当前会话、在新目录开新对话），`/reconnect` 仍未实现，必须明确回复。
 - `ctx.agents` 不会自动套用默认模型；创建会话时读取 `ctx.agentDefaultModel.currentSelection()`。
 - 命令行只认领 `login`、`logout`、`status`，不能因其他 app 的参数调用 `program.error()` 终止整个 boot。
 

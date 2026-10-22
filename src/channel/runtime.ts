@@ -161,8 +161,24 @@ export interface RuntimeOptions {
   nativeCommands?: ((agent: unknown) => Promise<readonly NativeCommandRow[]>) | undefined
   /** Resolve the skills one agent can invoke, listed by `/skills`. */
   skills?: ((agent: unknown, cwd: string | undefined) => Promise<readonly string[]>) | undefined
+  /**
+   * Whether a `/name` line names a user-invocable skill.
+   *
+   * Forwarded alongside {@link RuntimeOptions.skills} because the two answer the
+   * same question about the same registry: without this the channel would list
+   * a skill `/skills` advertised and then answer it as an unknown command.
+   */
+  claimsSkill?: ((name: string, agent: unknown, cwd: string | undefined) => Promise<boolean>) | undefined
   /** What `/models` and `/model` read and write. */
   models?: ModelCommandContext
+  /**
+   * Observe turns `Channel.stop` gave up waiting for.
+   *
+   * Forwarded rather than defaulted here: whether a stalled shutdown is worth
+   * reporting depends on the host, and a library that logged it itself would
+   * write a line no test could see.
+   */
+  onStopStalled?: (pending: number) => void
 }
 
 /**
@@ -316,7 +332,9 @@ export async function startChannelFromStore(options: RuntimeOptions): Promise<vo
     ...(options.executeNativeCommand === undefined ? {} : { executeNativeCommand: options.executeNativeCommand }),
     ...(options.nativeCommands === undefined ? {} : { nativeCommands: options.nativeCommands }),
     ...(options.skills === undefined ? {} : { skills: options.skills }),
+    ...(options.claimsSkill === undefined ? {} : { claimsSkill: options.claimsSkill }),
     ...(options.models === undefined ? {} : { models: options.models }),
+    ...(options.onStopStalled === undefined ? {} : { onStopStalled: options.onStopStalled }),
     ...(typing === undefined ? {} : { typing }),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
   })

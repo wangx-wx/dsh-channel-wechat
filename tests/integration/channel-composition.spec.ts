@@ -98,6 +98,17 @@ function build(options: {
   typing?: { start: (peerId: string) => Promise<void>; stop: (peerId: string) => Promise<void> }
   /** Longest text one message may carry; a longer reply is split. */
   maxMessageChars?: number
+  /** Whether a `/name` line names a skill, so it is delivered rather than answered. */
+  claimsSkill?: (name: string, agent: unknown, cwd: string | undefined) => Promise<boolean>
+  /**
+   * The harness's command runtime.
+   *
+   * Defaults to claiming every line, which is enough for the tests that only
+   * check a line was routed away from the model. A test about the *fallback*
+   * has to answer `undefined`, the way the real runtime does for a name it does
+   * not know - otherwise it would never reach the fallback at all.
+   */
+  executeNativeCommand?: (line: string) => Promise<{ kind: 'success' | 'error'; text?: string } | undefined>
 }) {
   const polls: (string | undefined)[] = []
   const sent: { peerId: string; text: string; token: string | undefined }[] = []
@@ -125,7 +136,8 @@ function build(options: {
     ...(options.onTurnStarted === undefined ? {} : { onTurnStarted: options.onTurnStarted }),
     ...(options.cancelRunning === undefined ? {} : { cancelRunning: options.cancelRunning }),
     // The harness's command runtime; the channel forwards unknown names to it.
-    executeNativeCommand: async (line: string) => ({ kind: 'success' as const, text: `native: ${line}` }),
+    executeNativeCommand: options.executeNativeCommand
+      ?? (async (line: string) => ({ kind: 'success' as const, text: `native: ${line}` })),
     ...(options.generations === undefined ? {} : { generations: options.generations }),
     ...(options.cards === undefined ? {} : { cards: options.cards }),
     ...(options.prepareMedia === undefined ? {} : { prepareMedia: options.prepareMedia }),
@@ -138,6 +150,7 @@ function build(options: {
     sessionExists: async sessionId => options.registry.exists(sessionId),
     ...(options.models === undefined ? {} : { models: options.models }),
     ...(options.maxMessageChars === undefined ? {} : { maxMessageChars: options.maxMessageChars }),
+    ...(options.claimsSkill === undefined ? {} : { claimsSkill: options.claimsSkill }),
   })
   channels.push(channel)
   return { channel, polls, sent }
@@ -368,6 +381,91 @@ describe('slash commands', () => {
     await channel.settled()
 
     expect(f.followed).toEqual([{ sessionId: 'channel-wechat-user-7', text: 'hello' }])
+  })
+
+  it('delivers a line naming a skill instead of answering it as an unknown command', async () => {
+    // The harness recognizes `/name` by scanning the **delivered** user message
+    // (`tool-skill`'s `agent/pre-step`). A line the channel answered as a
+    // command never reaches that scan, so `/skills` advertised a gesture that
+    // could never work from WeChat. The line must arrive verbatim, `/` and all.
+    const f = fakeRegistry()
+    const { channel, sent } = build({
+      registry: f,
+      messages: [{ message_id: 1, from_user_id: 'user-7', message_type: 1, item_list: [{ type: 1, text_item: { text: '/release-workflow now' } }] }],
+      claimsSkill: async name => name === 'release-workflow',
+      // What the real `ctx.commands.execute` answers for a name no plugin
+      // registered - which is every skill, since a skill is not a command.
+      executeNativeCommand: async () => undefined,
+    })
+
+    await channel.run()
+    await channel.settled()
+
+    expect(f.followed).toEqual([{ sessionId: 'channel-wechat-user-7', text: '/release-workflow now' }])
+    // Nothing was answered locally: the turn's answer is the only reply.
+    expect(sent).toEqual([])
+  })
+
+  it('still rejects a mistyped command that names no skill', async () => {
+    // The skill check must not turn every typo into a model turn.
+    const f = fakeRegistry()
+    const { channel, sent } = build({
+      registry: f,
+      messages: [{ message_id: 1, from_user_id: 'user-7', message_type: 1, item_list: [{ type: 1, text_item: { text: '/relase-workflow' } }] }],
+      claimsSkill: async () => false,
+      executeNativeCommand: async () => undefined,
+    })
+
+    await channel.run()
+    await channel.settled()
+
+    expect(f.followed).toEqual([])
+    expect(sent).toHaveLength(1)
+    expect(sent[0]?.text).toContain('未知命令')
+  })
+
+  it('queues a skill invocation like a turn, not like a command', async () => {
+    // A command bypasses the queue because it may be the thing that stops the
+    // running turn. A skill is a turn, so letting it bypass would interleave it
+    // with the turn already running for this peer.
+    const f = fakeRegistry()
+    const order: string[] = []
+    let release: () => void = () => {}
+    const held = new Promise<void>(resolve => { release = resolve })
+    f.registry.create = async ({ sessionId }: { sessionId: string }) => {
+      const agent = {
+        id: sessionId,
+        followup: (message: { content: readonly { text?: string }[] }) => {
+          const text = message.content.map(block => block.text ?? '').join('')
+          order.push(text)
+          if (text === 'first') return
+          // The skill turn blocks, so the queue is observably held.
+          void held
+        },
+        whenIdle: async () => { if (order[0] === 'first') await held },
+      }
+      f.live.set(sessionId, agent)
+      return { agent, dispose: async () => void f.live.delete(sessionId) }
+    }
+    const { channel } = build({
+      registry: f,
+      messages: [
+        { message_id: 1, from_user_id: 'user-7', message_type: 1, item_list: [{ type: 1, text_item: { text: 'first' } }] },
+        { message_id: 2, from_user_id: 'user-7', message_type: 1, item_list: [{ type: 1, text_item: { text: '/tdd' } }] },
+      ],
+      claimsSkill: async name => name === 'tdd',
+      executeNativeCommand: async () => undefined,
+    })
+
+    await channel.run()
+    await until(() => order.length === 1)
+    // The first turn is still running, so the skill line must not have been
+    // delivered yet.
+    expect(order).toEqual(['first'])
+    release()
+    await channel.settled()
+
+    expect(order).toEqual(['first', '/tdd'])
   })
 })
 
@@ -1039,6 +1137,69 @@ describe('stopping', () => {
 
     await expect(channel.run()).resolves.toBeUndefined()
     await channel.stop()
+  })
+
+  it('stops even when a turn never settles, and says which turn it gave up on', { timeout: 10_000 }, async () => {
+    // A turn can be stuck in something that never returns: a tool with no
+    // timeout, a provider call that never answers. `stop()` waited on it with
+    // no bound, so the host's shutdown hung behind it - and on the desktop host
+    // that means the process has to be killed.
+    //
+    // The wait is therefore bounded, and giving up is reported rather than
+    // silent: the reply that turn would have produced is lost either way, and
+    // only the line says so.
+    const stalled: number[] = []
+    /** The live agent, so the channel's liveness check passes and delivery happens. */
+    let live: { id: string } | undefined
+    const channel = new Channel({
+      registry: {
+        create: async ({ sessionId }: { sessionId: string }) => {
+          const agent = {
+            id: sessionId,
+            followup: () => {},
+            // Never resolves: the shape of a turn stuck in a hung tool.
+            whenIdle: () => new Promise<void>(() => {}),
+          }
+          live = agent
+          return { agent, dispose: async () => { live = undefined } }
+        },
+        resume: async () => { throw new Error('no persisted session') },
+        get: () => live,
+      } as never,
+      poll: (() => {
+        let served = false
+        return async () => {
+          if (served) return { msgs: [], get_updates_buf: 'c1' }
+          served = true
+          return {
+            msgs: [{ message_id: 1, from_user_id: 'user-7', message_type: 1, item_list: [{ type: 1, text_item: { text: 'hi' } }] }],
+            get_updates_buf: 'c1',
+          }
+        }
+      })(),
+      send: async () => {},
+      saveCursor: async () => {},
+      // A real timer, not an empty async function: a sleep that only yields a
+      // microtask lets the loop spin without ever reaching the macrotask queue,
+      // which would starve the `stop()` bound below and hang this test exactly
+      // the way the unbounded wait hung the host.
+      sleep: async () => await new Promise<void>(resolve => setTimeout(resolve, 1)),
+      now: () => Date.now(),
+      pollTimeoutMs: 1_000,
+      maxRunMs: 600_000,
+      // Short enough for a test, long enough that a healthy turn would finish.
+      turnSettleTimeoutMs: 50,
+      onStopStalled: pending => void stalled.push(pending),
+    })
+    channels.push(channel)
+
+    void channel.run()
+    await until(async () => (channel as unknown as { turnWork: Set<unknown> }).turnWork.size > 0, 3_000)
+
+    // Must return rather than hang: the assertion is that this line is reached.
+    await channel.stop()
+
+    expect(stalled).toEqual([1])
   })
 
   it('sends the answer of a turn that commits while stopping', { timeout: 10_000 }, async () => {

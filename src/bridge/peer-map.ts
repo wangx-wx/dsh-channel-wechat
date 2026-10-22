@@ -359,11 +359,14 @@ export class PeerMap {
     // *created* session runs: a resume reads the header it already recorded, so
     // this is the only chance to apply it.
     //
-    // A peer that never switched and a deployment with no directory store take
-    // the synchronous path on purpose. An extra await here is not free: it
-    // delays when the turn starts, and that ordering is observable.
-    const switched = this.currentCwd.has(peerId) || this.generations?.cwd !== undefined
-    const cwd = switched ? (await this.cwdOf(peerId)) ?? this.cwd : this.cwd
+    // Whether the peer actually switched cannot be known without asking the
+    // store, so a deployment that keeps per-peer directories pays one read here
+    // for **every** peer, not only for the ones that switched. The await is
+    // skipped only when there is no such store to ask (`generations.cwd` absent)
+    // - and it is worth naming, because an extra suspension point here delays
+    // when the turn starts, which is observable.
+    const hasCwdStore = this.currentCwd.has(peerId) || this.generations?.cwd !== undefined
+    const cwd = hasCwdStore ? (await this.cwdOf(peerId)) ?? this.cwd : this.cwd
     const resumed = await this.sessionExists(sessionId)
     const handle = resumed
       ? await this.resumeSession(sessionId, agentOptions)

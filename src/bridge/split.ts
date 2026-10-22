@@ -85,15 +85,18 @@ export function splitMessage(text: string, maxChars: number = DEFAULT_MAX_CHARS)
       break
     }
     // What is left of the window once the reopening fence has taken its share.
-    const cut = fitCut(rest, prefix, Math.max(1, maxChars - prefix.length), maxChars)
-    const head = rest.slice(0, cut).trimEnd()
+    const budget = Math.max(1, maxChars - prefix.length)
+    const cut = wholeCharCut(rest, fitCut(rest, prefix, budget, maxChars))
+    const { head, open: insideFence } = headOf(rest, cut, prefix)
     // The ceiling is a hard limit and balancing is not: a configured limit too
     // small to hold the marker at all leaves the fence open rather than
     // producing a piece the transport refuses outright.
-    const open: boolean = fenceCount(`${prefix}${head}`) % 2 === 1
-      && prefix.length + head.length + FENCE_CLOSE.length <= maxChars
+    const open: boolean = insideFence && prefix.length + head.length + FENCE_CLOSE.length <= maxChars
     if (head !== '') parts.push(`${prefix}${head}${open ? FENCE_CLOSE : ''}`)
-    rest = rest.slice(cut).trimStart()
+    // Inside a fence the indentation at the seam is *content*: stripping it turns
+    // an indented line into a different line. Outside one it is layout, and a
+    // piece that opens with blank lines wastes the ceiling it is given.
+    rest = trimSeam(rest.slice(cut), open)
     reopen = open
   }
   return parts
@@ -119,8 +122,7 @@ export function splitMessage(text: string, maxChars: number = DEFAULT_MAX_CHARS)
 function fitCut(text: string, prefix: string, budget: number, maxChars: number): number {
   let cut = findCut(text, budget)
   while (cut > 1) {
-    const head = text.slice(0, cut).trimEnd()
-    const open = fenceCount(`${prefix}${head}`) % 2 === 1
+    const { head, open } = headOf(text, cut, prefix)
     const needed = prefix.length + head.length + (open ? FENCE_CLOSE.length : 0)
     if (needed <= maxChars) return cut
     // Strictly decreasing, so this terminates: the branch is only reached when
@@ -128,6 +130,68 @@ function fitCut(text: string, prefix: string, budget: number, maxChars: number):
     cut = Math.max(1, cut - (needed - maxChars))
   }
   return cut
+}
+
+/**
+ * The finished body of a piece cut at `cut`, and whether it ends inside a fence.
+ *
+ * One function for both because the two answers are coupled: the trailing
+ * whitespace dropped from the body is also what the fence scan sees, so reading
+ * them separately is how a marker ends up counted against text that was removed.
+ * @param text - the text being cut.
+ * @param cut - the index to cut at.
+ * @param prefix - the reopening fence this piece carries, if any.
+ * @returns the trimmed body and whether it leaves a fence open.
+ */
+function headOf(text: string, cut: number, prefix: string): { head: string; open: boolean } {
+  const head = text.slice(0, cut).trimEnd()
+  return { head, open: fenceCount(`${prefix}${head}`) % 2 === 1 }
+}
+
+/**
+ * Move a cut off the middle of a surrogate pair.
+ *
+ * A cut index is a UTF-16 index, so it can land between the two halves of one
+ * character. Each half then travels in a different message and renders as a
+ * replacement character on both sides. Backing off by one puts the whole
+ * character in the next piece.
+ * @param text - the text being cut.
+ * @param cut - the candidate index.
+ * @returns the index, moved back by one when it splits a pair.
+ */
+function wholeCharCut(text: string, cut: number): number {
+  if (cut <= 1 || cut >= text.length) return cut
+  const code = text.charCodeAt(cut - 1)
+  // A high surrogate at `cut - 1` with a low surrogate at `cut` is one character
+  // spanning the cut.
+  const splits = code >= 0xd800 && code <= 0xdbff && isLowSurrogate(text.charCodeAt(cut))
+  return splits ? cut - 1 : cut
+}
+
+/** Whether a code unit is the second half of a surrogate pair. */
+function isLowSurrogate(code: number): boolean {
+  return code >= 0xdc00 && code <= 0xdfff
+}
+
+/**
+ * Drop the whitespace at a cut's leading edge, unless it is content.
+ *
+ * Outside a fence, leading blank lines are layout: they would make the next
+ * piece start with an empty bubble's worth of whitespace. Inside one they are
+ * the code's own indentation, and removing them rewrites the snippet.
+ *
+ * A run of spaces or tabs is kept whole when the piece continues a fenced line,
+ * which is the only case where they are significant; a newline still goes,
+ * because the fence reopening marker already ends the line.
+ * @param tail - the text after the cut.
+ * @param insideFence - whether the previous piece ended inside a fence.
+ * @returns the text the next piece starts with.
+ */
+function trimSeam(tail: string, insideFence: boolean): string {
+  if (!insideFence) return tail.trimStart()
+  // A newline first: it belongs to the marker, not to the code.
+  const dedented = tail.replace(/^[ \t]*\r?\n/u, '')
+  return dedented === '' ? tail.trimStart() : dedented
 }
 
 /**

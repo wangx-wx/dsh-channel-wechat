@@ -72,6 +72,10 @@
 **规则**：所有出站文本经 `splitMessage`（`src/bridge/split.ts`）按 `maxMessageChars` 切分，
 优先在段落 → 行 → 句子 → 子句 → 空白处断开；跨切分的代码围栏在一段末尾补闭合、下一段开头补重开。
 
+**切点不能吃掉缩进，也不能劈开字符**：围栏内的行首空格就是代码本身，所以围栏内的接缝只去掉换行、
+保留缩进（`trimSeam`）；切点若落在代理对中间，会退回一个字符（`wholeCharCut`），否则两段各留半个
+字符，在手机上渲染成两个替换符。
+
 **违反的后果**：传输层拒绝超长 body（不是截断），而微信**没有重放**——超长回答整条丢失。
 围栏被切断则两段都渲染成坏文本。
 
@@ -97,13 +101,26 @@
 
 ### `stop()` 必须先等轮次结算，再 drain 队列
 
-**规则**：`Channel.stop()` 的顺序是 `running` → `turnWork` → `commandWork` → `replies.drain()`。
+**规则**：`Channel.stop()` 的顺序是
+`cards.dispose()` → `controller.abort()` → `turnWork` → `commandWork` → `replies.drain()` → `running`。
 
-**违反的后果**：turn 的 `assistant/message` 在 drain **之后**才提交，回答被塞进一个再也没人等的队列，
-进程退出即丢失。**先 drain 看起来更"安全"，实际正好相反**。
+**两个顺序都不能颠倒**：
+
+- **drain 在轮次之后**。turn 的 `assistant/message` 在 drain **之后**才提交，回答被塞进一个再也没人等的
+  队列，进程退出即丢失。**先 drain 看起来更"安全"，实际正好相反**。
+- **`running` 在 drain 之后**。循环里还在跑的那次 poll 仍可能入队一条回复；先等循环就会让这条回复排在
+  已经执行过的 drain 后面。反过来先 drain 再等循环也不对——所以是 drain 在前、`running` 在后，两者都要，
+  且 `running` 必须在 `turnWork` 之后等待，否则它可能又起一轮。
+
+**卡片必须先释放**：一张还开着的卡正持有它所在的那一轮，而那一轮又持有 `stop()` 要等的 work，
+先等就会把关闭卡在正在被放弃的那张卡上。
 
 **测试形状**：`send` 必须是真异步（含 await），否则发送会在同一批微任务里完成，
 错误顺序也能通过——这条测试的变异验证就是靠这一点才生效的。
+
+**等待是有上限的**：轮次可能卡在永不返回的工具或 provider 调用上，无界等待会把宿主的关停一起挂死
+（桌面端只能杀进程）。所以 `turnWork` 最多等 `turnSettleTimeoutMs`（默认 10s），超时后
+`onStopStalled` 报告放弃了几轮——那一轮的回复反正已经丢了，这行日志是唯一说明。
 
 ### 交互卡：必须 `prepend: true`，且回复要绕过 peer 队列
 

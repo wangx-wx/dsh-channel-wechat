@@ -12,7 +12,7 @@
 | `model` | 字符串 | 空字符串 | 为空时沿用 profile 默认模型；非空时只作用于本插件的微信会话，不影响 GUI。修改对已有会话的**下一条消息**生效。 |
 | `permission` | `read-only`、`workspace-write` 或 `danger-full-access` | `workspace-write` | 新建微信会话使用的 DSH 权限 preset。不会修改 GUI 会话。 |
 | `maxMessageChars` | 数字 | `2000` | 单条微信消息的字符上限。超长回复按段落/行/句子切开分多条发送；跨切分的代码围栏会自动补闭合与重开。 |
-| `minSendIntervalMs` | 数字 | `1000` | 同一 peer 两次发送的最小间隔（毫秒）。服务端对突发发送返回 `ret: -2`，调速是**主动**避免它。 |
+| `minSendIntervalMs` | 数字 | `2000` | 同一 peer 两次发送的最小间隔（毫秒）。服务端对突发发送返回 `ret: -2`，调速是**主动**避免它。`0` 表示不调速。 |
 | `maxThrottleAttempts` | 数字 | `5` | 一条回复被限流（`-2`）时的重试上限，按 2s→4s→8s→16s 退避。**不占用**普通失败重试次数。 |
 
 示例：
@@ -26,7 +26,7 @@
     model: ''
     permission: workspace-write
     maxMessageChars: 2000
-    minSendIntervalMs: 1000
+    minSendIntervalMs: 2000
     maxThrottleAttempts: 5
 ```
 

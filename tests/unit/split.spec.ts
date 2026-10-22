@@ -84,6 +84,32 @@ describe('splitting a reply', () => {
     expect(tiny.every(part => part.length <= 5)).toBe(true)
   })
 
+  it('keeps the indentation of a code line the cut passes', () => {
+    // Inside a fence, leading spaces *are* the code. Stripping them from the
+    // start of the next piece silently rewrites the snippet - a Python body
+    // that comes back at column zero is a different program.
+    const text = `\`\`\`python\ndef f():\n    return 1\n    return 2\n\`\`\``
+    const parts = splitMessage(text, 25)
+    const codeLines = parts
+      .flatMap(part => part.split('\n'))
+      .filter(line => !line.trimStart().startsWith('```'))
+    expect(codeLines).toContain('    return 1')
+    expect(codeLines).toContain('    return 2')
+  })
+
+  it('never cuts a character in half', () => {
+    // A cut index is a UTF-16 index. Landing between the two halves of an emoji
+    // leaves a lone surrogate at the edge of both messages, which renders as a
+    // replacement character on the phone.
+    const text = '😀'.repeat(20)
+    expect(text.length).toBe(40)
+    for (const max of [9, 15, 21]) {
+      const parts = splitMessage(text, max)
+      expect(parts.every(part => part.isWellFormed())).toBe(true)
+      expect(parts.join('')).toBe(text)
+    }
+  })
+
   it('loses no text', () => {
     const text = '第一段。\n\n第二段内容比较长。\n\n第三段。'
     expect(splitMessage(text, 12).join('')).toBe(text.replace(/\s+/gu, ''))

@@ -27,7 +27,9 @@ import { ReplyQueue, extractAssistantText, type ReplySender } from '../bridge/re
 import { createOutbound } from './outbound.ts'
 import { createPeerLifecycle } from './peer-lifecycle.ts'
 import { createCommandContext } from './command-context.ts'
-import { parseCommandLine, routeCommand } from '../bridge/commands.ts'
+import { parseCommandLine } from '../bridge/commands.ts'
+import { isSkillInvocation, routeCommandLine } from './command-routing.ts'
+import { DEFAULT_TURN_SETTLE_TIMEOUT_MS, settleWithin } from './settle.ts'
 import { runLocalCommand, type LocalCommandContext } from '../bridge/local-commands.ts'
 import type { NativeCommandRow } from '../bridge/native-commands.ts'
 import type { ModelCommandContext } from '../bridge/model-commands.ts'
@@ -108,6 +110,10 @@ export interface ChannelOptions {
    * {@link DEFAULT_MAX_CHARS}.
    */
   maxMessageChars?: number
+  /** How long {@link Channel.stop} waits for in-flight turns; see `settle.ts`. */
+  turnSettleTimeoutMs?: number
+  /** Observe turns `stop` gave up waiting for, by count. */
+  onStopStalled?: (pending: number) => void
   /**
    * Smallest gap between two sends to one peer, in milliseconds.
    *
@@ -176,6 +182,17 @@ export interface ChannelOptions {
    * skill registry, where the command says so instead of reporting "none".
    */
   skills?: SkillLister
+  /**
+   * Whether a `/name` line names a user-invocable skill, so it is delivered
+   * rather than answered as an unknown command.
+   *
+   * Takes the same `(agent, cwd)` pair {@link ChannelOptions.skills} does, and
+   * for the same reason: a preset can mount skills the global layer lacks, so a
+   * lookup that ignored the agent would answer for a different catalog than the
+   * one the model sees. Absent means no skills are invocable from chat and
+   * every `/name` stays a command line.
+   */
+  claimsSkill?: (name: string, agent: unknown, cwd: string | undefined) => Promise<boolean>
   /**
    * Provider and model each new session selects.
    *
@@ -345,12 +362,21 @@ export class Channel {
         // immediately rather than behind the turn it may be intended to stop,
         // because anything queued behind that turn can never arrive. What the
         // command itself does is `handleMessage`'s decision.
+        //
+        // A skill invocation is a turn, not a command, so it must be queued
+        // like one - otherwise it could interleave with the turn already
+        // running for this peer. The same predicate `handleCommand` uses
+        // decides, so the two cannot disagree about which lines are commands.
         const text = textOf(message)
-        if (text !== undefined && parseCommandLine(text) !== undefined) {
-          const command = work()
-          this.commandWork.add(command)
-          void command.finally(() => this.commandWork.delete(command))
-          await command
+        const command = text === undefined ? undefined : parseCommandLine(text)
+        // A skill is a turn, not a command, so it must queue like one. This
+        // only classifies; running it is `handleMessage`'s job.
+        const isSkill = command !== undefined && await isSkillInvocation(command.name, this.skillClaim(peerId))
+        if (command !== undefined && !isSkill) {
+          const ran = work()
+          this.commandWork.add(ran)
+          void ran.finally(() => this.commandWork.delete(ran))
+          await ran
           return
         }
         // A card reply bypasses the queue for a sharper reason than a command
@@ -454,7 +480,12 @@ export class Channel {
     this.controller?.abort()
     // The turns it started: each one enqueues its answer as it commits, so the
     // drain below has to run after this rather than before it.
-    await Promise.allSettled([...this.turnWork])
+    // Bounded, and giving up is reported: the reply is lost either way, and
+    // only that line says why the user saw nothing.
+    const pending = [...this.turnWork]
+    if (!await settleWithin(pending, this.options.turnSettleTimeoutMs ?? DEFAULT_TURN_SETTLE_TIMEOUT_MS)) {
+      this.options.onStopStalled?.(pending.length)
+    }
     await Promise.allSettled([...this.commandWork])
     // Now the queue holds everything that will ever be queued for this run.
     await this.replies.drain()
@@ -538,16 +569,15 @@ export class Channel {
     })
   }
   /**
-   * Answer one slash command for a peer.
-   *
-   * Deliberately outside the peer's queue, and deliberately not delivered to
-   * the model: the reply is the command's own output, so no turn runs and the
-   * answer goes straight back out.
+   * Answer one slash command for a peer, outside the peer's queue and without
+   * delivering it to the model: the reply is the command's own output.
    * @param peerId - the peer whose message carried the command.
    * @param text - the command line.
+   * @returns whether the line was a command, rather than a skill invocation to
+   *   be delivered as a turn.
    */
-  private async handleCommand(peerId: string, text: string): Promise<void> {
-    const outcome = await routeCommand(text, {
+  private async handleCommand(peerId: string, text: string): Promise<boolean> {
+    const { outcome } = await routeCommandLine(text, {
       handleLocal: command => runLocalCommand(command, this.localCommandContext(peerId)),
       executeNative: async line => {
         const execute = this.options.executeNativeCommand
@@ -558,9 +588,30 @@ export class Channel {
         const handle = await this.peers.sessionFor(peerId)
         return execute(line, handle.agent)
       },
+      claimsSkill: this.skillClaim(peerId),
     })
-    if (outcome === undefined) return
+    // `undefined` means the line belongs to the agent - a skill invocation. The
+    // caller delivers it like ordinary text rather than answering it here.
+    if (outcome === undefined) return false
     this.enqueueReply(peerId, outcome.text ?? `${outcome.kind === 'success' ? '完成' : '失败'}`)
+    return true
+  }
+
+  /**
+   * The skill predicate for one peer, bound to its conversation.
+   *
+   * A preset can mount skills the global layer lacks, so the answer needs the
+   * peer's live agent and directory - not just the line.
+   * @param peerId - the peer whose line is being classified.
+   * @returns the predicate, or `undefined` when this deployment has no skills.
+   */
+  private skillClaim(peerId: string): ((name: string) => Promise<boolean>) | undefined {
+    const claims = this.options.claimsSkill
+    if (claims === undefined) return undefined
+    return async name => {
+      const handle = this.peers.handleFor(peerId)
+      return await claims(name, handle?.agent, await this.peers.cwdFor(peerId))
+    }
   }
 
   /**
@@ -628,9 +679,13 @@ export class Channel {
     // A command is answered here rather than delivered: the channel knows the
     // answer, so running a turn for it would burn the user's tokens answering
     // a question this plugin already knows.
+    //
+    // A `/name` that turns out to be a **skill** is the exception, and the
+    // reason the answer is a boolean: the harness recognizes that gesture by
+    // scanning the delivered message, so the line has to reach the agent or the
+    // invocation `/skills` advertises can never work from WeChat.
     if (parseCommandLine(parsed.text) !== undefined) {
-      await this.handleCommand(parsed.peerId, parsed.text)
-      return
+      if (await this.handleCommand(parsed.peerId, parsed.text)) return
     }
 
     // A card reply is answered here too, and for a stronger reason: it is the

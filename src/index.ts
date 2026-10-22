@@ -22,7 +22,7 @@ import { runStartupAction } from './login-command.ts'
 import { claimAppArgument } from './cmdline.ts'
 import { createApiClient } from './wechat/api.ts'
 import type { AgentPresetsLike } from './bridge/peer-map.ts'
-import { createNativeCommandExecutor, createNativeCommandLister, createSkillLister, type CommandRuntimeLike, type SkillRegistryLike } from './bridge/native-commands.ts'
+import { createNativeCommandExecutor, createNativeCommandLister, createSkillClaimer, createSkillLister, type CommandRuntimeLike, type SkillRegistryLike } from './bridge/native-commands.ts'
 import { CursorStore } from './channel/cursor-store.ts'
 import { PeerSessionStore } from './channel/peer-session-store.ts'
 import { createSingleRun, type SingleRun } from './channel/single-run.ts'
@@ -163,8 +163,16 @@ export interface Config {
 /** Default ceiling for one outbound message, in characters. */
 const DEFAULT_MAX_CHARS = 2_000
 
-/** Default gap between two sends to one peer, in milliseconds. */
-const DEFAULT_MIN_SEND_INTERVAL_MS = 1_000
+/**
+ * Default gap between two sends to one peer, in milliseconds.
+ *
+ * 2000 rather than a rounder 1000 because that is the number the evidence in
+ * `docs/invariants.md` supports: a burst at 1s pacing is what the server
+ * refused, and the reference implementation that survives the same load paces
+ * at 2s. A split answer sends several messages back to back, so this gap is
+ * paid on exactly the answers most likely to be refused.
+ */
+const DEFAULT_MIN_SEND_INTERVAL_MS = 2_000
 
 /** Default number of throttled attempts for one reply. */
 const DEFAULT_MAX_THROTTLE_ATTEMPTS = 5
@@ -197,14 +205,19 @@ export const Config = z.object({
   // The transport refuses a body past its own limit, so an over-long answer is
   // lost rather than truncated. Defaulted to a value under both reference
   // implementations' limits; a profile may raise it, not remove it.
-  maxMessageChars: z.number().default(DEFAULT_MAX_CHARS).volatile(),
+  maxMessageChars: z.number().min(1).default(DEFAULT_MAX_CHARS).volatile(),
   // Pacing, in milliseconds between two sends to one peer. Non-zero by default
   // because the server answers a burst with `ret: -2` and that answer arrives
   // only after the burst was already refused.
-  minSendIntervalMs: z.number().default(DEFAULT_MIN_SEND_INTERVAL_MS).volatile(),
+  // `min(0)` rather than `min(1)`: zero is a deliberate "do not pace me", and
+  // the retry policy still covers the throttle it then hits. A negative gap is
+  // not a choice, it is a typo, and `Math.max(0, ...)` in the queue would hide it.
+  minSendIntervalMs: z.number().min(0).default(DEFAULT_MIN_SEND_INTERVAL_MS).volatile(),
   // Separate from the ordinary retry count: a throttle is the server asking for
   // a slower sender, and the same message goes through once the sender waits.
-  maxThrottleAttempts: z.number().default(DEFAULT_MAX_THROTTLE_ATTEMPTS).volatile(),
+  // At least one: zero attempts would abandon a throttled reply on its first
+  // refusal, which is exactly the silent drop this policy exists to prevent.
+  maxThrottleAttempts: z.number().min(1).default(DEFAULT_MAX_THROTTLE_ATTEMPTS).volatile(),
 })
 
 /**
@@ -634,7 +647,12 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
     // `/skills` lists names only. Read through `get` rather than injected: a
     // deployment that composes no skill registry is supported, and `inject`
     // would park this row there instead of letting the command report it.
-    ...(skillsOf(ctx) === undefined ? {} : { skills: createSkillLister({ skills: skillsOf(ctx)! }) }),
+    ...(skillsOf(ctx) === undefined ? {} : {
+      skills: createSkillLister({ skills: skillsOf(ctx)! }),
+      // The same registry, read the same way, so a name `/skills` showed is a
+      // name the router delivers instead of answering "未知命令".
+      claimsSkill: createSkillClaimer({ skills: skillsOf(ctx)! }),
+    }),
     // `/models` reads the live registry and `/model` writes this plugin's own two
     // fields, so a switch here cannot move the GUI's model. `contextLlm` rather
     // than `inject`: a deployment with no LLM registry is supported, and the
@@ -649,6 +667,12 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
     // delivered.
     onUnreadableQuote: detail => { report('引用的消息内容未能读取', detail) },
     onReplyError: (error, peerId) => { report(`reply to ${peerId} failed`, error) },
+    // A turn that never settles must not hang the host's shutdown, so the wait
+    // is bounded - but giving up silently would leave the user waiting for an
+    // answer that is never coming with nothing anywhere saying why.
+    onStopStalled: pending => {
+      report(`shutdown gave up waiting for ${String(pending)} turn(s)`, 'their replies will not be sent')
+    },
     // Read once per run, like the other config values: a change made in the page
     // applies to the runs started after it.
     maxMessageChars: config.maxMessageChars.get(),

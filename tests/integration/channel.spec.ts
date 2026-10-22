@@ -328,6 +328,10 @@ describe('a profile boot with the login action', () => {
     const asked: { cwd?: string }[] = []
     const live = new Map<string, unknown>()
     let polls = 0
+    /** Set once the switch is on disk, so the next message cannot race it. */
+    let switched = false
+    /** Delivered exactly once: a repeat would open a second session. */
+    let served = false
 
     vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
       if (String(url).includes('getupdates')) {
@@ -398,6 +402,10 @@ describe('a profile boot with the login action', () => {
     const asked: { cwd?: string }[] = []
     const live = new Map<string, unknown>()
     let polls = 0
+    /** Set once the switch is on disk, so the next message cannot race it. */
+    let switched = false
+    /** Delivered exactly once: a repeat would open a second session. */
+    let served = false
 
     vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
       if (String(url).includes('getupdates')) {
@@ -410,7 +418,21 @@ describe('a profile boot with the login action', () => {
               context_token: 'ctx-1',
               item_list: [{ type: 1, text_item: { text: `/cwd ${target}` } }],
             }]
-            : [],
+            // An ordinary message afterwards, because a session is created when
+            // a message arrives - not by the switch itself. Without it the
+            // second half of the invariant (the *next* session records the new
+            // directory) would have nothing to observe.
+            //
+            // Held back until the switch is on disk: a command and a message
+            // from one poll batch are handled concurrently, so handing this
+            // over earlier would race the switch rather than test it.
+            : switched && !served
+              ? (served = true, [{
+                message_id: 2, from_user_id: 'user-7', message_type: 1,
+                context_token: 'ctx-1',
+                item_list: [{ type: 1, text_item: { text: 'hi' } }],
+              }])
+              : [],
           get_updates_buf: `c${polls}`,
         }), { status: 200 })
       }
@@ -445,6 +467,12 @@ describe('a profile boot with the login action', () => {
       // Read while DSH_HOME still points at this test's home: the store resolves
       // it per call, so a read after the restore would consult the real profile.
       stored = await new PeerSessionStore().cwd('user-7')
+      switched = true
+      // The session created after the switch has to record the new directory.
+      // Collected by the fake registry above and never asserted before, which
+      // left this half of the invariant unverified: the store could have been
+      // written and the session still created in the old place.
+      await until(async () => asked.some(meta => meta.cwd === stored), 15_000)
     } finally {
       await ctx.fiber.dispose()
       rmSync(target, { recursive: true, force: true })
@@ -456,6 +484,9 @@ describe('a profile boot with the login action', () => {
     // the temporary directory rather than the string this test typed.
     expect(stored).toBeTruthy()
     expect(stored).toContain('dsh-wechat-target-')
+    // The directory reached the *new session's* header, which is the only place
+    // it can live: a session's `cwd` is immutable once written.
+    expect(asked.at(-1)).toEqual({ cwd: stored })
   }, 30_000)
 
   it('answers /skills with the names the harness skill registry reports', async () => {
@@ -538,6 +569,106 @@ describe('a profile boot with the login action', () => {
     expect(answer).toContain('/release-workflow')
     // A skill a human cannot invoke must not be advertised: it cannot be typed.
     expect(answer).not.toContain('model-only')
+  }, 30_000)
+
+  it('delivers /skill-name to the agent instead of answering it as an unknown command', async () => {
+    // `/skills` advertises "发送 `/技能名` 可直接调用", and the harness implements
+    // that by scanning the **delivered** user message at `agent/pre-step`. A
+    // line the channel answers as a command never reaches that scan, so the
+    // advertised gesture could not work from WeChat at all.
+    //
+    // Asserted through the real `apply` because `claimsSkill` is wired there:
+    // the channel's own suites inject the predicate themselves, so nothing in
+    // them can observe whether production supplies one.
+    const previous = process.env['DSH_HOME']
+    const home = tempHome('dsh-wechat-skillcall-')
+    process.env['DSH_HOME'] = home
+
+    /** Text delivered to the agent, one entry per message. */
+    const delivered: string[] = []
+    const sent: string[] = []
+    let polls = 0
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const href = String(url)
+      if (href.includes('getupdates')) {
+        polls += 1
+        return new Response(JSON.stringify({
+          ret: 0,
+          msgs: polls === 1
+            ? [{
+              message_id: 1, from_user_id: 'user-7', message_type: 1,
+              context_token: 'ctx-1',
+              item_list: [{ type: 1, text_item: { text: '/release-workflow' } }],
+            }]
+            : [],
+          get_updates_buf: `c${polls}`,
+        }), { status: 200 })
+      }
+      if (href.includes('sendmessage')) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          msg?: { item_list?: { text_item?: { text?: string } }[] }
+        }
+        const text = body.msg?.item_list?.[0]?.text_item?.text
+        if (typeof text === 'string') sent.push(text)
+      }
+      return new Response(JSON.stringify({ ret: 0 }), { status: 200 })
+    }) as unknown as typeof fetch)
+
+    const ctx = new Context()
+    provideCmdline(ctx, { args: [], exit: () => {}, ready: { commit() {}, await: async () => {} } } as never)
+    await ctx.plugin(CredentialsLocal as never, {} as never)
+    await ctx.plugin(CommandRuntime)
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
+    })
+    // `get` answers with the live agent, as the real registry does: the channel
+    // checks liveness before delivering, and a fake that always answered
+    // `undefined` would make every delivery look like it reached a dead session.
+    const live = new Map<string, unknown>()
+    ctx.provide('agents', {
+      async create({ sessionId }: { sessionId: string }) {
+        const agent = {
+          id: sessionId,
+          followup: (message: { content: readonly { type: string; text?: string }[] }) => {
+            delivered.push(message.content.map(block => block.text ?? '').join(''))
+          },
+          whenIdle: async () => {},
+        }
+        live.set(sessionId, agent)
+        return { agent, dispose: async () => void live.delete(sessionId) }
+      },
+      async resume() { throw new Error('no persisted session') },
+      get: (sessionId: string) => live.get(sessionId),
+    })
+    // The real registry shape, so the claimer's filter runs on real fields.
+    ctx.provide('skills', {
+      async list() {
+        return [
+          { name: 'release-workflow', description: 'x', invocation: { modelInvocable: true, userInvocable: true } },
+          { name: 'model-only', description: 'y', invocation: { modelInvocable: true, userInvocable: false } },
+        ]
+      },
+    })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
+
+    try {
+      await until(async () => delivered.length > 0, 5_000)
+      // Give a wrongly routed line time to produce its own reply, so the
+      // negative assertion below is not just racing the loop.
+      await new Promise(resolve => setTimeout(resolve, 100))
+    } finally {
+      await ctx.fiber.dispose()
+      if (previous === undefined) delete process.env['DSH_HOME']
+      else process.env['DSH_HOME'] = previous
+    }
+
+    // The line reaches the agent verbatim, leading slash included: that is the
+    // gesture the harness scans for.
+    expect(delivered).toEqual(['/release-workflow'])
+    // And nothing answered it locally.
+    expect(sent.join('\n')).not.toContain('未知命令')
   }, 30_000)
 
   it("mounts the profile's agent preset on a new session", async () => {

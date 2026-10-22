@@ -384,7 +384,11 @@ describe('the session-wide choice on an approval card', () => {
     // pass a weaker assertion while changing nothing.
     const widened = world.permissionCalls.find(call => call.preset === 'danger-full-access')
     expect(widened?.session).toBe(sessionOf(world.ctx))
-    expect(world.sent.at(-1)?.text).toMatch(/不再弹出审批卡/u)
+    // Waited for rather than read off the end of the list. The confirmation goes
+    // through the same paced queue as every other outbound text, so it lands
+    // after the gap the queue enforces - asserting immediately would be a race
+    // that happens to pass at a short enough gap.
+    await until(() => world.sent.some(entry => /不再弹出审批卡/u.test(entry.text)))
   }, 30_000)
 })
 

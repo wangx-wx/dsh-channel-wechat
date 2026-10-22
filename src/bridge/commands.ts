@@ -77,13 +77,29 @@ export interface RouteOptions {
    * @returns its outcome, or `undefined` when the harness does not know it.
    */
   executeNative: (line: string) => Promise<CommandOutcome | undefined>
+  /**
+   * Whether this name is a user-invocable skill, so the line must be delivered
+   * rather than answered.
+   *
+   * A skill is not a command: the harness recognizes `/name` by scanning the
+   * *delivered user message* at `agent/pre-step`. A line claimed here never
+   * reaches that scan, so without this hook the gesture `/skills` advertises
+   * could never work from WeChat.
+   * @returns true when the caller should deliver the line to the agent.
+   */
+  claimSkill?: (command: ParsedCommand) => Promise<boolean>
 }
 
 /**
  * Route one piece of message text.
+ *
+ * A skill name is checked **last**, after the local and native surfaces: `/stop`
+ * means stop even if a skill is also called `stop`, and a skill cannot shadow a
+ * harness command either. Only a line nothing else claimed is offered to the
+ * skill gesture, which is what keeps a typo a typo.
  * @param text - the message text.
- * @param options - the two handlers.
- * @returns the outcome, or `undefined` when this is ordinary text.
+ * @param options - the handlers.
+ * @returns the outcome, or `undefined` when the line belongs to the agent.
  */
 export async function routeCommand(text: string, options: RouteOptions): Promise<CommandOutcome | undefined> {
   const command = parseCommandLine(text)
@@ -98,5 +114,6 @@ export async function routeCommand(text: string, options: RouteOptions): Promise
   // silently swallowing what the user typed.
   const outcome = await options.executeNative(text)
   if (outcome !== undefined) return outcome
+  if (options.claimSkill !== undefined && await options.claimSkill(command)) return undefined
   return { kind: 'error', text: `未知命令：/${command.name}` }
 }
