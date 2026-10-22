@@ -75,6 +75,54 @@ describe('resolving the checkout to launch', () => {
     expect(() => launcherCommand('', win)).toThrowError(/DSH_CHECKOUT/u)
   })
 
+  it('spawns the packaged shim through cmd on Windows', () => {
+    // Windows ships a `.cmd` wrapper, and `spawn` does not consult PATHEXT, so a
+    // bare path would fail with ENOENT even though the file exists. Naming the
+    // interpreter is what makes the packaged application usable there at all -
+    // without it, every integration suite on Windows needs a source checkout.
+    const shim = 'C:\\Users\\me\\AppData\\Local\\Programs\\DeepSeek Harness\\resources\\runtime\\cli\\bin\\dsh.cmd'
+    const win = {
+      exists: existing([shim]),
+      platform: 'win32' as NodeJS.Platform,
+      repoRoot: REPO_ROOT,
+      env: { DSH_PACKAGED_SHIM: shim, ComSpec: 'C:\\Windows\\System32\\cmd.exe' },
+    }
+
+    const command = launcherCommand('', win)
+
+    expect(command[0]).toBe('C:\\Windows\\System32\\cmd.exe')
+    expect(command[1]).toBe('/c')
+    expect(command[2]).toBe(shim)
+  })
+
+  it('finds the packaged shim at the per-user install location by default', () => {
+    // The ordinary Windows layout: `%LOCALAPPDATA%\Programs\DeepSeek Harness`.
+    // A user who installed it there needs no environment variable at all.
+    const local = 'C:\\Users\\me\\AppData\\Local'
+    const shim = join(local, 'Programs', 'DeepSeek Harness', 'resources', 'runtime', 'cli', 'bin', 'dsh.cmd')
+    const win = {
+      exists: existing([shim]),
+      platform: 'win32' as NodeJS.Platform,
+      repoRoot: REPO_ROOT,
+      env: { LOCALAPPDATA: local },
+    }
+
+    expect(launcherCommand('', win)).toContain(shim)
+  })
+
+  it('does not invent a packaged shim that is not there', () => {
+    // A named-but-absent shim must fall through to the actionable error rather
+    // than being spawned and failing with a path the user cannot act on.
+    const win = {
+      exists: existing([]),
+      platform: 'win32' as NodeJS.Platform,
+      repoRoot: REPO_ROOT,
+      env: { DSH_PACKAGED_SHIM: 'C:\\nowhere\\dsh.cmd', LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local' },
+    }
+
+    expect(() => launcherCommand('', win)).toThrowError(/DSH_CHECKOUT[^]*DSH_PACKAGED_SHIM/u)
+  })
+
   it('names DSH_CHECKOUT and the expected build artefact when nothing can be found', () => {
     const nowhere = { exists: existing([]), platform: 'win32' as NodeJS.Platform, repoRoot: REPO_ROOT }
     expect(() => launcherCommand('', nowhere)).toThrowError(/DSH_CHECKOUT[^]*pnpm build/u)

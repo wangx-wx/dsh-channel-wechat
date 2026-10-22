@@ -22,7 +22,59 @@ import { fileURLToPath } from 'node:url'
 export const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url))
 
 /** The macOS shim the packaged desktop app ships for booting without Electron. */
-const PACKAGED_SHIM = '/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh'
+const PACKAGED_SHIM_DARWIN = '/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh'
+
+/**
+ * The packaged desktop app's launcher on Windows.
+ *
+ * Windows ships a `.cmd` wrapper beside the macOS shell shim: it sets
+ * `ELECTRON_RUN_AS_NODE=1` and runs the packaged CLI with the application's own
+ * executable, which is why the packaged app can serve the integration suites
+ * there at all. The concrete path is a per-environment default; see
+ * {@link packagedShimWin32}.
+ */
+
+/**
+ * The packaged shim this host can run, when the environment names one.
+ *
+ * `DSH_PACKAGED_SHIM` exists because the packaged app has no single install
+ * location: a portable copy, a per-machine install, and a per-user install all
+ * differ, and a hardcoded guess would silently pick the wrong one - or, worse,
+ * pick an older one than the user is testing against.
+ * @param platform - the host platform.
+ * @param exists - whether a path exists.
+ * @param env - the environment to read the override from.
+ * @returns the shim path, or undefined when this host has no usable one.
+ */
+function packagedShim(
+  platform: NodeJS.Platform,
+  exists: (path: string) => boolean,
+  env: Record<string, string | undefined>,
+): string | undefined {
+  const explicit = env['DSH_PACKAGED_SHIM']
+  if (explicit !== undefined && explicit !== '') return exists(explicit) ? explicit : undefined
+  const candidate = platform === 'darwin'
+    ? PACKAGED_SHIM_DARWIN
+    : platform === 'win32'
+      ? packagedShimWin32(env)
+      : undefined
+  if (candidate === undefined) return undefined
+  return exists(candidate) ? candidate : undefined
+}
+
+/**
+ * The default Windows shim path for this environment.
+ *
+ * `%LOCALAPPDATA%\Programs\DeepSeek Harness` is where the per-user installer
+ * puts it. The path is only a guess at the ordinary layout, which is why the
+ * override exists.
+ * @param env - the environment carrying `LOCALAPPDATA` / `USERPROFILE`.
+ * @returns the candidate path.
+ */
+function packagedShimWin32(env: Record<string, string | undefined>): string {
+  const local = env['LOCALAPPDATA'] ?? join(env['USERPROFILE'] ?? '', 'AppData', 'Local')
+  return join(local, 'Programs', 'DeepSeek Harness', 'resources', 'runtime', 'cli', 'bin', 'dsh.cmd')
+}
 
 /** What the search consults; injected so each branch is testable. */
 export interface LauncherDeps {
@@ -32,6 +84,15 @@ export interface LauncherDeps {
   readonly platform: NodeJS.Platform
   /** Repository root, so the sibling checkout is found without a hardcoded home. */
   readonly repoRoot: string
+  /**
+   * The environment the packaged-shim lookup reads.
+   *
+   * Injected rather than read from `process.env` directly: the shim's location
+   * is a per-installation fact, so a test that wants to pin the search order
+   * must be able to say where the shim is without touching the developer's own
+   * installation.
+   */
+  readonly env?: Record<string, string | undefined>
 }
 
 /**
@@ -70,8 +131,9 @@ export function resolveCheckout(env: Record<string, string | undefined>, deps: L
   const sibling = join(deps.repoRoot, '..', 'deepseek-harness')
   if (deps.exists(launcherPath(sibling))) return sibling
 
-  // No launcher under any checkout; the packaged app may still serve on macOS,
-  // where it has no checkout to report.
+  // No launcher under any checkout. The packaged app may still serve, but it
+  // carries no sources, so the answer is the empty string either way -
+  // `launcherCommand` is what decides whether a packaged shim can be spawned.
   return ''
 }
 
@@ -108,8 +170,13 @@ export function requireCheckout(env: Record<string, string | undefined>, deps: L
  * The command that runs the launcher, as `[executable, ...leading arguments]`.
  *
  * A checkout is run through `node apps/cli/lib/bin.js`; the packaged application
- * ships a `dsh` shim that boots Electron as Node instead. Kept as a command plus
- * arguments so both are spawned the same way.
+ * ships a shim that boots Electron as Node instead - a `dsh` shell script on
+ * macOS, a `dsh.cmd` wrapper on Windows. Kept as a command plus arguments so
+ * every form is spawned the same way.
+ *
+ * A `.cmd` file cannot be spawned directly on Windows: `spawn` does not consult
+ * `PATHEXT`, so the command has to go through `cmd /c`. That is what makes the
+ * packaged application usable for these suites there rather than only on macOS.
  *
  * @param checkout - the directory {@link resolveCheckout} chose.
  * @param deps - filesystem and platform facts.
@@ -119,7 +186,15 @@ export function requireCheckout(env: Record<string, string | undefined>, deps: L
 export function launcherCommand(checkout: string, deps: LauncherDeps): readonly string[] {
   const launcher = launcherPath(checkout)
   if (deps.exists(launcher)) return [process.execPath, launcher]
-  if (deps.platform === 'darwin' && deps.exists(PACKAGED_SHIM)) return [PACKAGED_SHIM]
+
+  const shim = packagedShim(deps.platform, deps.exists, deps.env ?? {})
+  if (shim !== undefined) {
+    // Windows needs the interpreter named explicitly; on macOS the shim is an
+    // executable shell script and runs on its own.
+    return deps.platform === 'win32'
+      ? [deps.env?.['ComSpec'] ?? process.env['ComSpec'] ?? 'cmd.exe', '/c', shim]
+      : [shim]
+  }
 
   // Distinguish "there is a checkout, it just is not built" from "there is no
   // checkout at all": the first is the common case on a fresh clone, and its
@@ -129,7 +204,8 @@ export function launcherCommand(checkout: string, deps: LauncherDeps): readonly 
     ? `A checkout exists at ${sibling} but has not been built (${launcherPath(sibling)} is missing).\n` +
       'Run `pnpm install && pnpm build` in it, or set DSH_CHECKOUT to a checkout that has been built.'
     : 'Set DSH_CHECKOUT to a source checkout that has been built (it must contain apps/cli/lib/bin.js, ' +
-      'so run `pnpm install && pnpm build` in it).'
+      'so run `pnpm install && pnpm build` in it), or set DSH_PACKAGED_SHIM to the packaged ' +
+      'application\'s own launcher.'
 
   throw new Error(`No DeepSeek Harness launcher was found for the integration suites.\n${hint}`)
 }
@@ -139,4 +215,5 @@ export const REAL_DEPS: LauncherDeps = {
   exists: existsSync,
   platform: process.platform,
   repoRoot: REPO_ROOT,
+  env: process.env,
 }

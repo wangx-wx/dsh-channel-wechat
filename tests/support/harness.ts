@@ -92,6 +92,18 @@ function readFileExists(path: string): boolean {
 
 /**
  * Link this repository into the profile as if it had been installed from npm.
+ *
+ * A directory symlink is the ordinary form and the cheapest: the profile then
+ * reads this working tree directly, so a test sees the code under test rather
+ * than a copy that could drift from it.
+ *
+ * **Windows without the right to create symlinks falls back to a junction.**
+ * Creating a symlink there needs either Administrator or Developer Mode, and a
+ * contributor running as an ordinary user has neither - `symlinkSync` then
+ * throws EPERM and every suite that links the repository dies at setup. A
+ * junction is the same directory redirect and needs no privilege; it cannot
+ * point at a file or a network path, neither of which this needs.
+ *
  * @param harness - the isolated home to mutate.
  * @returns the package name the profile now resolves.
  */
@@ -99,8 +111,26 @@ export function linkRepoAsBundle(harness: TestHarness): string {
   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')) as { name: string }
   const modules = join(harness.profileDir, 'node_modules')
   mkdirSync(modules, { recursive: true })
-  symlinkSync(REPO_ROOT, join(modules, manifest.name), 'dir')
+  const target = join(modules, manifest.name)
+  try {
+    symlinkSync(REPO_ROOT, target, 'dir')
+  } catch (error: unknown) {
+    // Only the privilege failure is retried; any other reason to fail is a
+    // real problem and retrying would hide it behind a different message.
+    if (process.platform !== 'win32' || !hasCode(error, 'EPERM')) throw error
+    symlinkSync(REPO_ROOT, target, 'junction')
+  }
   return manifest.name
+}
+
+/**
+ * Whether a caught value carries one error code.
+ * @param error - the caught value.
+ * @param code - the code to test for.
+ * @returns true when the value is an Error with that code.
+ */
+function hasCode(error: unknown, code: string): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === code
 }
 
 /**

@@ -20,11 +20,12 @@ pnpm test:all          # 两个项目
 
 干净 checkout 首次执行 `pnpm typecheck` 可能因 `exports` 指向尚未生成的 `lib/*.d.ts` 失败；先运行 `pnpm build`。
 
-集成测试需要一个**已构建**的 DeepSeek Harness checkout。按以下顺序查找，第一个能找到 `apps/cli/lib/bin.js` 的胜出：
+集成测试需要一个 DeepSeek Harness launcher。按以下顺序查找：
 
-1. `DSH_CHECKOUT` 指定的目录
-2. 本仓库同级的 `deepseek-harness` 目录（`../deepseek-harness`）
-3. macOS 上打包的 `DeepSeek Harness.app`（仅 `darwin`）
+1. `DSH_CHECKOUT` 指定的目录，且其中有构建产物 `apps/cli/lib/bin.js`
+2. 本仓库同级的 `deepseek-harness` 目录（`../deepseek-harness`），同样要求已构建
+3. **打包版应用自带的 shim**：macOS 上是 `/Applications/DeepSeek Harness.app/.../bin/dsh`，
+   Windows 上是 `%LOCALAPPDATA%\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd`
 
 ```bash
 # 用同级的 deepseek-harness checkout，无需任何环境变量
@@ -44,9 +45,26 @@ pnpm install
 pnpm build
 ```
 
-测试把 `DSH_HOME` 指向临时目录，不会修改开发者正在使用的 profile。只有 macOS 才会回退到 `DeepSeek Harness.app` 中的 dsh shim；其他平台找不到 checkout 时直接报错。
+**没有源码 checkout 时可以用打包版应用**，它足以跑大部分集成套件。安装位置不在默认路径时用
+`DSH_PACKAGED_SHIM` 指过去：
 
-`client-half-runs.spec.ts` 要从 checkout 里读 React 和主题样式表，而打包端不带源码，所以它要求一个真实的 checkout：只找到 `DeepSeek Harness.app` 时该套件直接报错并提示设置 `DSH_CHECKOUT`，不会因为路径拼不出来就整组跳过——跳过的用例在报告里看起来和通过一样。
+```powershell
+$env:DSH_PACKAGED_SHIM = 'D:\soft\dsh\resources\runtime\cli\bin\dsh.cmd'
+pnpm test:integration
+```
+
+打包版的 Windows shim 是 `.cmd`，`spawn` 不查 `PATHEXT`，所以测试通过 `cmd /c` 调用它；
+这一点由 `tests/unit/harness-launcher.spec.ts` 钉住。
+
+测试把 `DSH_HOME` 指向临时目录，不会修改开发者正在使用的 profile。
+
+**Windows 非管理员下链接仓库用 junction 回退**：`linkRepoAsBundle` 先试目录符号链接，
+`EPERM`（普通用户没有创建符号链接的权限，除非开了开发者模式）时改试 junction。两者都是目录重定向，
+junction 不需要特权。
+
+`client-half-runs.spec.ts` 要从 checkout 里读 React 和主题样式表，而打包端不带源码，所以它**要求一个
+真实的源码 checkout**：只找到打包版时该套件直接报错并提示设置 `DSH_CHECKOUT`，不会因为路径拼不出来
+就整组跳过——跳过的用例在报告里看起来和通过一样。
 
 ## 持续集成
 
