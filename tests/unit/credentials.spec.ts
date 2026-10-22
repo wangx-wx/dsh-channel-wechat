@@ -14,7 +14,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { isCredentialKeySegment } from '@deepseek-ai/dsh-credentials'
 import CredentialsLocal from '@deepseek-ai/dsh-credentials-local'
 import { afterEach, describe, expect, it } from 'vitest'
-import { forgetAccount, listAccounts, loadAccount, saveAccount, WECHAT_CREDENTIAL_SCOPE } from '../../src/credentials.ts'
+import { enumeratesAccounts, forgetAccount, listAccounts, loadAccount, saveAccount, WECHAT_CREDENTIAL_SCOPE } from '../../src/credentials.ts'
 
 /** One isolated harness home plus its mounted provider. */
 interface Bench {
@@ -337,6 +337,23 @@ describe('forgetting a login', () => {
 })
 
 describe('a provider that cannot enumerate', () => {
+  it('says so, so a caller can tell it apart from having no login', async () => {
+    // An empty list is the right answer for this provider, but it is not the
+    // same fact as "the user never logged in": the login is stored and readable,
+    // the channel just cannot find it. A caller that only sees the empty list
+    // stops polling without saying why, which is what happened on the live host.
+    const { ctx } = await mount()
+    expect(enumeratesAccounts(ctx)).toBe(true)
+
+    Object.defineProperty(ctx.credentials as object, 'listRecords', {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    })
+
+    expect(enumeratesAccounts(ctx)).toBe(false)
+  })
+
   it('reports no accounts instead of taking the channel down', async () => {
     // A live host exposed the record operations without `listRecords`, so
     // `runChannel` threw `listRecords is not a function` before the loop ever

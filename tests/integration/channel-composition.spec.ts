@@ -262,6 +262,31 @@ describe('the answer comes back out', () => {
 
     expect(sent).toEqual([])
   })
+
+  it('sends nothing for the partial message an interrupted turn commits', async () => {
+    // `/stop` aborts the stream, and the agent loop settles what it had with
+    // `interrupted: true`. Routing that through the channel is what the user
+    // would actually receive, so the silence has to hold here, not only in the
+    // extractor's own unit test.
+    const f = fakeRegistry()
+    const { channel, sent } = build({
+      registry: f,
+      messages: [{ message_id: 1, from_user_id: 'user-7', message_type: 1, item_list: [{ type: 1, text_item: { text: 'hi' } }] }],
+    })
+
+    await channel.run()
+    await channel.settled()
+    channel.onSessionEvent('channel-wechat-user-7', {
+      type: 'assistant/message',
+      data: {
+        message: { content: [{ type: 'text', text: 'I was about to expl' }] },
+        interrupted: true,
+      },
+    })
+    await channel.settled()
+
+    expect(sent).toEqual([])
+  })
 })
 
 describe('slash commands', () => {

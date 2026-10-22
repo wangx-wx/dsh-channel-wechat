@@ -42,11 +42,22 @@ const BREAK_PATTERNS: readonly RegExp[] = [
 /** A fence marker, matched at a line start so inline backticks are ignored. */
 const FENCE_LINE = /(?:^|\n)[ \t]*```/gu
 
+/** Appended to a piece that ends inside a fence, to close it. */
+const FENCE_CLOSE = '\n```'
+
+/** Prepended to the piece after one that ended inside a fence, to reopen it. */
+const FENCE_OPEN = '```\n'
+
 /**
  * Split one reply into messages of at most `maxChars`.
  *
  * Returns the input unchanged when it already fits, so a caller does not have to
  * special-case the ordinary short reply.
+ *
+ * Fences are accounted for **while** the cut is chosen, not afterwards. Adding a
+ * closing marker to a finished piece pushed it past the ceiling, and the
+ * transport refuses an over-long body rather than truncating it - so the piece
+ * was lost outright.
  * @param text - the reply to send.
  * @param maxChars - per-message ceiling; defaults to {@link DEFAULT_MAX_CHARS}.
  * @returns one or more non-empty messages, in order.
@@ -56,18 +67,67 @@ export function splitMessage(text: string, maxChars: number = DEFAULT_MAX_CHARS)
 
   const parts: string[] = []
   let rest = text
-  while (rest.length > maxChars) {
-    const cut = findCut(rest, maxChars)
-    // A cut at zero would leave `rest` unchanged and loop forever. `findCut`
-    // cannot return it, but a guard here is what keeps a future change to the
-    // break patterns from turning a wrong answer into a hang.
-    const safe = cut > 0 && cut <= rest.length ? cut : maxChars
-    const head = rest.slice(0, safe).trimEnd()
-    if (head !== '') parts.push(head)
-    rest = rest.slice(safe).trimStart()
+  // Whether the previous piece ended inside a fence, and so this one has to
+  // reopen it before its own text. Annotated because the loop feeds it back into
+  // the value it is derived from, which TypeScript cannot infer through.
+  let reopen: boolean = false
+  while (rest !== '') {
+    const prefix: string = reopen ? FENCE_OPEN : ''
+    // The last piece is the one place the closing marker can be decided before
+    // the cut: there is no next piece to carry the fence into, so the rest of
+    // the text either fits with its marker or is cut like any other piece.
+    const tailClose = fenceCount(`${prefix}${rest}`) % 2 === 1
+      && prefix.length + rest.length + FENCE_CLOSE.length <= maxChars
+      ? FENCE_CLOSE
+      : ''
+    if (prefix.length + rest.length + tailClose.length <= maxChars) {
+      parts.push(`${prefix}${rest}${tailClose}`)
+      break
+    }
+    // What is left of the window once the reopening fence has taken its share.
+    const cut = fitCut(rest, prefix, Math.max(1, maxChars - prefix.length), maxChars)
+    const head = rest.slice(0, cut).trimEnd()
+    // The ceiling is a hard limit and balancing is not: a configured limit too
+    // small to hold the marker at all leaves the fence open rather than
+    // producing a piece the transport refuses outright.
+    const open: boolean = fenceCount(`${prefix}${head}`) % 2 === 1
+      && prefix.length + head.length + FENCE_CLOSE.length <= maxChars
+    if (head !== '') parts.push(`${prefix}${head}${open ? FENCE_CLOSE : ''}`)
+    rest = rest.slice(cut).trimStart()
+    reopen = open
   }
-  if (rest !== '') parts.push(rest)
-  return balanceFences(parts)
+  return parts
+}
+
+/**
+ * The cut to use, shrunk until the piece it produces fits the ceiling.
+ *
+ * A piece that ends inside a fence gets a closing marker appended, and that
+ * marker was never part of the window the cut was chosen in. Shrinking the cut
+ * moves the overflow into the next piece, where it still fits, instead of
+ * letting the finished piece exceed the transport's limit.
+ *
+ * The parity is re-checked on every shrink: a shorter cut can fall *before* the
+ * marker that made the piece open, in which case no marker is needed at all and
+ * the piece fits immediately.
+ * @param text - the text being cut.
+ * @param prefix - the reopening fence this piece will carry, if any.
+ * @param budget - the window to choose a cut in.
+ * @param maxChars - the ceiling the finished piece must respect.
+ * @returns a cut index in `(0, budget]`.
+ */
+function fitCut(text: string, prefix: string, budget: number, maxChars: number): number {
+  let cut = findCut(text, budget)
+  while (cut > 1) {
+    const head = text.slice(0, cut).trimEnd()
+    const open = fenceCount(`${prefix}${head}`) % 2 === 1
+    const needed = prefix.length + head.length + (open ? FENCE_CLOSE.length : 0)
+    if (needed <= maxChars) return cut
+    // Strictly decreasing, so this terminates: the branch is only reached when
+    // the piece is over by at least one character.
+    cut = Math.max(1, cut - (needed - maxChars))
+  }
+  return cut
 }
 
 /**
@@ -100,32 +160,6 @@ function lastMatchEnd(window: string, pattern: RegExp): number | undefined {
     end = (match.index ?? 0) + match[0].length
   }
   return end
-}
-
-/**
- * Close and reopen code fences that a cut left open.
- *
- * A piece that ends inside a fence gets one appended, and the piece after it gets
- * one prepended. Done as a pass over the finished pieces rather than as a rule
- * inside the cut, because a fence longer than the ceiling cannot be kept whole -
- * the only correct answer there is to close and reopen it, and that is exactly
- * what this does at any depth.
- *
- * @param parts - the pieces, in order.
- * @returns the pieces with fences balanced.
- */
-function balanceFences(parts: readonly string[]): string[] {
-  const balanced: string[] = []
-  let reopen = false
-  for (const part of parts) {
-    let body = part
-    if (reopen) body = `\`\`\`\n${body}`
-    const open = fenceCount(body) % 2 === 1
-    if (open) body = `${body}\n\`\`\``
-    balanced.push(body)
-    reopen = open
-  }
-  return balanced
 }
 
 /** How many fence markers the text contains. */

@@ -54,6 +54,36 @@ describe('splitting a reply', () => {
     }
   })
 
+  it('keeps every piece within the limit after balancing a fence', () => {
+    // Balancing appends a closing marker and prepends a reopening one. Adding
+    // them after the cut used to push the piece past the ceiling, and the
+    // transport refuses an over-long body - so the user lost that piece with no
+    // way to notice. The ceiling has to hold *after* the fence is closed.
+    //
+    // The first case is the live shape: the cut lands just under the ceiling
+    // inside a fence, and the closing marker is what tips it over.
+    const fenced = `\`\`\`\n${'x'.repeat(1_996)}\n\`\`\``
+    expect(fenced.length).toBe(2_004)
+    for (const max of [100, 2_000]) {
+      const parts = splitMessage(fenced, max)
+      expect(parts.every(part => part.length <= max)).toBe(true)
+      // Balancing must not cost the renderability it exists for.
+      for (const part of parts) {
+        const fences = part.split('\n').filter(line => line.trimStart().startsWith('```')).length
+        expect(fences % 2).toBe(0)
+      }
+    }
+
+    const parts = splitMessage(`before\n\n\`\`\`\n${'code line\n'.repeat(30)}\`\`\`\n\nafter`, 100)
+    expect(parts.every(part => part.length <= 100)).toBe(true)
+
+    // A ceiling too small to hold the closing marker even on its own: the limit
+    // still wins, because an over-long piece is refused by the transport while
+    // an unbalanced fence merely renders badly.
+    const tiny = splitMessage(`\`\`\`\n${'x'.repeat(40)}`, 5)
+    expect(tiny.every(part => part.length <= 5)).toBe(true)
+  })
+
   it('loses no text', () => {
     const text = '第一段。\n\n第二段内容比较长。\n\n第三段。'
     expect(splitMessage(text, 12).join('')).toBe(text.replace(/\s+/gu, ''))

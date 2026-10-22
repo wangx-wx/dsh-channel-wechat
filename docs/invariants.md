@@ -54,8 +54,14 @@
 其中 **46 条同时含 `tool-call`，这 46 条里有 40 条以冒号结尾**；真正回答用户的 7 条纯文本消息
 **一条都没有**冒号结尾。一轮 193 步 → 193 个事件，全部发送就是刷屏 + 丢结论。
 
-**代价**：被 `/stop` 中断的轮次没有纯文本消息，因此**什么也不发**。这是诚实的结果——
-那一轮本来就没有结论，只发旁白更误导。
+**中断的轮次也什么也不发，但靠的是另一个标记。** 被 abort 的流**确实会**提交一条
+`assistant/message`：agent-loop 用 `interruptedBlocks()` 把已累积的 text/reasoning 落盘，
+并带上 `interrupted: true`（`agent-loop/src/agent.ts`）。这条消息不含 `tool-call`，
+所以单靠上一条规则拦不住它——`extractAssistantText` 必须**先检查 `data.interrupted === true`**
+并返回 `undefined`，否则用户在「已停止当前任务。」之后还会收到一句戛然而止的半句。
+
+**测试形状**：`tests/unit/reply.spec.ts` 与 `tests/integration/channel-composition.spec.ts`
+各有一条用例，后者走 `channel.onSessionEvent` 的真实路由。
 
 **测试盲区**：`tests/unit/reply.spec.ts` 曾把「含 tool-call 的消息也发」当成正确行为断言
 （`expect(...).toBe('done')`），缺陷因此被锁了很久。断言一条规则时要问：这条规则是**观察到的
@@ -68,6 +74,12 @@
 
 **违反的后果**：传输层拒绝超长 body（不是截断），而微信**没有重放**——超长回答整条丢失。
 围栏被切断则两段都渲染成坏文本。
+
+**补围栏的字节必须算进上限**：闭合标记是 `\n\`\`\``（4 字符），重开标记是 `` ```\n ``（4 字符）。
+先切到上限、再补围栏，成品就会超出上限，而超长的一条会被服务端拒绝——用户少收到一段。
+所以 `splitMessage` 在**选切点时就**扣掉重开标记，并在闭合标记会把成品顶出上限时缩短切点
+（`fitCut`）。不变量是「`parts` 里每一段的 `length` 都 ≤ `maxChars`，且围栏数为偶数」，
+两条同时成立，不是二选一。
 
 **上限值**：协议文档未给出，两个参考实现分别是 4000 与 2000，取 2000 保守值。
 
@@ -195,6 +207,18 @@
 `mountPanelRoutes` 尤其如此：面板需要 `ctx.connection`，而它只在面向浏览器的 host 上存在。
 
 **依据**：plan-v1 §Q4/Q27；`src/channel/mount.ts`、`src/index.ts` 的 `presetsOf`。
+
+### 「列不出账号」和「没有登录」是两件事
+
+**规则**：`listAccounts` 在 provider 没有 `listRecords` 时返回空列表（不抛，抛会整条通道挂掉），
+但调用方必须先问 `enumeratesAccounts(ctx)` 再决定怎么说。启动路径在拿不到账号时**必须报告**。
+
+**违反的后果**：两种状态都表现为 `account === undefined`，`startChannelFromStore` 直接 return，
+于是通道**不轮询、不报错、一行日志都没有**。用户看着一个完全正常的 Harness，微信里发什么都没人应；
+而账号其实还在凭据库里、`loadAccount` 读得出来——重新扫码是白扫。
+
+**依据**：`src/credentials.ts` 的 `enumeratesAccounts`、`src/index.ts` 的 `runChannel`；
+实测见 `tests/integration/channel.spec.ts` 的「says why it is not polling…」。
 
 ### `ctx.agents` 不套用默认模型
 

@@ -106,15 +106,22 @@ type Queued = Reply
  * on a colon and nothing after it. Only the message a turn finishes on carries
  * the answer, and that one calls no tool.
  *
- * An interrupted turn never commits such a message; it has no answer to send,
- * which is the honest outcome rather than a wall of half-sentences.
+ * An interrupted turn commits no answer, and its partial text is not one. The
+ * agent loop settles an aborted stream from `interruptedBlocks()` - the text and
+ * reasoning it had accumulated - and flags the event `interrupted: true`. That
+ * prose stops mid-thought; sending it after `/stop` reads as a reply that was
+ * cut off, which is worse than the honest silence.
  *
  * @param event - the committed session event.
  * @returns the text to send, or `undefined` when this event is not the answer.
  */
 export function extractAssistantText(event: SessionEvent): string | undefined {
   if (event.type !== 'assistant/message') return undefined
-  const content = (event as { data?: { message?: { content?: readonly unknown[] } } }).data?.message?.content
+  const data = (event as { data?: { message?: { content?: readonly unknown[] }; interrupted?: unknown } }).data
+  // Before the content is read: an interrupted event carries the same blocks an
+  // answer would, and only this flag tells the two apart.
+  if (data?.interrupted === true) return undefined
+  const content = data?.message?.content
   if (!Array.isArray(content)) return undefined
   // Checked before collecting text: a tool-call block means this message is a
   // step's preamble, and its prose is an introduction to arguments that are

@@ -199,6 +199,22 @@ export async function forgetAccount(ctx: Context, accountId: string): Promise<vo
 }
 
 /**
+ * Whether the mounted provider can enumerate stored records.
+ *
+ * The question a caller has to ask before acting on an empty {@link listAccounts}
+ * result: "no accounts" and "this provider cannot be walked" both come back as an
+ * empty list, and they need different answers. The first is a user who has not
+ * logged in; the second is a login that is stored and readable but cannot be
+ * discovered, where a channel that simply stops polling looks like a silent
+ * failure.
+ * @param ctx - plugin context carrying the credentials service.
+ * @returns whether `listRecords` is available.
+ */
+export function enumeratesAccounts(ctx: Context): boolean {
+  return credentialsOf(ctx).listRecords !== undefined
+}
+
+/**
  * Enumerate this channel's stored logins.
  *
  * Returns an empty list when the mounted provider cannot enumerate. That is a
@@ -207,6 +223,9 @@ export async function forgetAccount(ctx: Context, accountId: string): Promise<vo
  * it just cannot be discovered by walking the store. Throwing instead took the
  * whole channel down at startup, which is strictly worse than not knowing the
  * account id it was polling as.
+ *
+ * A caller that would otherwise treat the empty list as "not logged in" must ask
+ * {@link enumeratesAccounts} first; this function cannot express the difference.
  *
  * @param ctx - plugin context carrying the credentials service.
  * @returns every account this channel owns, newest last as the store lists it.

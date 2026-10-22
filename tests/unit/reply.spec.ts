@@ -53,6 +53,32 @@ describe('extracting the reply text', () => {
     ]) as never)).toBe('the answer')
   })
 
+  it('returns nothing for a turn that was interrupted', () => {
+    // An aborted stream still commits what it had accumulated, flagged
+    // `interrupted: true` (`agent-loop` settles it from `interruptedBlocks()`).
+    // That text is half a sentence cut off mid-thought: sending it after
+    // `/stop` reads as the answer, and the user cannot tell it was truncated.
+    expect(extractAssistantText({
+      type: 'assistant/message',
+      data: {
+        message: { content: [{ type: 'text', text: 'I was about to expl' }] },
+        interrupted: true,
+      },
+    } as never)).toBeUndefined()
+  })
+
+  it('still sends a complete message that carries an explicit interrupted flag of false', () => {
+    // Only `true` is the interrupted case; an event that states it is complete
+    // is an ordinary answer.
+    expect(extractAssistantText({
+      type: 'assistant/message',
+      data: {
+        message: { content: [{ type: 'text', text: 'the answer' }] },
+        interrupted: false,
+      },
+    } as never)).toBe('the answer')
+  })
+
   it('returns nothing for an event that is not an assistant message', () => {
     expect(extractAssistantText({ type: 'tool/result', data: {} } as never)).toBeUndefined()
   })

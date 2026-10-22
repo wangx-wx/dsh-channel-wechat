@@ -1503,6 +1503,71 @@ describe('a profile boot with no action', () => {
     else process.env['DSH_HOME'] = previous
   }, 30_000)
 
+  it('says why it is not polling when the provider cannot enumerate', async () => {
+    // A host whose credentials provider predates `listRecords` still stores and
+    // reads a login - the login works - but this process cannot discover its
+    // account id, so `startChannelFromStore` returns without polling. Reporting
+    // nothing made that indistinguishable from "the user never logged in": the
+    // channel was simply absent, with no line anywhere saying why.
+    const previous = process.env['DSH_HOME']
+    const home = tempHome('dsh-wechat-no-enum-')
+    process.env['DSH_HOME'] = home
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes('getupdates')) {
+        return new Response(JSON.stringify({ ret: 0, msgs: [], get_updates_buf: 'c1' }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ ret: 0 }), { status: 200 })
+    }) as unknown as typeof fetch)
+
+    const ctx = new Context()
+    provideCmdline(ctx, { args: [], exit: () => {}, ready: { commit() {}, await: async () => {} } } as never)
+    await ctx.plugin(CredentialsLocal as never, {} as never)
+    await ctx.plugin(AgentRegistry)
+    await ctx.plugin(CommandRuntime)
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
+    })
+    // The login is stored before the method is hidden, which is the shape of the
+    // live host: records written by an earlier provider, read by one that cannot
+    // walk them.
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    // Shadowed as an own property rather than deleted: the provider's methods
+    // live on its prototype, so `delete` would leave the inherited one reachable.
+    Object.defineProperty(ctx.credentials as object, 'listRecords', {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    })
+    await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents'], { cwd: '/work' })
+
+    const logDir = join(home, 'channel-wechat', 'log')
+    await until(async () => {
+      try {
+        return readdirSync(logDir).some(entry => readFileSync(join(logDir, entry), 'utf8').includes('listRecords'))
+      } catch {
+        return false
+      }
+    })
+    // Read while the provider is still mounted; disposing the fiber takes the
+    // service with it.
+    const stillStored = (await loadAccount(ctx, 'bot-9'))?.botToken
+    await ctx.fiber.dispose()
+
+    const body = readdirSync(logDir)
+      .map(entry => readFileSync(join(logDir, entry), 'utf8'))
+      .join('')
+    // The line has to name the missing capability: "no account" would send the
+    // user to scan a QR code they have already scanned.
+    expect(body).toContain('listRecords')
+    // And the login really is still there, which is what makes this degraded
+    // rather than a lost account.
+    expect(stillStored).toBe('tok-1')
+
+    if (previous === undefined) delete process.env['DSH_HOME']
+    else process.env['DSH_HOME'] = previous
+  }, 30_000)
+
   it('records a channel that dies before it ever polls', async () => {
     // The diagnostics most worth keeping are the ones from a channel that never
     // came up: on the desktop app the file is the only trace, and a start

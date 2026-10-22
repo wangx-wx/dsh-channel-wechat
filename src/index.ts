@@ -17,7 +17,7 @@ import z from '@deepseek-ai/schemastery'
 // `Context`. The service is provided by the profile, not by this plugin, so
 // nothing is imported at runtime.
 import type {} from '@deepseek-ai/dsh-agent-default-model'
-import { loadAccount, listAccounts, saveAccount, forgetAccount } from './credentials.ts'
+import { enumeratesAccounts, loadAccount, listAccounts, saveAccount, forgetAccount } from './credentials.ts'
 import { runStartupAction } from './login-command.ts'
 import { claimAppArgument } from './cmdline.ts'
 import { createApiClient } from './wechat/api.ts'
@@ -494,6 +494,17 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
   // One account in v1, so one cursor; the store is per-account for the
   // multi-account release the data structures already allow.
   const cursors = new CursorStore()
+  // Asked before the list, because an empty list from a provider that cannot
+  // enumerate is not "no login": the record is there and readable, this process
+  // just cannot find its account id. Both states leave `account` undefined and
+  // the run returns before polling, so without this the channel simply vanished
+  // with no line anywhere saying why.
+  if (!enumeratesAccounts(ctx)) {
+    report(
+      'cannot discover a stored login: this credentials provider has no listRecords, so the channel will not poll',
+      'the login is still stored and readable; a provider that implements listRecords is required to start from it',
+    )
+  }
   const accounts = await listAccounts(ctx)
   const account = accounts[0]
   // Resolved once, so every session in this run joins the same preset even if
