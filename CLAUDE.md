@@ -63,6 +63,15 @@ src/vendor/        内联第三方代码
 - 新增生产接线必须有真实 `apply` 启动的集成测试，不能只在单测里注入同一个 sink。
 - 重要行为应有变异验证：改坏实现时，声称覆盖该行为的测试必须失败。
 - 断言应保留清晰的失败形状；不要通过静默降级、删除测试或放宽检查规避问题。
+- 中断测试后必须清理子进程。集成测试通过 `cmd /c`（Windows）拉起 DSH launcher，那是**孙进程**：
+  杀掉 vitest 或 shell 不会级联终止它，父进程一死就脱管并继续空转。清理前先确认「父进程已死且不在
+  真实应用进程树内」再动手；正常结束的 `test:all` 也可能留残骸，跑完同样要检查。
+
+  ```powershell
+  $all = Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name
+  $ids = @{}; foreach ($p in $all) { $ids[[int]$p.ProcessId] = $p }
+  $all | Where-Object { $_.Name -eq 'DeepSeek Harness.exe' -and -not $ids.ContainsKey([int]$_.ParentProcessId) }
+  ```
 
 ## 开发流程
 
