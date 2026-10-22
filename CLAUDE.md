@@ -59,61 +59,10 @@ src/vendor/        内联第三方代码
 
 ## 测试纪律
 
-### 分层与断言
-
 - `tests/unit/**` 验证可注入协作者；`tests/integration/**` 验证真实 `apply`、发布产物和隔离 launcher。
 - 新增生产接线必须有真实 `apply` 启动的集成测试，不能只在单测里注入同一个 sink。
 - 重要行为应有变异验证：改坏实现时，声称覆盖该行为的测试必须失败。
 - 断言应保留清晰的失败形状；不要通过静默降级、删除测试或放宽检查规避问题。
-- **断言前先问：这是「观察到的现状」还是「想要的语义」。** 把现状写成断言会把缺陷锁死：
-  `reply.spec.ts` 曾断言「含 `tool-call` 的消息也要发」，于是「一句话挂个冒号」的真缺陷
-  被测试保护了很久，没人再怀疑它。
-
-### 跑测试的硬规则
-
-- **一次只跑一个 vitest 进程。** 集成测试会真实启动 DSH launcher 并各自绑定端口；两个进程
-  同时跑会互相抢资源，`client-half-form` 这类套件会整片假失败（实测 16/16 全红，单独跑 16/16 全绿）。
-  跑集成前先确认没有别的 vitest 在跑。
-- **中断集成测试后必须清理孙进程。** vitest 通过 `cmd /c`（Windows）拉起 DSH launcher，
-  那是**孙进程**：杀掉 vitest/pwsh 不会级联终止它，父进程一死它就脱管，继续空转烧 CPU。
-  实测一次会话中残留 15 个孤儿进程、3.98 GB 内存、约 8 万秒 CPU。
-  清理前先判定「父进程已死 + 不在真实应用进程树内」，逐个复验再动手：
-
-  ```powershell
-  # 找出父进程已不存在的 DSH launcher
-  $all = Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name
-  $ids = @{}; foreach ($p in $all) { $ids[[int]$p.ProcessId] = $p }
-  $all | Where-Object { $_.Name -eq 'DeepSeek Harness.exe' -and -not $ids.ContainsKey([int]$_.ParentProcessId) }
-  ```
-
-- **`pnpm test:all` 可以跑，但中断它代价高。** 实测它能正常完成（787 passed，22s）；问题在于它同时
-  启动多个真实 launcher，一旦中途 Ctrl-C 或超时，就会有多个孙进程同时脱管。日常用分项目命令
-  （`pnpm test` 仅 unit，实测 4.9s；`pnpm test:integration` 单独跑），只在提交前完整验证时用 `test:all`，
-  并等它自然结束。
-- **超时要显式设置。** 默认 5s 对集成套件不够；跑整套时给 `--testTimeout=20000 --hookTimeout=20000`。
-- 集成测试需要 launcher：源码 checkout 用 `DSH_CHECKOUT`，打包版用 `DSH_PACKAGED_SHIM`
-  （Windows 上形如 `D:\soft\dsh\resources\runtime\cli\bin\dsh.cmd`）。
-
-### 测异步行为
-
-- **测顺序时，被排序的副作用必须真的异步。** 变异验证若在错误顺序下仍然通过，先检查这点：
-  `send` 里不含 `await` 时，发送会在同一批微任务里完成，错误顺序也能通过。
-- **生产代码的 `await` 数量是契约的一部分。** 抽模块时「行为等价」不等于「时序等价」：
-  把 `prepareMedia` 抽成独立 `async` 模块（多一个挂起点）就让入站投递推后一个微任务，
-  `runtime.spec.ts` 的回复测试立刻变红。通常无事可做的步骤，应在任何 `await` 之前返回。
-- 等待某个状态成立时用轮询（`until(...)`），不要用固定 `setTimeout` 猜时间。
-
-### 跨平台
-
-- **测试里不要硬编码某一平台的路径。** `path.isAbsolute` 是平台绑定的：`D:\work\next` 在 Windows
-  上是绝对路径，在 Linux 上不是。这类字面量会让测试在 Windows 绿、在 ubuntu 红——CI 就是这样挂的，
-  而且失败点在校验分支，压根没走到被测代码。需要绝对路径时按 `process.platform` 拼。
-- **纯字符串处理不受此限。** `deliverables.ts` 自己判断「POSIX 或 Windows 都算绝对」，不经过
-  `node:path`，所以可以在任一台机器上断言另一种拼写；`peer-map`/`peer-session-store` 只把 cwd
-  当字符串存取，同样安全。**判断依据是「这段代码是否调用 `node:path` 或真的访问文件系统」**，
-  不是「路径长什么样」。
-- **只在 Windows 上绿的测试等于没验证。** 本机是 Windows，跑绿不代表 CI 绿；涉及平台行为的改动，
-  提交前用 WSL 跑一遍 `pnpm test`（导出干净树到 WSL 原生文件系统，别复用 Windows 的 `node_modules`）。
 
 ## 开发流程
 
