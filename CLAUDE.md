@@ -103,6 +103,18 @@ src/vendor/        内联第三方代码
   `runtime.spec.ts` 的回复测试立刻变红。通常无事可做的步骤，应在任何 `await` 之前返回。
 - 等待某个状态成立时用轮询（`until(...)`），不要用固定 `setTimeout` 猜时间。
 
+### 跨平台
+
+- **测试里不要硬编码某一平台的路径。** `path.isAbsolute` 是平台绑定的：`D:\work\next` 在 Windows
+  上是绝对路径，在 Linux 上不是。这类字面量会让测试在 Windows 绿、在 ubuntu 红——CI 就是这样挂的，
+  而且失败点在校验分支，压根没走到被测代码。需要绝对路径时按 `process.platform` 拼。
+- **纯字符串处理不受此限。** `deliverables.ts` 自己判断「POSIX 或 Windows 都算绝对」，不经过
+  `node:path`，所以可以在任一台机器上断言另一种拼写；`peer-map`/`peer-session-store` 只把 cwd
+  当字符串存取，同样安全。**判断依据是「这段代码是否调用 `node:path` 或真的访问文件系统」**，
+  不是「路径长什么样」。
+- **只在 Windows 上绿的测试等于没验证。** 本机是 Windows，跑绿不代表 CI 绿；涉及平台行为的改动，
+  提交前用 WSL 跑一遍 `pnpm test`（导出干净树到 WSL 原生文件系统，别复用 Windows 的 `node_modules`）。
+
 ## 开发流程
 
 - 从 `origin/main` 切需求分支：`dev_<需求>_<yyMMdd>`。

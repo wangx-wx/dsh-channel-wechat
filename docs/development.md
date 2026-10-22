@@ -70,6 +70,15 @@ junction 不需要特权。
 
 `.github/workflows/ci.yml` 在 ubuntu 与 windows 两个 runner 上跑 `pnpm build`、`pnpm typecheck` 和 `pnpm test`。两个平台都要跑，是因为测试里有一部分断言只有特定平台能证伪：POSIX 权限位（`0o600`）在 Windows 上会被跳过，而路径分隔符与 CRLF 行为只在 Windows 上才暴露。
 
+**测试里不要硬编码某一平台的路径。** `path.isAbsolute` 是平台绑定的：`D:\work\next` 在 Windows 上是绝对路径，在 Linux 上不是。用这种字面量断言「切换成功后报告规范化路径」，会在 Windows 上通过、在 ubuntu 上失败——因为路径在校验阶段就被拒了，根本走不到被测的分支。需要绝对路径时按平台拼：
+
+```ts
+const root = process.platform === 'win32' ? 'D:\\' : '/'
+const absolute = root + ['work', 'next'].join(process.platform === 'win32' ? '\\' : '/')
+```
+
+反过来，**纯字符串处理**（`deliverables.ts` 的路径拼接、`peer-map`/`peer-session-store` 的 cwd 存取）用的是自己实现的「POSIX 或 Windows 都算绝对」判断，不经过 `node:path`，所以可以在任一台机器上断言另一种拼写——`deliverables.spec.ts` 正是这样测 Windows 路径的。
+
 Windows job 还会显式把 `core.autocrlf` 设为 `true` 并重新检出 `*.svg`，用 `git ls-files --eol` 确认工作区仍是 LF。这就是 0.2.4 之前 `icon.svg` 断言在 Windows 上失败的那条路径；不显式复现，回归只会在开发者机器上出现。
 
 集成测试不在 CI 里跑：它需要一个已构建的 DeepSeek Harness checkout，CI 没有。

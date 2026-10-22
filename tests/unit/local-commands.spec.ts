@@ -24,6 +24,21 @@ import { describe, expect, it } from 'vitest'
 import { runLocalCommand, type LocalCommandContext } from '../../src/bridge/local-commands.ts'
 import type { ModelListing } from '../../src/bridge/model-commands.ts'
 
+/**
+ * An absolute path on whatever platform the suite runs on.
+ *
+ * `/cwd` rejects anything `path.isAbsolute` refuses, and that check is
+ * platform-bound: `D:\work\next` is absolute on Windows and relative on Linux.
+ * A test that hard-codes one platform's spelling passes on that platform and
+ * fails on the other - which is exactly how this suite broke CI on ubuntu.
+ * @param tail - the segments after the root.
+ * @returns an absolute path in this platform's own spelling.
+ */
+function absolutePath(...tail: string[]): string {
+  const root = process.platform === 'win32' ? 'D:\\' : '/'
+  return root + tail.join(process.platform === 'win32' ? '\\' : '/')
+}
+
 /** The catalogue `/models` renders in these tests. */
 const CATALOG: ModelListing = {
   options: [
@@ -189,11 +204,13 @@ describe('/cwd', () => {
     // The channel canonicalizes the path, so the answer is what the session
     // will record. Reporting the raw argument would name a spelling that the
     // session header does not hold.
-    const b = bench({ changeCwd: async () => 'D:\\work\\canonical' })
+    const canonical = absolutePath('work', 'canonical')
+    const asked = absolutePath('work', 'next')
+    const b = bench({ changeCwd: async () => canonical })
 
-    const result = await b.run('cwd', 'D:\\work\\next')
+    const result = await b.run('cwd', asked)
 
-    expect(result.text).toContain('D:\\work\\canonical')
+    expect(result.text).toContain(canonical)
   })
 
   it('refuses a relative path instead of guessing what it meant', async () => {
