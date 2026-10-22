@@ -335,3 +335,29 @@ describe('forgetting a login', () => {
     await expect(forgetAccount(ctx, 'never-seen')).resolves.toBeUndefined()
   })
 })
+
+describe('a provider that cannot enumerate', () => {
+  it('reports no accounts instead of taking the channel down', async () => {
+    // A live host exposed the record operations without `listRecords`, so
+    // `runChannel` threw `listRecords is not a function` before the loop ever
+    // polled and the channel never started. The record operations still work
+    // there, so the login is usable - it just cannot be discovered by walking
+    // the store, and an empty list is the honest answer to that.
+    const { ctx } = await mount()
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    // Shadowed as an own property rather than deleted: the provider's methods
+    // live on its prototype, so `delete` would leave the inherited one reachable.
+    // An own `undefined` is what an older provider without the method looks like
+    // to the optional-call check.
+    Object.defineProperty(ctx.credentials as object, 'listRecords', {
+      value: undefined,
+      configurable: true,
+      writable: true,
+    })
+
+    await expect(listAccounts(ctx)).resolves.toEqual([])
+    // The login itself is still readable, which is what makes this degraded
+    // rather than broken.
+    expect((await loadAccount(ctx, 'bot-9'))?.botToken).toBe('tok-1')
+  })
+})

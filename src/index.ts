@@ -131,7 +131,43 @@ export interface Config {
    * so the GUI's own sessions are unaffected.
    */
   permission: Volatile<'read-only' | 'workspace-write' | 'danger-full-access'>
+  /**
+   * Longest text one WeChat message may carry, in characters.
+   *
+   * The transport refuses an over-long body instead of truncating it, and WeChat
+   * has no replay - so an answer past this limit is split into several messages
+   * rather than lost. Splitting prefers a paragraph break, then a line, then a
+   * sentence, and never leaves a code fence open.
+   */
+  maxMessageChars: Volatile<number>
+  /**
+   * Smallest gap between two sends to one peer, in milliseconds.
+   *
+   * The server answers a burst of sends with `ret: -2` / "prepare failed", and
+   * that answer only arrives after the burst has already been refused. Pacing is
+   * therefore proactive; the retry policy is what handles the answer when one
+   * gets through anyway.
+   */
+  minSendIntervalMs: Volatile<number>
+  /**
+   * How many times one throttled reply may be retried.
+   *
+   * Separate from the ordinary retry count because a throttle is the server
+   * saying "slower", not "no": the same message goes through once the sender
+   * waits. Giving up after the ordinary count turned a few seconds of backoff
+   * into a reply the user never received.
+   */
+  maxThrottleAttempts: Volatile<number>
 }
+
+/** Default ceiling for one outbound message, in characters. */
+const DEFAULT_MAX_CHARS = 2_000
+
+/** Default gap between two sends to one peer, in milliseconds. */
+const DEFAULT_MIN_SEND_INTERVAL_MS = 1_000
+
+/** Default number of throttled attempts for one reply. */
+const DEFAULT_MAX_THROTTLE_ATTEMPTS = 5
 
 /**
  * Runtime schema for {@link Config}; `cwd` must be an absolute path.
@@ -158,6 +194,17 @@ export const Config = z.object({
   // `approval: never`, which is settled before the waterfall our cards join.
   permission: z.union([z.const('read-only'), z.const('workspace-write'), z.const('danger-full-access')])
     .default('workspace-write').volatile(),
+  // The transport refuses a body past its own limit, so an over-long answer is
+  // lost rather than truncated. Defaulted to a value under both reference
+  // implementations' limits; a profile may raise it, not remove it.
+  maxMessageChars: z.number().default(DEFAULT_MAX_CHARS).volatile(),
+  // Pacing, in milliseconds between two sends to one peer. Non-zero by default
+  // because the server answers a burst with `ret: -2` and that answer arrives
+  // only after the burst was already refused.
+  minSendIntervalMs: z.number().default(DEFAULT_MIN_SEND_INTERVAL_MS).volatile(),
+  // Separate from the ordinary retry count: a throttle is the server asking for
+  // a slower sender, and the same message goes through once the sender waits.
+  maxThrottleAttempts: z.number().default(DEFAULT_MAX_THROTTLE_ATTEMPTS).volatile(),
 })
 
 /**
@@ -591,6 +638,11 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
     // delivered.
     onUnreadableQuote: detail => { report('引用的消息内容未能读取', detail) },
     onReplyError: (error, peerId) => { report(`reply to ${peerId} failed`, error) },
+    // Read once per run, like the other config values: a change made in the page
+    // applies to the runs started after it.
+    maxMessageChars: config.maxMessageChars.get(),
+    minSendIntervalMs: config.minSendIntervalMs.get(),
+    maxThrottleAttempts: config.maxThrottleAttempts.get(),
     // A send that worked is recorded too: with only failures logged, "no output"
     // is indistinguishable from "nothing ran", which is exactly what left a live
     // test unable to say whether a file had gone out.

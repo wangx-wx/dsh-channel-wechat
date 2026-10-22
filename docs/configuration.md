@@ -11,6 +11,9 @@
 | `provider` | 字符串 | 空字符串 | 为空时沿用 profile 默认 provider；非空时只作用于本插件的微信会话，不影响 GUI。修改对已有会话的**下一条消息**生效。 |
 | `model` | 字符串 | 空字符串 | 为空时沿用 profile 默认模型；非空时只作用于本插件的微信会话，不影响 GUI。修改对已有会话的**下一条消息**生效。 |
 | `permission` | `read-only`、`workspace-write` 或 `danger-full-access` | `workspace-write` | 新建微信会话使用的 DSH 权限 preset。不会修改 GUI 会话。 |
+| `maxMessageChars` | 数字 | `2000` | 单条微信消息的字符上限。超长回复按段落/行/句子切开分多条发送；跨切分的代码围栏会自动补闭合与重开。 |
+| `minSendIntervalMs` | 数字 | `1000` | 同一 peer 两次发送的最小间隔（毫秒）。服务端对突发发送返回 `ret: -2`，调速是**主动**避免它。 |
+| `maxThrottleAttempts` | 数字 | `5` | 一条回复被限流（`-2`）时的重试上限，按 2s→4s→8s→16s 退避。**不占用**普通失败重试次数。 |
 
 示例：
 
@@ -22,9 +25,12 @@
     provider: ''
     model: ''
     permission: workspace-write
+    maxMessageChars: 2000
+    minSendIntervalMs: 1000
+    maxThrottleAttempts: 5
 ```
 
-`cwd` 使用绝对路径。未设置时 schema 会拒绝启动，不会替用户猜一个目录。`cards`、模型和权限字段由 schema 提供默认值，因此旧 profile 仍可加载。
+`cwd` 使用绝对路径。未设置时 schema 会拒绝启动，不会替用户猜一个目录。`cards`、模型、权限和出站字段由 schema 提供默认值，因此旧 profile 仍可加载。
 
 `cwd` 是**默认值**，不是强制值：微信里用 `/cwd <绝对路径>` 可以按 peer 覆盖它。切换会结束当前会话、
 在新目录开始新对话，并记在 `~/.dsh/channel-wechat/peer-sessions.json` 里跨重启保留。详见

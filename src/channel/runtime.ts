@@ -59,6 +59,12 @@ export interface RuntimeOptions {
   initialCursor?: string | undefined
   /** Observe a reply that exhausted its attempts. */
   onReplyError?: (error: unknown, peerId: string, text: string) => void
+  /** Longest text one message may carry; a longer reply is split. */
+  maxMessageChars?: number
+  /** Smallest gap between two sends to one peer, in milliseconds. */
+  minSendIntervalMs?: number
+  /** How many times a throttled reply may be retried. */
+  maxThrottleAttempts?: number
   /** Observe a handler failure. */
   onMessageError?: (error: unknown, message: unknown) => void
   /**
@@ -274,6 +280,9 @@ export async function startChannelFromStore(options: RuntimeOptions): Promise<vo
     saveCursor: options.saveCursor,
     ...(options.initialCursor === undefined ? {} : { initialCursor: options.initialCursor }),
     ...(options.onReplyError === undefined ? {} : { onReplyError: options.onReplyError }),
+    ...(options.maxMessageChars === undefined ? {} : { maxMessageChars: options.maxMessageChars }),
+    ...(options.minSendIntervalMs === undefined ? {} : { minSendIntervalMs: options.minSendIntervalMs }),
+    ...(options.maxThrottleAttempts === undefined ? {} : { maxThrottleAttempts: options.maxThrottleAttempts }),
     ...(options.onMessageError === undefined ? {} : { onMessageError: options.onMessageError }),
     ...(options.onUnreadableQuote === undefined ? {} : { onUnreadableQuote: options.onUnreadableQuote }),
     ...(options.sleep === undefined ? {} : { sleep: options.sleep }),

@@ -96,6 +96,8 @@ function build(options: {
   models?: ModelCommandContext
   /** The typing indicator, when the test observes its lifecycle. */
   typing?: { start: (peerId: string) => Promise<void>; stop: (peerId: string) => Promise<void> }
+  /** Longest text one message may carry; a longer reply is split. */
+  maxMessageChars?: number
 }) {
   const polls: (string | undefined)[] = []
   const sent: { peerId: string; text: string; token: string | undefined }[] = []
@@ -135,6 +137,7 @@ function build(options: {
     // lands on the new conversation.
     sessionExists: async sessionId => options.registry.exists(sessionId),
     ...(options.models === undefined ? {} : { models: options.models }),
+    ...(options.maxMessageChars === undefined ? {} : { maxMessageChars: options.maxMessageChars }),
   })
   channels.push(channel)
   return { channel, polls, sent }
@@ -1012,6 +1015,95 @@ describe('stopping', () => {
     await expect(channel.run()).resolves.toBeUndefined()
     await channel.stop()
   })
+
+  it('sends the answer of a turn that commits while stopping', { timeout: 10_000 }, async () => {
+    // The order of `stop()` is what keeps this reply. Draining the queue before
+    // the turn settles looks correct and is not: the turn commits its
+    // `assistant/message` *after* that drain, so the answer is enqueued into a
+    // queue nobody waits on again - and WeChat never replays it. The user sees
+    // narration and no conclusion, which is exactly the report that led here.
+    const sent: { peerId: string; text: string }[] = []
+    const sessionId = 'channel-wechat-user-7'
+    let deliver: () => void = () => {}
+    /** Resolved by the test once the turn has started. */
+    const started = new Promise<void>(resolve => { deliver = resolve })
+    let blocked: () => void = () => {}
+    /** Resolved once the turn is parked in `whenIdle`, which `stop()` must wait for. */
+    const atIdle = new Promise<void>(resolve => { blocked = resolve })
+    let channelRef: Channel | undefined
+    let answer: (() => void) | undefined
+    const agent = {
+      id: sessionId,
+      followup: () => { deliver() },
+      whenIdle: async () => {
+        // Signals that the turn is now blocked here, which is the state `stop()`
+        // must wait for rather than skip past.
+        blocked()
+        await new Promise<void>(resolve => { answer = resolve })
+        channelRef?.onSessionEvent(sessionId, {
+          type: 'assistant/message',
+          data: { message: { content: [{ type: 'text', text: 'the answer' }] } },
+        })
+      },
+    }
+    const channel = new Channel({
+      registry: {
+        create: async () => ({ agent, dispose: async () => {} }),
+        resume: async () => ({ agent, dispose: async () => {} }),
+        get: () => agent,
+      } as never,
+      // The message once, then nothing: a poll that kept returning it would
+      // start a new turn on every iteration.
+      poll: (() => {
+        let served = false
+        return async () => {
+          if (served) return { msgs: [], get_updates_buf: 'c1' }
+          served = true
+          return {
+            msgs: [{ message_id: 1, from_user_id: 'user-7', message_type: 1, item_list: [{ type: 1, text_item: { text: 'hi' } }] }],
+            get_updates_buf: 'c1',
+          }
+        }
+      })(),
+      // Asynchronous on purpose: a send that completed within the same microtask
+      // batch would let a wrongly ordered `stop()` look correct, because the
+      // reply would already be delivered by the time `stop()` returned.
+      send: async (peerId, text) => {
+        await new Promise(resolve => setTimeout(resolve, 10))
+        sent.push({ peerId, text })
+      },
+      saveCursor: async () => {},
+      sleep: async () => {},
+      now: () => 0,
+      pollTimeoutMs: 1_000,
+      maxRunMs: 600_000,
+    })
+    channelRef = channel
+    channels.push(channel)
+
+    // Not awaited: the loop runs until `stop()` ends it, and the turn under test
+    // is what `stop()` must wait for.
+    void channel.run()
+    await started
+    // Waited for rather than assumed: the turn only blocks in `whenIdle` after
+    // the handler has prepared it, and releasing before that would let the test
+    // pass without ever exercising the ordering.
+    await atIdle
+    // The release is deferred by a tick on purpose. `stop()` must still be
+    // waiting when the turn commits, because the answer does not exist before
+    // that - a stop that drains the queue first has nothing to wait on and
+    // returns with the reply still queued.
+    const stopping = channel.stop()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    answer?.()
+
+    await stopping
+
+    // Asserted at the moment `stop()` returns, which is the whole point: a stop
+    // that drained before the turn settled returns here with the reply still
+    // queued, and the process would then exit without it.
+    expect(sent.map(entry => entry.text)).toEqual(['the answer'])
+  })
 })
 
 
@@ -1108,5 +1200,54 @@ describe('/models and /model over the production wiring', () => {
 
     expect(written).toEqual([])
     expect(sent.map(entry => entry.text).join('')).toContain('nope')
+  })
+})
+
+describe('sending a long answer', () => {
+  it('splits it into messages the transport will accept', async () => {
+    // The transport refuses a body past its limit and WeChat never replays, so an
+    // unsplit over-long answer is lost rather than truncated. Each piece goes
+    // through the queue, which keeps them in order.
+    const f = fakeRegistry()
+    const { channel, sent } = build({
+      registry: f,
+      messages: [{ message_id: 1, from_user_id: 'user-7', message_type: 1, context_token: 'ctx-1', item_list: [{ type: 1, text_item: { text: 'hi' } }] }],
+      maxMessageChars: 40,
+    })
+
+    await channel.run()
+    await channel.settled()
+    const answer = `${'a'.repeat(30)}\n\n${'b'.repeat(30)}\n\n${'c'.repeat(30)}`
+    channel.onSessionEvent('channel-wechat-user-7', {
+      type: 'assistant/message',
+      data: { message: { content: [{ type: 'text', text: answer }] } },
+    })
+    await channel.settled()
+
+    expect(sent.length).toBeGreaterThan(1)
+    expect(sent.every(entry => entry.text.length <= 40)).toBe(true)
+    // Every piece reaches the same conversation with the same token.
+    expect(sent.every(entry => entry.peerId === 'user-7' && entry.token === 'ctx-1')).toBe(true)
+    expect(sent.map(entry => entry.text).join('')).toBe(answer.replace(/\s+/gu, ''))
+  })
+
+  it('sends a short answer as one message', async () => {
+    // The ordinary case must not be reflowed into several bubbles.
+    const f = fakeRegistry()
+    const { channel, sent } = build({
+      registry: f,
+      messages: [{ message_id: 1, from_user_id: 'user-7', message_type: 1, item_list: [{ type: 1, text_item: { text: 'hi' } }] }],
+      maxMessageChars: 40,
+    })
+
+    await channel.run()
+    await channel.settled()
+    channel.onSessionEvent('channel-wechat-user-7', {
+      type: 'assistant/message',
+      data: { message: { content: [{ type: 'text', text: 'short answer' }] } },
+    })
+    await channel.settled()
+
+    expect(sent.map(entry => entry.text)).toEqual(['short answer'])
   })
 })

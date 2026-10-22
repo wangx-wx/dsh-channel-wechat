@@ -320,8 +320,15 @@ export function classifyFetchError(error: unknown): FetchErrorClassification {
   return { type: 'unknown', description: 'network request failed' }
 }
 
-/** The protocol's own failure code, carried in a 200 response. */
-class BusinessError extends Error {
+/**
+ * The protocol's own failure code, carried in a 200 response.
+ *
+ * `code` is a public field rather than constructor-only state because the reply
+ * queue has to tell a throttle from a rejection, and it does so by the code the
+ * error carries - importing this class would make the bridge layer depend on the
+ * protocol layer it is deliberately kept out of.
+ */
+export class BusinessError extends Error {
   /**
    * @param label - diagnostic label for the request.
    * @param code - the `ret` or `errcode` value.

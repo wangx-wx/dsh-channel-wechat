@@ -24,6 +24,9 @@ import {
 } from '../bridge/peer-map.ts'
 import { deliverInbound } from '../bridge/dispatcher.ts'
 import { ReplyQueue, extractAssistantText, type ReplySender } from '../bridge/reply.ts'
+import { createOutbound } from './outbound.ts'
+import { createPeerLifecycle } from './peer-lifecycle.ts'
+import { createCommandContext } from './command-context.ts'
 import { parseCommandLine, routeCommand } from '../bridge/commands.ts'
 import { runLocalCommand, type LocalCommandContext } from '../bridge/local-commands.ts'
 import type { NativeCommandRow } from '../bridge/native-commands.ts'
@@ -54,6 +57,15 @@ export interface CardAnswererLike {
   /** Stop answering cards and reject what is still open. */
   dispose: () => void
 }
+
+/**
+ * Resolve the skills one peer can invoke.
+ *
+ * Takes the agent and the peer's current directory: the harness's own skill
+ * catalog resolves against both, so a listing that ignored either would show a
+ * different set than the model sees.
+ */
+export type SkillLister = (agent: unknown, cwd: string | undefined) => Promise<readonly string[]>
 
 /** Collaborators the channel needs. */
 export interface ChannelOptions {
@@ -89,6 +101,24 @@ export interface ChannelOptions {
   signal?: AbortSignal
   /** Observe a reply that exhausted its attempts. */
   onReplyError?: (error: unknown, peerId: string, text: string) => void
+  /**
+   * Longest text one WeChat message may carry, in characters.
+   *
+   * A longer reply is split rather than sent as one refused body. Absent uses
+   * {@link DEFAULT_MAX_CHARS}.
+   */
+  maxMessageChars?: number
+  /**
+   * Smallest gap between two sends to one peer, in milliseconds.
+   *
+   * The server answers a burst with `ret: -2` / "prepare failed", and that answer
+   * arrives only after the burst has already been refused - so the queue paces
+   * rather than relying on the retry to discover the limit. Absent disables
+   * pacing, which is what the tests that are not about rate use.
+   */
+  minSendIntervalMs?: number
+  /** How many times a throttled reply may be retried; see `ReplyQueue`. */
+  maxThrottleAttempts?: number
   /** Observe a handler failure; the loop continues either way. */
   onMessageError?: (error: unknown, message: unknown) => void
   /**
@@ -145,7 +175,7 @@ export interface ChannelOptions {
    * a different set than the model sees. Absent when this deployment composes no
    * skill registry, where the command says so instead of reporting "none".
    */
-  skills?: (agent: unknown, cwd: string | undefined) => Promise<readonly string[]>
+  skills?: SkillLister
   /**
    * Provider and model each new session selects.
    *
@@ -246,6 +276,10 @@ export class Channel {
    * running and its reply had not been sent.
    */
   private readonly commandWork = new Set<Promise<void>>()
+  /** Turns one answer into the messages the transport accepts. */
+  private readonly outbound: ReturnType<typeof createOutbound>
+  /** Ending, moving, and cancelling a peer's conversation. */
+  private readonly lifecycle: ReturnType<typeof createPeerLifecycle>
 
   /**
    * @param options - the poll, the send, and the policy.
@@ -269,10 +303,17 @@ export class Channel {
     })
     this.replies = new ReplyQueue({
       send: options.send,
+      ...(options.maxThrottleAttempts === undefined ? {} : { maxThrottleAttempts: options.maxThrottleAttempts }),
+      ...(options.minSendIntervalMs === undefined ? {} : { minIntervalMs: options.minSendIntervalMs }),
       ...(options.onReplyError === undefined ? {} : {
         onGiveUp: (peerId, text, error) => options.onReplyError?.(error, peerId, text),
       }),
     })
+    this.outbound = createOutbound({
+      queue: this.replies,
+      ...(options.maxMessageChars === undefined ? {} : { maxMessageChars: options.maxMessageChars }),
+    })
+    this.lifecycle = createPeerLifecycle({ peers: this.peers, sessionToPeer: this.sessionToPeer })
   }
 
   /** Poll until stopped. Resolves when the loop has exited. */
@@ -363,7 +404,22 @@ export class Channel {
    * @param text - the text to send.
    */
   async sendToPeer(peerId: string, text: string): Promise<void> {
-    await this.replies.enqueue(peerId, text, this.tokens.get(peerId))
+    this.enqueueReply(peerId, text)
+  }
+
+  /**
+   * Queue one reply, split into messages the transport will accept.
+   *
+   * The cutting and the queueing live in {@link ./outbound}; this is the single
+   * door every outbound text goes through, so the length ceiling cannot be
+   * forgotten at a call site. Synchronous for the same reason the outbound
+   * function is: the queue starts its pump in the same call, and the reply path
+   * is detached.
+   * @param peerId - the conversation to answer.
+   * @param text - the text to send.
+   */
+  private enqueueReply(peerId: string, text: string): void {
+    this.outbound(peerId, text, id => this.tokens.get(id))
   }
 
   /** Wait for queued work to finish; call after {@link run} in tests. */
@@ -376,17 +432,34 @@ export class Channel {
     await this.replies.drain()
   }
 
-  /** Stop the loop and release every session this channel owns. */
+  /**
+   * Stop the loop and release every session this channel owns.
+   *
+   * The order is what keeps a reply from being lost. Draining the queue first
+   * looks right and is not: a turn still in flight commits its
+   * `assistant/message` *after* that drain, so the answer is enqueued into a
+   * queue nobody waits on again - and WeChat never replays it. So the turns
+   * settle first, and only then is the queue drained.
+   *
+   * The loop is awaited **last**, not first: a poll already in flight is aborted
+   * by the controller and resolves on its own, and waiting for the whole loop
+   * before the turns would make every stop wait out one more poll cycle before
+   * flushing the replies it exists to flush.
+   */
   async stop(): Promise<void> {
-    // Released before anything is drained: a card still open holds a turn that
-    // is itself holding work `stop` would otherwise wait on, so draining first
+    // Released before anything is awaited: a card still open holds a turn that
+    // is itself holding work `stop` would otherwise wait on, so waiting first
     // would hang the shutdown on the very card being abandoned.
     this.cards?.dispose()
     this.controller?.abort()
-    // Draining first means a reply already queued is attempted rather than
-    // dropped; WeChat will never replay it.
+    // The turns it started: each one enqueues its answer as it commits, so the
+    // drain below has to run after this rather than before it.
+    await Promise.allSettled([...this.turnWork])
     await Promise.allSettled([...this.commandWork])
+    // Now the queue holds everything that will ever be queued for this run.
     await this.replies.drain()
+    // Awaited last, so a poll still unwinding cannot queue a reply behind the
+    // drain that already ran.
     await this.running?.catch(() => {})
     this.running = undefined
     this.controller = undefined
@@ -445,7 +518,7 @@ export class Channel {
 
     const text = extractAssistantText(event as never)
     if (text === undefined) return
-    void this.replies.enqueue(peerId, text, this.tokens.get(peerId))
+    this.enqueueReply(peerId, text)
   }
 
   /**
@@ -464,7 +537,6 @@ export class Channel {
       this.options.onReplyError?.(error, peerId, files.map(file => file.path).join(', '))
     })
   }
-
   /**
    * Answer one slash command for a peer.
    *
@@ -488,7 +560,7 @@ export class Channel {
       },
     })
     if (outcome === undefined) return
-    await this.replies.enqueue(peerId, outcome.text ?? `${outcome.kind === 'success' ? '完成' : '失败'}`, this.tokens.get(peerId))
+    this.enqueueReply(peerId, outcome.text ?? `${outcome.kind === 'success' ? '完成' : '失败'}`)
   }
 
   /**
@@ -497,122 +569,26 @@ export class Channel {
    * @returns the command context.
    */
   private localCommandContext(peerId: string): LocalCommandContext {
-    return {
+    return createCommandContext({
       peerId,
-      cancelRunning: async () => {
-        const cancel = this.options.cancelRunning
-        if (cancel !== undefined) return cancel(peerId)
-        return this.cancelPeer(peerId)
-      },
-      endSession: async () => { await this.endPeerSession(peerId) },
-      accountId: this.options.accountId,
-      sessionCount: this.peers.size,
-      // The live session's own header is the durable answer and the only one a
-      // tool call actually uses, so it wins over the configured value. After
-      // `/new` there is no live handle, and the stored switch is what the next
-      // session will record - which is why this goes through the map's own
-      // resolution rather than reading only what exists.
-      currentCwd: async () => await this.peers.cwdFor(peerId),
-      changeCwd: async path => {
+      peers: this.peers,
+      ...(this.options.accountId === undefined ? {} : { accountId: this.options.accountId }),
+      ...(this.options.cancelRunning === undefined ? {} : { cancelRunning: this.options.cancelRunning }),
+      cancel: peer => this.lifecycle.cancel(peer),
+      endSession: peer => this.lifecycle.end(peer),
+      changeCwd: async (peer, path) => {
         // Validated before anything is torn down: a typo must cost the user a
         // message, not the conversation they were in.
-        const resolved = await this.resolveDirectory(path)
-        await this.endPeerSessionIn(peerId, resolved)
+        const resolved = await resolveDirectory(path)
+        await this.lifecycle.endIn(peer, resolved)
         return resolved
       },
-      nativeCommands: async () => {
-        const list = this.options.nativeCommands
-        if (list === undefined) return []
-        // The live handle rather than `sessionFor`: listing what is available
-        // must not be the thing that opens a conversation. Passing `undefined`
-        // through is deliberate - the lister owns that decision, so a deployment
-        // answering from somewhere other than a live agent still can.
-        return list(this.peers.handleFor(peerId)?.agent)
-      },
-      ...(this.options.skills === undefined ? {} : {
-        skills: async () => {
-          // The same resolution `/cwd` reports, so the listing scans the
-          // directory the conversation is actually in.
-          const cwd = await this.peers.cwdFor(peerId)
-          return this.options.skills!(this.peers.handleFor(peerId)?.agent, cwd)
-        },
-      }),
-      models: this.options.models ?? {
-        listModels: undefined,
-        switchModel: undefined,
-        current: () => ({ provider: '', model: '' }),
-      },
-    }
+      ...(this.options.nativeCommands === undefined ? {} : { nativeCommands: this.options.nativeCommands }),
+      ...(this.options.skills === undefined ? {} : { skills: this.options.skills }),
+      ...(this.options.models === undefined ? {} : { models: this.options.models }),
+    })
   }
 
-  /**
-   * Check that a path names an existing directory, and return it canonically.
-   *
-   * The rules live in {@link resolveDirectory}, which is tested on its own; this
-   * wrapper exists only so the command context does not import filesystem
-   * modules.
-   * @param path - the path the user typed.
-   * @returns the canonical absolute directory.
-   * @throws when the path is relative, missing, or not a directory.
-   */
-  private async resolveDirectory(path: string): Promise<string> {
-    return await resolveDirectory(path)
-  }
-
-  /**
-   * Move a peer to a new directory, ending its session.
-   *
-   * The order matters: the directory is recorded first, then the generation is
-   * advanced, then the old handle is disposed. Recording last would leave a
-   * window where the next message creates a session in the old directory under
-   * the new id - a session the user cannot move afterwards.
-   * @param peerId - the peer to move.
-   * @param path - the canonical directory the next session records.
-   */
-  private async endPeerSessionIn(peerId: string, path: string): Promise<void> {
-    const handle = this.peers.handleFor(peerId)
-    this.peers.forget(peerId)
-    await this.peers.startNewIn(peerId, path)
-    if (handle === undefined) return
-    const id = String(handle.agent.id)
-    this.sessionToPeer.delete(id)
-    await handle.dispose()
-  }
-
-  /** Cancel a peer's running turn through its live agent. */
-  private async cancelPeer(peerId: string): Promise<boolean> {
-    // Waits out a session still being created: the turn can start before the
-    // session is recorded, which is exactly when a stop matters most.
-    const handle = await this.peers.liveHandleFor(peerId)
-    if (handle === undefined) return false
-    const agent = handle.agent as unknown as { cancel?: (cause: { kind: string }) => void }
-    if (typeof agent.cancel !== 'function') return false
-    agent.cancel({ kind: 'user' })
-    return true
-  }
-
-  /**
-   * End a peer's session so the next message starts a fresh one.
-   *
-   * Disposing the handle is not enough, and that was a real defect: a peer's
-   * session id was derived from the peer alone, so the persisted session
-   * outlived the handle and the next message resumed the conversation the user
-   * had just ended - the opposite of what `/new` told them. The generation is
-   * advanced first, so the id the next message addresses is one nothing has
-   * written to yet.
-   */
-  private async endPeerSession(peerId: string): Promise<void> {
-    const handle = this.peers.handleFor(peerId)
-    this.peers.forget(peerId)
-    await this.peers.startNew(peerId)
-    if (handle === undefined) return
-    const id = String(handle.agent.id)
-    this.sessionToPeer.delete(id)
-    await handle.dispose()
-  }
-
-  /** Read, parse, and deliver one polled message. */
-  /** Read, parse, and deliver one polled message. */
   /** Options passed to every `create`/`resume` for a peer's session. */
   private get createOptions(): { provider?: string; model?: string } {
     const options = this.options.sessionOptions
@@ -621,6 +597,12 @@ export class Channel {
 
   /**
    * Prepare a message's media, when this deployment can.
+   *
+   * Inlined rather than delegated, and the no-media case returns **before any
+   * `await`**. That is not a micro-optimisation: an extra suspension point here
+   * defers the delivery of the inbound message by a microtask, which is enough to
+   * change when the turn's `assistant/message` is committed relative to the reply
+   * subscription - and a real test caught exactly that.
    *
    * A deployment with no preparer delivers the label alone rather than failing:
    * the text the user typed must still arrive.

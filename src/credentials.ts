@@ -46,7 +46,17 @@ interface CredentialsService {
   /** Remove one record; removing an absent record is a no-op. */
   deleteRecord: (key: CredentialKey) => Promise<void>
   readRecord: (key: CredentialKey) => Promise<unknown>
-  listRecords: () => Promise<readonly { key: string }[]>
+  /**
+   * Enumerate every stored record's address.
+   *
+   * Optional because the mounted service may not implement it: the seam's type
+   * declares it, but a host whose `credentials` provider predates the method
+   * exposes the record operations without it. Calling it unconditionally threw
+   * `listRecords is not a function` inside `runChannel`, which took the whole
+   * channel down before the loop ever polled - so the degraded answer is "this
+   * provider cannot enumerate", not an exception.
+   */
+  listRecords?: () => Promise<readonly { key: string }[]>
 }
 
 /**
@@ -190,13 +200,22 @@ export async function forgetAccount(ctx: Context, accountId: string): Promise<vo
 
 /**
  * Enumerate this channel's stored logins.
+ *
+ * Returns an empty list when the mounted provider cannot enumerate. That is a
+ * real state, not a bug to swallow: a `credentials` provider that predates
+ * `listRecords` still stores and reads records, so a login survives and works -
+ * it just cannot be discovered by walking the store. Throwing instead took the
+ * whole channel down at startup, which is strictly worse than not knowing the
+ * account id it was polling as.
+ *
  * @param ctx - plugin context carrying the credentials service.
  * @returns every account this channel owns, newest last as the store lists it.
  */
 export async function listAccounts(ctx: Context): Promise<WechatAccount[]> {
-  const records = await credentialsOf(ctx).listRecords()
-  const prefix = `${WECHAT_CREDENTIAL_SCOPE}/`
   const service = credentialsOf(ctx)
+  if (service.listRecords === undefined) return []
+  const records = await service.listRecords()
+  const prefix = `${WECHAT_CREDENTIAL_SCOPE}/`
   const accounts: WechatAccount[] = []
   for (const record of records) {
     // The scope is the owner: another plugin's record is not ours to interpret,

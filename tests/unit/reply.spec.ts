@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest'
-import { ReplyQueue, extractAssistantText } from '../../src/bridge/reply.ts'
+import { ReplyQueue, THROTTLE_CODE, extractAssistantText } from '../../src/bridge/reply.ts'
 
 /** An assistant/message event as the session log records it. */
 function assistantEvent(text: string, blocks?: unknown[]) {
@@ -31,20 +31,24 @@ describe('extracting the reply text', () => {
     ]) as never)).toBe('part one part two')
   })
 
-  it('ignores non-text blocks instead of failing on them', () => {
-    // A turn that called a tool carries tool blocks alongside any prose.
+  it('does not send a message that also calls a tool', () => {
+    // The model commits one message per step, and most steps announce what they
+    // are about to do and then do it. The prose introduces tool arguments the
+    // chat never sees, so delivered alone it ends on a colon and nothing after
+    // it - the exact shape a user reported seeing.
     expect(extractAssistantText(assistantEvent('', [
       { type: 'tool-call', name: 'bash' },
-      { type: 'text', text: 'done' },
-    ]) as never)).toBe('done')
+      { type: 'text', text: 'now the parser:' },
+    ]) as never)).toBeUndefined()
   })
 
   it('does not read text out of a block that is not a text block', () => {
     // Non-text blocks can carry a `text` field of their own - tool arguments,
     // for one. Reading by field rather than by discriminant would paste that
-    // into the user's chat as if the model had said it.
+    // into the user's chat as if the model had said it. `reasoning` is used here
+    // rather than `tool-call` so the tool-call rule above does not mask this one.
     expect(extractAssistantText(assistantEvent('', [
-      { type: 'tool-call', name: 'bash', text: 'SECRET-ARGS' },
+      { type: 'reasoning', text: 'SECRET-ARGS' },
       { type: 'text', text: 'the answer' },
     ]) as never)).toBe('the answer')
   })
@@ -199,5 +203,159 @@ describe('the outbound queue', () => {
     await queue.drain()
 
     expect(sent).toEqual([])
+  })
+})
+
+describe('a throttled send', () => {
+  /** The error the server answers a burst with: HTTP 200, `ret: -2`. */
+  function throttle(): Error {
+    return Object.assign(new Error('sendmessage: -2 prepare failed'), { code: THROTTLE_CODE })
+  }
+
+  it('is retried rather than counted as a failed message', async () => {
+    // The server is asking for a slower sender, not rejecting the message. The
+    // same send goes through once it waits, so it must not consume the ordinary
+    // failure budget.
+    let attempts = 0
+    const sent: string[] = []
+    const queue = new ReplyQueue({
+      send: async (_peerId, text) => {
+        attempts += 1
+        if (attempts <= 2) throw throttle()
+        sent.push(text)
+      },
+      maxAttempts: 1,
+      maxThrottleAttempts: 3,
+      sleep: async () => {},
+    })
+
+    await queue.enqueue('user-7', 'the answer')
+    await queue.drain()
+
+    expect(sent).toEqual(['the answer'])
+  })
+
+  it('waits longer after each throttle', async () => {
+    // A fixed short delay is what lost the reply this was written for: a `-2`
+    // retried after one second is still inside the window that produced it.
+    const waits: number[] = []
+    let attempts = 0
+    const queue = new ReplyQueue({
+      send: async () => {
+        attempts += 1
+        if (attempts <= 3) throw throttle()
+      },
+      maxAttempts: 1,
+      maxThrottleAttempts: 4,
+      sleep: async ms => void waits.push(ms),
+    })
+
+    await queue.enqueue('user-7', 'x')
+    await queue.drain()
+
+    expect(waits).toEqual([2_000, 4_000, 8_000])
+  })
+
+  it('gives up after its own budget and reports the reply', async () => {
+    const onGiveUp = vi.fn()
+    let attempts = 0
+    const queue = new ReplyQueue({
+      send: async () => { attempts += 1; throw throttle() },
+      maxAttempts: 3,
+      maxThrottleAttempts: 2,
+      sleep: async () => {},
+      onGiveUp,
+    })
+
+    await queue.enqueue('user-7', 'never delivered')
+    await queue.drain()
+
+    // Two throttled attempts, not the three ordinary ones: the budgets are
+    // separate, so a permanent throttle stops at its own count.
+    expect(attempts).toBe(2)
+    expect(onGiveUp).toHaveBeenCalledWith('user-7', 'never delivered', expect.anything())
+  })
+
+  it('does not treat an ordinary failure as a throttle', async () => {
+    // `-14` (suspended account) and a throttle look alike to a naive check; only
+    // `-2` means "wait".
+    let attempts = 0
+    const queue = new ReplyQueue({
+      send: async () => {
+        attempts += 1
+        throw Object.assign(new Error('sendmessage: -14 suspended'), { code: -14 })
+      },
+      maxAttempts: 3,
+      maxThrottleAttempts: 5,
+      sleep: async () => {},
+    })
+
+    await queue.enqueue('user-7', 'x')
+    await queue.drain()
+
+    expect(attempts).toBe(3)
+  })
+})
+
+describe('pacing sends', () => {
+  it('holds the second send until the interval has passed', async () => {
+    // Pacing is proactive where the retry is reactive: by the time the server
+    // answers `-2`, the burst has already been refused.
+    let clock = 0
+    const waits: number[] = []
+    const sent: string[] = []
+    const queue = new ReplyQueue({
+      send: async (_peerId, text) => {
+        sent.push(text)
+        clock += 100
+      },
+      minIntervalMs: 1_000,
+      now: () => clock,
+      sleep: async ms => { waits.push(ms); clock += ms },
+    })
+
+    await queue.enqueue('user-7', 'first')
+    await queue.drain()
+    await queue.enqueue('user-7', 'second')
+    await queue.drain()
+
+    // The first send completes at t=100 and is stamped there; the second send
+    // starts at t=100, so it waits the full interval rather than the remainder.
+    expect(waits).toEqual([1_000])
+    expect(sent).toEqual(['first', 'second'])
+  })
+
+  it('paces each peer separately', async () => {
+    // A busy conversation must not delay a quiet one.
+    let clock = 0
+    const waits: number[] = []
+    const queue = new ReplyQueue({
+      send: async () => { clock += 100 },
+      minIntervalMs: 1_000,
+      now: () => clock,
+      sleep: async ms => { waits.push(ms); clock += ms },
+    })
+
+    await queue.enqueue('busy', 'one')
+    await queue.drain()
+    await queue.enqueue('quiet', 'two')
+    await queue.drain()
+
+    expect(waits).toEqual([])
+  })
+
+  it('does not wait when pacing is off', async () => {
+    const waits: number[] = []
+    const queue = new ReplyQueue({
+      send: async () => {},
+      sleep: async ms => void waits.push(ms),
+    })
+
+    await queue.enqueue('user-7', 'a')
+    await queue.drain()
+    await queue.enqueue('user-7', 'b')
+    await queue.drain()
+
+    expect(waits).toEqual([])
   })
 })
