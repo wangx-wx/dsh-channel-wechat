@@ -2,7 +2,20 @@
 
 English | [中文](./README.md)
 
+[![npm version](https://img.shields.io/npm/v/dsh-channel-wechat)](https://www.npmjs.com/package/dsh-channel-wechat)
+[![npm downloads](https://img.shields.io/npm/dm/dsh-channel-wechat)](https://www.npmjs.com/package/dsh-channel-wechat)
+[![CI](https://github.com/wangx-wx/dsh-channel-wechat/actions/workflows/ci.yml/badge.svg)](https://github.com/wangx-wx/dsh-channel-wechat/actions/workflows/ci.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
+[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-%3E%3D0.2.0--rc.1-informational)](https://github.com/deepseek-ai/deepseek-harness)
+
 A channel plugin that connects WeChat (Tencent iLink / ClawBot) to [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). One npm package provides both the Harness bundle and the GUI browser half; it runs inside the Harness process.
+
+**What sets this apart from the other WeChat channels is not more features — it is that messages do not go missing.** Only the turn's final answer is sent, so narration and tool arguments are never posted as replies; an over-long answer is split on paragraph boundaries instead of being rejected whole; a `ret: -2` rate limit backs off 2s→4s→8s→16s instead of being dropped silently after three one-second retries. Tests pin all three, so CI fails when a change breaks them.
+
+| In WeChat | Approval card | Plugin page |
+|:--:|:--:|:--:|
+| <img src="./docs/assets/readme/wechat-chat.jpg" width="240" alt="A WeChat conversation with DSH: asking for the working directory and getting it back"> | <img src="./docs/assets/readme/approval-card.jpg" width="240" alt="An approval card in WeChat: tool name, reason and options; replying P11 continues"> | <img src="./docs/assets/readme/plugin-page.jpg" width="420" alt="DSH plugin page: QR login, working directory, card placement, permission and default model"> |
+| Ask and assign work in the chat; replies come back to WeChat | Approval and question cards are relayed to WeChat; reply with a number | QR login, working directory, card placement, permission, model |
 
 ## What it supports
 

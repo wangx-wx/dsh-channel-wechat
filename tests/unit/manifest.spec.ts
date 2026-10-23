@@ -476,6 +476,32 @@ describe('discovery metadata', () => {
     }
   })
 
+  it('references only README images that exist, and keeps them small', () => {
+    // The README is the repository's landing page, so it embeds the screenshots
+    // rather than describing them. Two ways that silently goes wrong: a renamed
+    // file renders as a broken image on GitHub, and pointing at the originals
+    // (2.2 MB combined, published for the site at full quality) makes every
+    // repository visit download all of it. Both are checked on the files
+    // themselves, not on the prose around them.
+    for (const readme of ['../../README.md', '../../README.en.md']) {
+      const file = new URL(readme, import.meta.url)
+      const text = readFileSync(file, 'utf8')
+      const sources = [...text.matchAll(/<img\s[^>]*src="([^"]+)"/gu)].map(match => match[1])
+      expect(sources.length, `${readme} should embed screenshots`).toBeGreaterThan(0)
+      for (const source of sources) {
+        const resolved = new URL(String(source), file)
+        expect(existsSync(resolved), `${source} in ${readme} must exist`).toBe(true)
+        // The compressed copies live under docs/assets/readme/; the originals
+        // must never be linked from a README.
+        expect(
+          String(source).includes('assets/readme/'),
+          `${source} in ${readme} must use the compressed copy`,
+        ).toBe(true)
+        expect(readFileSync(resolved).byteLength).toBeLessThanOrEqual(120 * 1024)
+      }
+    }
+  })
+
   it('gives every class the landing page uses a rule in site.css', () => {
     // `.links` sat in the markup from the first version of the page with no
     // stylesheet rule behind it, so the entry cards rendered identically to the

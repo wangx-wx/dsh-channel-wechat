@@ -2,7 +2,20 @@
 
 [English](./README.en.md) | 中文
 
+[![npm version](https://img.shields.io/npm/v/dsh-channel-wechat)](https://www.npmjs.com/package/dsh-channel-wechat)
+[![npm downloads](https://img.shields.io/npm/dm/dsh-channel-wechat)](https://www.npmjs.com/package/dsh-channel-wechat)
+[![CI](https://github.com/wangx-wx/dsh-channel-wechat/actions/workflows/ci.yml/badge.svg)](https://github.com/wangx-wx/dsh-channel-wechat/actions/workflows/ci.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
+[![DeepSeek Harness](https://img.shields.io/badge/DeepSeek%20Harness-%3E%3D0.2.0--rc.1-informational)](https://github.com/deepseek-ai/deepseek-harness)
+
 把微信（腾讯 iLink / ClawBot）接入 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 的通道插件。它以一个 npm 包同时提供 Harness bundle 和 GUI 浏览器端，运行在 Harness 进程内。
+
+**这个插件的重点不是功能清单的长度，而是消息不丢。** 一轮结束时的回答才发出（旁白和工具参数不会被当成回答），超长正文按段落切开而不是整条被服务端拒绝，`ret: -2` 限流按 2s→4s→8s→16s 退避而不是重试三次后静默丢弃。这三条都有测试钉住，改坏时 CI 会失败。
+
+| 微信里对话 | 微信里审批 | 插件页 |
+|:--:|:--:|:--:|
+| <img src="./docs/assets/readme/wechat-chat.jpg" width="240" alt="微信里与 DSH 的对话：问当前目录，助手回答工作目录"> | <img src="./docs/assets/readme/approval-card.jpg" width="240" alt="微信里的审批卡：显示工具名、原因说明和两个选项，回复 P11 后继续"> | <img src="./docs/assets/readme/plugin-page.jpg" width="420" alt="DSH 插件页：扫码登录、工作目录、审批卡展示位置、权限和默认模型"> |
+| 直接在聊天里问、让它干活，回复回到微信 | 审批卡和提问卡转发到微信，回复编号即可 | 扫码登录、工作目录、卡片投递位置、权限、模型 |
 
 ## 能做什么
 
