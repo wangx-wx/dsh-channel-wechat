@@ -38,6 +38,7 @@ import { presentedFilesFrom, type PresentedFile } from '../bridge/deliverables.t
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { monitorLoop, type MonitorResponse } from './monitor.ts'
 import { resolveDirectory } from './directory.ts'
+import type { AccessPolicy } from './access.ts'
 
 /** The event surface the reply path subscribes to. */
 export interface SessionEventsLike {
@@ -127,6 +128,23 @@ export interface ChannelOptions {
   maxThrottleAttempts?: number
   /** Observe a handler failure; the loop continues either way. */
   onMessageError?: (error: unknown, message: unknown) => void
+  /**
+   * Who may drive a conversation through this channel.
+   *
+   * Required rather than defaulted, and consulted before anything else in the
+   * message path: the transport has no owner concept, so a channel without a gate
+   * lets any sender reach `/model`, `/cwd` and the agent itself. Making it
+   * required is what stops a caller from forgetting it and appearing to work.
+   */
+  access: AccessPolicy
+  /**
+   * Observe a message refused by {@link ChannelOptions.access}.
+   *
+   * Reported rather than answered: the peer id in the line is the value an
+   * operator pastes into `allow`, and replying to the stranger would tell them
+   * the bot exists.
+   */
+  onPeerDenied?: (peerId: string) => void
   /**
    * Observe a reference that arrived with unreadable content.
    *
@@ -671,6 +689,24 @@ export class Channel {
   private async handleMessage(message: unknown): Promise<void> {
     const parsed = parseInboundMessage(message as never)
     if (parsed === undefined) return
+
+    // Asked before **anything** else in this method, and that position is the
+    // rule rather than a detail. A command is answered below by the channel's own
+    // runtime - `/model` rewrites this plugin's provider and model, `/cwd` moves
+    // the conversation to any directory on the host, `/new` ends it - so a gate
+    // placed after the command routing would leave a stranger able to change the
+    // operator's configuration while merely being refused a conversation. Before
+    // `sessionFor` for the same reason: a refused peer must not get a session
+    // created for it, or the refusal leaks an agent into the registry.
+    //
+    // Nothing is sent back. Answering "not authorized" would confirm to the
+    // sender that the bot is alive, and a stranger has no way to act on it; the
+    // operator learns the peer id from the report instead, which is exactly the
+    // string to paste into `allow`.
+    if (!this.options.access.allows(parsed.peerId)) {
+      this.options.onPeerDenied?.(parsed.peerId)
+      return
+    }
 
     // Remembered before delivery: the token belongs to this inbound message, and
     // the reply it triggers reads it back.

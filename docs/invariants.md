@@ -10,6 +10,42 @@
 
 ## 一、会静默改变行为的
 
+### 身份门控必须在命令路由之前
+
+**规则**：`Channel.handleMessage` 在解析出入站消息后、**做任何其他事情之前**问 `options.access.allows(peerId)`；
+被拒则只上报（`onPeerDenied`，带上 peer id）后 `return`，不建会话、不跑命令、不回答卡片、不发任何回执。
+`access` 是**必填**参数，和 `sessionExists`、`sessionEvents` 同级。
+
+**违反的后果**：长轮询把机器人收到的每一条消息都交进来，协议层没有任何「所有者」概念。没有门控时，**任何能给
+这个微信号发消息的人**都能驱动会话——而且不只是聊天：同一条入站路径会走到 `/model`（改写本插件的 provider
+与 model）、`/cwd`（把会话迁到主机上任意目录）、`/new`，以及宿主暴露的全部命令。暴露面是**配置与文件系统**，
+不只是 token。
+
+**三个位置细节，错了都不报错**：
+
+| 放错位置 | 后果 |
+|---|---|
+| 在 `handleCommand` 之后 | 陌生人仍能执行 `/model`、`/cwd`、`/new`，只是拿不到对话 |
+| 在 `cards.answer` 之后 | 陌生人能替你回答正在等答案的审批卡/提问卡 |
+| 在 `sessionFor` 之后 | 会为被拒的 peer 建出第 1 个会话（注册表里多一个 agent） |
+
+**默认策略是「放行扫码的人」，而不是「全部拒绝」**：`allow` 为空时，用登录时记下的 `ilink_user_id`
+（就是 `~/.dsh/.credentials.yaml` 里的 `userId`，也正是私聊里的 `from_user_id`）作为唯一放行对象。
+选「空=全拒」会让**所有已安装用户升级后微信突然不回消息**——症状与本文档开头那个「通道看起来健康但没人
+回复」的缺陷一模一样，用户无法自行诊断。登录响应没带 `ilink_user_id` 时退化为**真的什么都不放行**，并在
+启动时上报一行说明（`admitsAnyone()`），而不是等到有人发消息才暴露。
+
+**显式名单是权威的**：`allow` 非空时**不再**把 owner 并进去，否则页面上写的名单与实际放行的人不一致，
+操作者读自己的配置也发现不了。
+
+**被拒时不回复**：回「未授权」等于向对方确认机器人活着；而上报的那行必须带**被拒的 peer id 原样**，
+因为那正是操作者要粘进 `allow` 的值。
+
+**依据**：`src/channel/access.ts`、`src/channel/channel.ts` 的 `handleMessage`、`src/index.ts` 的 `runChannel`；
+`tests/unit/access.spec.ts`（9 条）、`tests/integration/channel.spec.ts`「the admission gate over a real boot」
+（3 条，走真实 `apply`：放行登录者、拒绝陌生人且不建会话、陌生人的 `/new` 不落盘）。
+
+
 ### 会话 id 是 peer 的纯函数
 
 **规则**：peer → `channel-wechat-<escaped peerId>[~g<N>]`。起跑前必须先探测这个 id 是否已有持久化状态

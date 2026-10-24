@@ -222,6 +222,9 @@ function loadPage(
     permission: { text: config.permission, overridden: false, invalid: false },
     provider: { text: config.provider ?? '', overridden: false, invalid: false },
     model: { text: config.model ?? '', overridden: false, invalid: false },
+    // The admission list is drawn as one more text field. Left empty, which is
+    // also the meaningful default: it admits the account that scanned the login.
+    allow: { text: '', overridden: false, invalid: false },
   }
   const primitives: Record<string, unknown> = {
     // Transparent, so the fields under test are the nodes that survive rendering.

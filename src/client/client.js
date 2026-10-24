@@ -109,6 +109,9 @@ window.__ModuleLoader__.load({
         permissionFullAck: '我已了解风险，并愿意继续',
         permissionFullCancel: '取消',
         permissionFullConfirm: '启用完全权限',
+        allow: '允许使用的人',
+        allowHint: '只有这里列出的微信账号能用这个机器人，一行一个。留空表示只有扫码登录的那个账号——其他人发来的消息一律忽略。',
+        allowInvalid: '不能为空；留空请用重置。',
         close: '关闭',
         unavailable: '此部署未提供设置服务。',
         readOnly: '当前连接的设置文档为只读。',
@@ -175,6 +178,9 @@ window.__ModuleLoader__.load({
         permissionFullAck: 'I understand the risks and want to continue',
         permissionFullCancel: 'Cancel',
         permissionFullConfirm: 'Enable Full access',
+        allow: 'Who may use this bot',
+        allowHint: 'Only these WeChat ids may drive the bot, one per line. Empty means the account that scanned the login — messages from anyone else are ignored.',
+        allowInvalid: 'Cannot be empty; use reset to clear it.',
         close: 'Close',
         unavailable: 'This deployment serves no settings.',
         readOnly: 'The connected settings document is read-only.',
@@ -798,6 +804,26 @@ window.__ModuleLoader__.load({
               disabled: disabled,
               onPick: function (next) { props.edit('permission', next); },
             }),
+            // Who may talk to this channel. A single text value rather than a
+            // list control: the settings form model writes single-segment paths,
+            // so a nested array would render and then be unable to save. The
+            // empty value is meaningful - it admits the account that scanned the
+            // login - which is why the hint says so rather than leaving a blank
+            // field unexplained.
+            h(SettingsValueField, {
+              id: 'cw-allow',
+              label: t('allow'),
+              hint: t('allowHint'),
+              overriddenLabel: t('overridden'),
+              resetLabel: t('reset'),
+              invalidLabel: t('allowInvalid'),
+              disabled: disabled,
+              text: state.allow.text,
+              overridden: state.allow.overridden,
+              invalid: state.allow.invalid,
+              onEdit: function (text) { props.edit('allow', text); },
+              onReset: function () { props.resetField('allow'); },
+            }),
             h(ModelField, {
               t: t,
               provider: state.provider.text,
@@ -1070,6 +1096,10 @@ window.__ModuleLoader__.load({
         settingsEnumField('permission', ['read-only', 'workspace-write', 'danger-full-access']),
         settingsTextValueField('provider'),
         settingsTextValueField('model'),
+        // Multi-line ids are pasted as text, so this is a text field rather than
+        // a list control: the form model writes single-segment paths and a
+        // nested array could not be saved back.
+        settingsTextValueField('allow'),
       ]);
       var store = model.bind(function () {
         var shell = model.shell();
@@ -1080,6 +1110,7 @@ window.__ModuleLoader__.load({
         shell.permission = model.field('permission');
         shell.provider = model.field('provider');
         shell.model = model.field('model');
+        shell.allow = model.field('allow');
         return shell;
       });
       return { model: model, store: store };

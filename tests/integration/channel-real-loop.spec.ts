@@ -20,6 +20,7 @@ import { SessionId } from '@deepseek-ai/dsh-session'
 import { afterEach, describe, expect, it } from 'vitest'
 import { Channel } from '../../src/channel/channel.ts'
 import { createNativeCommandExecutor, createNativeCommandLister } from '../../src/bridge/native-commands.ts'
+import { openAccess } from '../support/access.ts'
 
 /** A model that answers every call with one fixed line of text. */
 class ScriptedAdapter extends LlmAdapter {
@@ -81,6 +82,7 @@ async function boot(reply: string, messages: unknown[]) {
   let polls = 0
 
   const channel = new Channel({
+    access: openAccess(),
     registry: ctx.agents as never,
     poll: async () => {
       polls += 1
@@ -181,6 +183,7 @@ describe('/stop over a real agent loop', () => {
     // profile does - including the monitor's queue, which is where a command
     // would otherwise wait behind the turn it is meant to stop.
     const channel = new Channel({
+    access: openAccess(),
       registry: ctx.agents as never,
       poll: async () => {
         polls += 1
@@ -251,6 +254,7 @@ describe('the harness\'s own commands over WeChat', () => {
     let clock = 0
     let polls = 0
     const channel = new Channel({
+    access: openAccess(),
       registry: ctx.agents as never,
       poll: async () => {
         polls += 1
@@ -318,6 +322,7 @@ describe('the owner ending a run', () => {
     let polls = 0
     let sawSignal: AbortSignal | undefined
     const channel = new Channel({
+    access: openAccess(),
       registry: ctx.agents as never,
       poll: (_cursor, _timeoutMs, signal) => {
         polls += 1

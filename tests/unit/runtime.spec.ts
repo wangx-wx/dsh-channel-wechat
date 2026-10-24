@@ -13,6 +13,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session'
 import { describe, expect, it } from 'vitest'
 import { startChannelFromStore } from '../../src/channel/runtime.ts'
 import type { WechatAccount } from '../../src/credentials.ts'
+import { openAccess } from '../support/access.ts'
 
 /** An account as the login action would have stored it. */
 function account(overrides: Partial<WechatAccount> = {}): WechatAccount {
@@ -57,6 +58,7 @@ function bench(accounts: WechatAccount[]) {
       | ((line: string) => Promise<{ kind: 'success' | 'error'; text?: string } | undefined>)
       | undefined,
     run: (signal?: AbortSignal) => startChannelFromStore({
+      access: openAccess(),
       listAccounts: async () => accounts,
       api: {
         async getUpdates(params) {
@@ -152,6 +154,7 @@ describe('starting from a stored account', () => {
     let rounds = 0
 
     await startChannelFromStore({
+      access: openAccess(),
       listAccounts: async () => [account()],
       api: {
         async getUpdates() {

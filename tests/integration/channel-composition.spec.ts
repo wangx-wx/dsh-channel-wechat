@@ -16,6 +16,7 @@ import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { ModelCommandContext, ModelListing } from '../../src/bridge/model-commands.ts'
 import { createModelCommands } from '../../src/channel/model-config.ts'
+import { openAccess } from '../support/access.ts'
 
 /** Wait until a condition holds, so a background loop has a chance to run. */
 async function until(check: () => Promise<boolean> | boolean, timeoutMs = 5_000): Promise<void> {
@@ -131,6 +132,7 @@ function build(options: {
   let clock = 0
 
   const channel = new Channel({
+    access: openAccess(),
     registry: options.registry.registry as never,
     poll: async (cursor) => {
       polls.push(cursor)
@@ -976,6 +978,7 @@ describe('answering a card while the turn holds the queue', () => {
     let polls = 0
     let clock = 0
     const channel = new Channel({
+    access: openAccess(),
       registry: f.registry as never,
       poll: async () => {
         polls += 1
@@ -1141,6 +1144,7 @@ describe('stopping', () => {
     const f = fakeRegistry()
     const polls: string[] = []
     const channel = new Channel({
+    access: openAccess(),
       registry: f.registry as never,
       poll: async () => {
         polls.push('poll')
@@ -1190,6 +1194,7 @@ describe('stopping', () => {
     /** The live agent, so the channel's liveness check passes and delivery happens. */
     let live: { id: string } | undefined
     const channel = new Channel({
+    access: openAccess(),
       registry: {
         create: async ({ sessionId }: { sessionId: string }) => {
           const agent = {
@@ -1271,6 +1276,7 @@ describe('stopping', () => {
       },
     }
     const channel = new Channel({
+    access: openAccess(),
       registry: {
         create: async () => ({ agent, dispose: async () => {} }),
         resume: async () => ({ agent, dispose: async () => {} }),
