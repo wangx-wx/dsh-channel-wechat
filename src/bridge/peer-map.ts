@@ -86,8 +86,14 @@ export interface AgentRegistryLike {
     /** Compose the agent's scoped world, including its preset. */
     setup?: AgentSetupLike
   }): Promise<AgentHandleLike>
-  /** The live agent for one session id, if any. */
-  get(sessionId: SessionId): { readonly id: SessionId } | undefined
+  /**
+   * The live agent for one session id, if any.
+   *
+   * Typed as the agent itself rather than just its id, because a session another
+   * owner already holds live is *adopted* instead of resumed - see
+   * {@link PeerMap.sessionFor}.
+   */
+  get(sessionId: SessionId): AgentHandleLike['agent'] | undefined
 }
 
 /** An owned agent plus its disposer, as `ctx.agents` returns it. */
@@ -193,6 +199,36 @@ export interface PeerGenerationsLike {
  * what makes the first `~g` in an id the separator rather than part of the peer.
  */
 const GENERATION_SEPARATOR = '~g'
+
+/**
+ * How long to wait for another owner's agent to be published after its write
+ * lease refused ours.
+ *
+ * Long enough to cover the Web app's asynchronous resume - the measured window
+ * between taking the lease and publishing the agent is milliseconds - and short
+ * enough that a wedged owner costs one message rather than a mute channel.
+ */
+const ADOPT_WAIT_MS = 1_000
+
+/** How often to look for that agent while waiting. */
+const ADOPT_POLL_MS = 25
+
+/**
+ * Whether an error is the persistence layer refusing a second write handle.
+ *
+ * Matched by name rather than by `instanceof`: the persistence backend's error
+ * class lives in a package this plugin deliberately does not depend on, and a
+ * structural check keeps the plugin loadable in compositions that mount a
+ * different backend. The message is checked as a fallback because a backend may
+ * surface its own class through a proxy and lose the name.
+ * @param error - the value a resume rejected with.
+ * @returns true when the failure means "another writer holds this session".
+ */
+function isWriteLeaseHeld(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  const name = (error as { name?: unknown }).name
+  return name === 'SessionAlreadyOwnedError' || error.message.includes('already owned by an active write handle')
+}
 
 /**
  * Escape a peer id so it cannot contain the generation separator.
@@ -355,6 +391,17 @@ export class PeerMap {
     const agentOptions = this.sessionOptions === undefined
       ? {}
       : { agentOptions: { provider: this.sessionOptions.provider, model: this.sessionOptions.model } }
+    // An adoption is tried before the probe: the same session can already be
+    // live in this process because another owner opened it - the Web app
+    // restoring the conversation the GUI was last looking at is the case that
+    // produced a live defect. Resuming it then fails on the write lease
+    // (`SessionAlreadyOwnedError`) and the peer goes mute for the life of the
+    // process, so the live agent is taken over instead.
+    const adopted = this.adopt(sessionId)
+    if (adopted !== undefined) {
+      this.entries.set(peerId, { handle: adopted })
+      return adopted
+    }
     // Resolved before the existence probe, because the directory decides where a
     // *created* session runs: a resume reads the header it already recorded, so
     // this is the only chance to apply it.
@@ -368,15 +415,108 @@ export class PeerMap {
     const hasCwdStore = this.currentCwd.has(peerId) || this.generations?.cwd !== undefined
     const cwd = hasCwdStore ? (await this.cwdOf(peerId)) ?? this.cwd : this.cwd
     const resumed = await this.sessionExists(sessionId)
-    const handle = resumed
-      ? await this.resumeSession(sessionId, agentOptions)
-      : await this.createNewSession(sessionId, agentOptions, cwd)
+    let handle: AgentHandleLike
+    if (resumed) {
+      handle = await this.resumeOrAdopt(sessionId, agentOptions)
+    } else {
+      handle = await this.createNewSession(sessionId, agentOptions, cwd)
+    }
     // Only on creation: a resumed session's permission knobs are already durable,
     // and may hold a preset the user changed with `/permission`. See
     // {@link PeerMapOptions.applyPermission}.
     if (!resumed) this.applyPermission?.(handle)
     this.entries.set(peerId, { handle })
     return handle
+  }
+
+  /**
+   * Take over a session that is already live in this process.
+   *
+   * The returned handle deliberately **does not own** the agent: its `dispose`
+   * does nothing. The live agent belongs to whoever opened it (the Web app's
+   * session controller, restoring the conversation the GUI had open), and this
+   * channel tears its own agents down on `stop()` - disposing one it merely
+   * borrowed would close the user's GUI conversation every time a config change
+   * restarted the poll loop.
+   *
+   * Two entry points use this. The direct one covers a channel start that
+   * happens *after* the other owner published its agent; {@link resumeOrAdopt}
+   * covers the same race in the other order, where the lease is already taken
+   * but the agent is not published yet.
+   *
+   * @param sessionId - the persisted session id.
+   * @returns a borrowing handle, or `undefined` when nothing is live under it.
+   */
+  private adopt(sessionId: SessionId): AgentHandleLike | undefined {
+    const agent = this.registry.get(sessionId)
+    if (agent === undefined) return undefined
+    return {
+      agent,
+      // Intentionally a no-op. See this method's note: the agent is not ours.
+      dispose: async () => {},
+    }
+  }
+
+  /**
+   * Resume a persisted session, adopting it when another owner already holds it.
+   *
+   * The write lease is taken by whoever opened the session for writing, and that
+   * is not always visible as a published agent yet: the Web app's controller
+   * resolves and resumes asynchronously, so the channel can reach
+   * `persistence.open` in the window between the lease being taken and
+   * `ctx.agents` gaining the agent. Treating that refusal as fatal is the defect
+   * this exists to remove - the message would be dropped with a log line and
+   * nothing said to the user.
+   *
+   * So the refusal is answered by waiting, bounded, for the agent to appear. A
+   * waiter is not an ownership claim: nothing is created, disposed or written
+   * while waiting, and a session that never shows up still fails - with an error
+   * that names the cause instead of the lease's own wording.
+   *
+   * @param sessionId - the persisted session id.
+   * @param agentOptions - the selected provider and model, when configured.
+   * @returns the live handle, borrowed when it was adopted.
+   * @throws when the session is held by something this process cannot see.
+   */
+  private async resumeOrAdopt(
+    sessionId: SessionId,
+    agentOptions: SelectionFragment,
+  ): Promise<AgentHandleLike> {
+    try {
+      return await this.resumeSession(sessionId, agentOptions)
+    } catch (error: unknown) {
+      if (!isWriteLeaseHeld(error)) throw error
+      const adopted = await this.adoptWhenPublished(sessionId)
+      if (adopted !== undefined) return adopted
+      // Nothing to adopt and nothing to resume: say what is actually wrong.
+      // Retrying, rotating the generation, or creating beside the stored session
+      // would each hide a real conflict behind a conversation the user did not
+      // ask for.
+      throw new Error(
+        `channel-wechat: session ${String(sessionId)} is held by another writer that is not visible to this process, `
+        + 'so its next message cannot be delivered; close the other Harness window or send /new',
+        { cause: error },
+      )
+    }
+  }
+
+  /**
+   * Wait, briefly, for another owner's agent for this session to be published.
+   *
+   * Bounded rather than open-ended: the wait is on a race that resolves in
+   * milliseconds when it resolves at all, and an unbounded one would turn a
+   * stuck owner into a channel that never answers again.
+   * @param sessionId - the session to watch.
+   * @returns the borrowed handle once it appears, otherwise `undefined`.
+   */
+  private async adoptWhenPublished(sessionId: SessionId): Promise<AgentHandleLike | undefined> {
+    const deadline = Date.now() + ADOPT_WAIT_MS
+    for (;;) {
+      const adopted = this.adopt(sessionId)
+      if (adopted !== undefined) return adopted
+      if (Date.now() >= deadline) return undefined
+      await new Promise(resolve => setTimeout(resolve, ADOPT_POLL_MS))
+    }
   }
 
   /**

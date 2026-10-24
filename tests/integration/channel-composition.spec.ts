@@ -28,33 +28,46 @@ async function until(check: () => Promise<boolean> | boolean, timeoutMs = 5_000)
 }
 
 /** A registry that records what was created and what was delivered to it. */
-function fakeRegistry(options: { existing?: readonly string[] } = {}) {
+function fakeRegistry(options: {
+  existing?: readonly string[]
+  /**
+   * Sessions another owner has already opened, and so already holds the write
+   * lease for - the Web app restoring the GUI's conversation.
+   */
+  heldByAnotherOwner?: readonly string[]
+} = {}) {
   const followed: { sessionId: string; text: string }[] = []
   const live = new Map<string, unknown>()
   /** Whether a session id already has persisted state, as the real probe asks. */
   const exists = (sessionId: string): boolean => (options.existing ?? []).includes(sessionId)
+  const held = (sessionId: string): boolean => (options.heldByAnotherOwner ?? []).includes(sessionId)
+  const agentFor = (sessionId: string) => ({
+    id: sessionId,
+    followup: (message: { content: readonly { text?: string }[] }) => {
+      followed.push({ sessionId, text: message.content.map(block => block.text ?? '').join('') })
+    },
+  })
+
+  // Published up front, the way the GUI's own resume leaves them: the lease and
+  // the agent both exist before this channel starts.
+  for (const sessionId of options.heldByAnotherOwner ?? []) live.set(sessionId, agentFor(sessionId))
 
   return {
     followed,
     live,
     registry: {
       async create({ sessionId }: { sessionId: string }) {
-        const agent = {
-          id: sessionId,
-          followup: (message: { content: readonly { text?: string }[] }) => {
-            followed.push({ sessionId, text: message.content.map(block => block.text ?? '').join('') })
-          },
-        }
+        const agent = agentFor(sessionId)
         live.set(sessionId, agent)
         return { agent, dispose: async () => void live.delete(sessionId) }
       },
       async resume({ resumeSessionId }: { resumeSessionId: string }) {
-        const agent = {
-          id: resumeSessionId,
-          followup: (message: { content: readonly { text?: string }[] }) => {
-            followed.push({ sessionId: resumeSessionId, text: message.content.map(block => block.text ?? '').join('') })
-          },
+        if (held(resumeSessionId)) {
+          const error = new Error(`session "${resumeSessionId}" is already owned by an active write handle`)
+          error.name = 'SessionAlreadyOwnedError'
+          throw error
         }
+        const agent = agentFor(resumeSessionId)
         live.set(resumeSessionId, agent)
         return { agent, dispose: async () => void live.delete(resumeSessionId) }
       },
@@ -198,6 +211,31 @@ describe('a polled message reaches its session', () => {
 
     expect(f.followed.map(entry => entry.sessionId).sort())
       .toEqual(['channel-wechat-user-7', 'channel-wechat-user-8'])
+  })
+
+  it('continues a session another owner already holds open', async () => {
+    // The reboot case: the Web app restores the conversation the GUI had open
+    // and takes its write lease. Resuming it fails, and the pre-fix channel then
+    // dropped every message for the life of the process - the user's WeChat went
+    // unanswered with one line in a log. The message must reach the live agent
+    // the GUI is using, and the answer must come back out to WeChat.
+    const f = fakeRegistry({ existing: ['channel-wechat-user-7'], heldByAnotherOwner: ['channel-wechat-user-7'] })
+    const { channel, sent } = build({
+      registry: f,
+      messages: [{ message_id: 1, from_user_id: 'user-7', message_type: 1, context_token: 'ctx-1', item_list: [{ type: 1, text_item: { text: 'after a reboot' } }] }],
+    })
+
+    await channel.run()
+    await channel.settled()
+
+    expect(f.followed).toEqual([{ sessionId: 'channel-wechat-user-7', text: 'after a reboot' }])
+    channel.onSessionEvent('channel-wechat-user-7', {
+      type: 'assistant/message',
+      data: { message: { content: [{ type: 'text', text: 'still here' }] } },
+    })
+    await channel.settled()
+
+    expect(sent).toEqual([{ peerId: 'user-7', text: 'still here', token: 'ctx-1' }])
   })
 })
 

@@ -28,6 +28,41 @@
 
 **依据**：plan-v1 §Q41；`src/bridge/peer-map.ts`、`src/index.ts` 的 `sessionExistsOf`。
 
+### 同一个会话可能已被本进程的另一个使用方持有
+
+**规则**：`sessionFor` 在探测/恢复之前，先看 `ctx.agents.get(sessionId)` 是否已经活着；活着就**接管**
+这个 agent（句柄的 `dispose` 是空操作），不再走 `resume`。若 `resume` 仍撞上写租约
+（`SessionAlreadyOwnedError`），则**有界等待（1s）**该 agent 被发布后再接管；等不到才抛错，且错误文案
+写明原因与处置（关掉另一个窗口或 `/new`）。
+
+**违反的后果**：DSH 对每个会话目录有跨进程写租约（Windows 上是名字由会话目录路径哈希出的内核信号量）。
+桌面端的 Web app 会恢复 GUI 上次打开的会话并**先拿到这把锁**，通道再去 `resume` 同一个 id 就被拒；
+被拒之后**本次进程的每一条入站消息都在进入会话前被丢掉**，微信侧零反馈，只有一行日志。形状与上面
+「会话 id 是 peer 的纯函数」完全相同：通道看起来健康，发什么都没人回。
+
+**为什么是接管而不是换新会话**：换新（代次 +1）会让刚重启的用户突然找不到原来的对话，而且每次重启
+都要付出一次对话丢失。接管让重启**继续原来的会话**，这正是用户要的语义。
+
+**两个必须守住的细节**：
+
+- **接管的句柄不得持有所有权**。那个 agent 属于先打开它的一方（Web app 的 session controller）；
+  通道 `stop()` 会 dispose 自己的全部会话，若把借来的也 dispose，每次配置保存触发的 `apply` 重跑
+  都会把用户正在看的 GUI 会话关掉。
+- **等待必须有界**。持有者可能卡死或根本不在本进程；无界等待会把「这条消息没回复」变成「这个通道永远
+  没回复」。
+
+**代价（记录在案）**：微信与 GUI 变成**同一段对话的两个入口**，用户在同一时刻两边发消息会被
+`whenIdle` 的整-agent 静默语义串行化（后发的等前一轮结束）。这是用户明确选择的取舍。
+
+**凭据结构判定，不 import**：错误按 `name === 'SessionAlreadyOwnedError'` 或消息文本识别，因为该错误类
+属于本插件刻意不依赖的 persistence 包，且要允许挂载别的 backend。
+
+**依据**：`src/bridge/peer-map.ts` 的 `adopt`/`resumeOrAdopt`/`adoptWhenPublished`；
+`tests/unit/peer-map.spec.ts`「a session another owner already holds」（4 条，变异已验证）；
+`tests/integration/channel-composition.spec.ts`「continues a session another owner already holds open」。
+实测：`~/.dsh/channel-wechat/log/channel-wechat-2026-10-24.log` 两次重启各一行该错误，
+GUI Local Storage 的 `dsh.sessions.current` 指向同一 `~g12`。
+
 ### 回复读的是 durable `assistant/message` 事件
 
 **规则**：回复路径订阅 `ctx.on('session/event', …)`，从 committed 的 `assistant/message` 事件取文本。
