@@ -87,7 +87,10 @@ function builtEntry(): string {
 /** The account the credentials store reports, so the channel polls with no login. */
 const STORED_ACCOUNT = {
   kind: 'grant',
-  payload: { botToken: 'bot-token', baseUrl: 'https://wechat.invalid' },
+  // The owner the admission gate reads. Without it this account admits nobody,
+  // and every case here would fail on a refused message instead of on the thing
+  // it is actually about.
+  payload: { botToken: 'bot-token', baseUrl: 'https://wechat.invalid', userId: 'user-7' },
 }
 
 /** One inbound WeChat text message, as the wire delivers it. */

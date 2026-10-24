@@ -113,9 +113,22 @@ const MARK = {
   segmented: '__SegmentedControl',
   risk: '__RiskConfirmation',
   menu: '__Menu',
-  valueField: '__SettingsValueField',
   button: '__Button',
 } as const
+
+/**
+ * The control the page renders for the admission list.
+ *
+ * It is a host `<textarea>`, not one of the primitives' fields: those are
+ * single-line `<input>`s, and HTML strips newlines from an input's value.
+ * @param page - the renderer.
+ * @returns the rendered control.
+ */
+function allowField(page: Page): Rendered {
+  const found = findAll(page.draw(), 'textarea').filter(node => node.props['id'] === 'cw-allow')
+  expect(found).toHaveLength(1)
+  return found[0]!
+}
 
 /** Flatten a render tree into the visible text it would produce. */
 function texts(node: unknown, found: string[] = []): string[] {
@@ -207,7 +220,7 @@ interface Page {
  * @returns the page renderer and the edits it records.
  */
 function loadPage(
-  config: { permission: string, provider?: string, model?: string },
+  config: { permission: string, provider?: string, model?: string, allow?: string },
   fetchImpl?: (input: string | URL | Request) => Promise<Response>,
 ): Page {
   const source = readFileSync(join(REPO_ROOT, 'lib/client.js'), 'utf8')
@@ -222,11 +235,14 @@ function loadPage(
     permission: { text: config.permission, overridden: false, invalid: false },
     provider: { text: config.provider ?? '', overridden: false, invalid: false },
     model: { text: config.model ?? '', overridden: false, invalid: false },
+    // The admission list is drawn as a multi-line control. Left empty, which is
+    // also the meaningful default: it admits the account that scanned the login.
+    allow: { text: config.allow ?? '', overridden: config.allow !== undefined, invalid: false },
   }
   const primitives: Record<string, unknown> = {
     // Transparent, so the fields under test are the nodes that survive rendering.
     SettingsForm: (props: Record<string, unknown>) => props['children'],
-    SettingsValueField: marker(MARK.valueField),
+    SettingsValueField: marker('__SettingsValueField'),
     SegmentedControl: marker(MARK.segmented),
     RiskConfirmation: marker(MARK.risk),
     Menu: marker(MARK.menu),
@@ -337,6 +353,21 @@ function permissionControl(tree: unknown): Rendered {
   const controls = findAll(tree, MARK.segmented).filter(node => node.props['id'] === 'cw-permission')
   expect(controls).toHaveLength(1)
   return controls[0]!
+}
+
+/**
+ * The field block that contains the admission control.
+ *
+ * The reset button is inside it, and the page draws other reset buttons for the
+ * primitives' fields, so searching the whole tree would find the wrong one.
+ * @param page - the renderer.
+ * @returns the rendered field block.
+ */
+function allowFieldBlock(page: Page): Rendered {
+  const blocks = findAll(page.draw(), 'div').filter(node => node.props['className'] === 'cw-field')
+  const found = blocks.filter(block => findAll(block.children, 'textarea').length === 1)
+  expect(found).toHaveLength(1)
+  return found[0]!
 }
 
 /** The risk confirmation the page rendered. */
@@ -465,6 +496,52 @@ describe('the model control', () => {
 
     expect(page.edited).toEqual([])
     expect(page.reset).toEqual([])
+  })
+})
+
+describe('the admission list', () => {
+  it('renders the stored list with its newlines intact', () => {
+    // The documented format is one id per line. A single-line `<input>` drops
+    // every newline in a value it is given, so the page would show a list the
+    // file does not contain - and saving it back would write the merged string,
+    // quietly revoking a peer the operator had admitted.
+    const stored = 'friend-1@im.wechat\nfriend-2@im.wechat'
+    const page = loadPage({ permission: 'workspace-write', allow: stored })
+
+    expect(allowField(page).props['value']).toBe(stored)
+  })
+
+  it('stages what was typed, newlines included', () => {
+    // The other direction of the same defect: a control that collapsed the draft
+    // would admit one peer whose id is two ids joined by a space.
+    const page = loadPage({ permission: 'workspace-write' })
+
+    ;(allowField(page).props['onChange'] as (event: { target: { value: string } }) => void)(
+      { target: { value: 'a@im.wechat\nb@im.wechat' } },
+    )
+
+    expect(page.edited).toEqual([{ field: 'allow', text: 'a@im.wechat\nb@im.wechat' }])
+  })
+
+  it('offers a reset only once the field carries an override', () => {
+    // Emptying the control is a real edit, not a reset: a reset button on a field
+    // with no override would be a button that does nothing.
+    const plain = loadPage({ permission: 'workspace-write' })
+
+    expect(findAll(allowFieldBlock(plain).children, MARK.button)).toHaveLength(0)
+  })
+
+  it('resets the field rather than staging an empty value', () => {
+    // Clearing an override and emptying the control are different writes: the
+    // first lets the composition default back in, the second would store `''` as
+    // the operator's own value.
+    const page = loadPage({ permission: 'workspace-write', allow: 'a@im.wechat' })
+    const resetButton = findAll(allowFieldBlock(page).children, MARK.button)[0]!
+
+    ;(resetButton.props['onClick'] as () => void)()
+
+    expect(page.reset).toEqual(['allow'])
+    expect(page.edited).toEqual([])
   })
 })
 

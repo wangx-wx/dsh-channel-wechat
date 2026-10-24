@@ -30,7 +30,8 @@ import { mountPanelRoutes, panelUrl } from './channel/mount.ts'
 import { createReporter, type Report } from './channel/report.ts'
 import { createLogFileSink, logDirPath } from './channel/log-file.ts'
 import { createPanel } from './channel/panel.ts'
-import { startChannelFromStore } from './channel/runtime.ts'
+import { canPoll, startChannelFromStore } from './channel/runtime.ts'
+import { createAccessPolicy } from './channel/access.ts'
 import { createTypingIndicator } from './channel/typing-indicator.ts'
 import { TypingTicketCache } from './wechat/typing.ts'
 import { resolveModelSelection, resolvePermission, type PermissionPreset } from './channel/session-policy.ts'
@@ -158,6 +159,19 @@ export interface Config {
    * into a reply the user never received.
    */
   maxThrottleAttempts: Volatile<number>
+  /**
+   * Additional peers allowed to use this channel, one per line.
+   *
+   * Empty does not mean "no gate": it means the user who scanned the login -
+   * the id the credential recorded - and nobody else. A non-empty list replaces
+   * that owner, so what the page shows is what is admitted.
+   *
+   * Without this gate any WeChat user who can message the bot drives the agent,
+   * and not only as a chat partner: the same inbound path reaches `/model`
+   * (rewrites this plugin's provider and model), `/cwd` (moves the conversation
+   * to any directory) and the harness command surface.
+   */
+  allow: Volatile<string>
 }
 
 /** Default ceiling for one outbound message, in characters. */
@@ -218,6 +232,15 @@ export const Config = z.object({
   // At least one: zero attempts would abandon a throttled reply on its first
   // refusal, which is exactly the silent drop this policy exists to prevent.
   maxThrottleAttempts: z.number().min(1).default(DEFAULT_MAX_THROTTLE_ATTEMPTS).volatile(),
+  // Who may drive a conversation. Empty is the ordinary case and does NOT mean
+  // "everyone": it means the user who scanned the login, whose id the credential
+  // already records. Naming anyone here replaces that default rather than adding
+  // to it, so the list on the page is exactly who is admitted.
+  //
+  // A plain string with newline separators rather than a list, because the GUI's
+  // form model writes single-segment paths: a nested control would render and
+  // then be unable to save.
+  allow: z.string().default('').volatile(),
 })
 
 /**
@@ -527,6 +550,29 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
   // than defaulted inside the channel: without it `/new` rotates only in memory
   // and the next restart resumes the very conversation the user ended.
   const generations = new PeerSessionStore()
+  // Who may talk to this channel. Built from the configured list and the login
+  // the run is about to poll as - the owner is the user who scanned, whose id the
+  // credential recorded. This is the only place both facts exist, which is why it
+  // is constructed here rather than defaulted inside the channel.
+  //
+  // The empty list admits the owner and nobody else. Failing closed for everyone
+  // would mute every existing installation on upgrade - the shape of a defect
+  // users cannot diagnose from their side.
+  const access = createAccessPolicy({ allow: config.allow.get(), owner: account?.userId })
+  // A deployment that admits nobody will silently drop every message, so it is
+  // said at start rather than only when one arrives: with no recorded owner and
+  // no list there is no way to name anyone implicitly.
+  //
+  // Only once there is a login to poll as. Without one the policy admits nobody,
+  // but the run returns before its first poll - so there is no message to drop.
+  // Saying otherwise put a false error in the log at exactly the moment a
+  // first-time user (or one who just logged out) reads it.
+  if (canPoll(account) && !access.admitsAnyone()) {
+    report(
+      'no peer is admitted: this login recorded no user id, so configure `allow` with the WeChat id to talk to',
+      'every inbound message will be ignored until an allowed peer id is configured',
+    )
+  }
   // The channel is built inside `startChannelFromStore`, while the card service
   // has to exist before it - the channel routes replies through it. One of the
   // two must therefore be introduced after the other, and this holder is that
@@ -634,6 +680,11 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
     cards,
     ...(applyPermission === undefined ? {} : { applyPermission }),
     ...(prepareMedia === undefined ? {} : { prepareMedia }),
+    access,
+    // Reported rather than answered: the peer id in the line is the value an
+    // operator pastes into `allow`, and a reply would tell a stranger the bot is
+    // alive.
+    onPeerDenied: peerId => { report('peer refused: not in the allowed list', peerId) },
     onChannel: channel => { channelRef.current = channel },
     // Resolved before the run so a restart resumes where the last one stopped
     // rather than replaying the conversation it already answered.

@@ -34,6 +34,17 @@ interface Booted {
 const boots: Booted[] = []
 
 /**
+ * The WeChat id these suites treat as the operator.
+ *
+ * The login records it as its `userId` and the delivered message carries it as
+ * `from_user_id`, which is exactly what a real installation looks like: the
+ * person who scanned the code is the person messaging the bot. The admission gate
+ * admits that id with no configuration, so every suite that expects a reply has
+ * to model both halves rather than none.
+ */
+const PEER = 'user-7'
+
+/**
  * Homes a test created, removed after it, pass or fail.
  *
  * Cleanup registered here rather than at the end of each test body: an in-body
@@ -225,7 +236,7 @@ describe('a profile boot with the login action', () => {
       async resume() { throw new Error('no persisted session') },
       get: (id: string) => live.get(id),
     })
-    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9', userId: PEER })
       await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
 
     try {
@@ -298,7 +309,7 @@ describe('a profile boot with the login action', () => {
       async resume() { throw new Error('no persisted session') },
       get: (id: string) => live.get(id),
     })
-    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9', userId: PEER })
       await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
 
     try {
@@ -367,7 +378,7 @@ describe('a profile boot with the login action', () => {
       async resume() { throw new Error('no persisted session') },
       get: (id: string) => live.get(id),
     })
-    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9', userId: PEER })
       // The profile supplies the directory; the plugin must record it.
     await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
 
@@ -456,7 +467,7 @@ describe('a profile boot with the login action', () => {
       async resume() { throw new Error('no persisted session') },
       get: (id: string) => live.get(id),
     })
-    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9', userId: PEER })
     await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
 
     let stored: string | undefined
@@ -554,7 +565,7 @@ describe('a profile boot with the login action', () => {
         ]
       },
     })
-    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9', userId: PEER })
     await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
 
     try {
@@ -650,7 +661,7 @@ describe('a profile boot with the login action', () => {
         ]
       },
     })
-    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9', userId: PEER })
     await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
 
     try {
@@ -742,7 +753,7 @@ describe('a profile boot with the login action', () => {
       async resume() { throw new Error('no persisted session') },
       get: () => undefined,
     })
-    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9', userId: PEER })
       await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
 
     try {
@@ -806,7 +817,7 @@ describe('a profile boot with the login action', () => {
       async resume() { throw new Error('no persisted session') },
       get: (id: string) => live.get(id),
     })
-    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9', userId: PEER })
       await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
 
     let stored = -1
@@ -905,7 +916,7 @@ describe('a profile boot with the login action', () => {
       async resume() { throw new Error('no persisted session') },
       get: (id: string) => live.get(id),
     })
-    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9', userId: PEER })
       await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
 
     let card = ''
@@ -1051,7 +1062,7 @@ describe('a profile boot with the login action', () => {
       async resume() { throw new Error('no persisted session') },
       get: (id: string) => live.get(id),
     })
-    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9', userId: PEER })
       await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
 
     try {
@@ -1118,7 +1129,7 @@ describe('a profile boot with the login action', () => {
       async resume() { throw new Error('no persisted session') },
       get: (id: string) => live.get(id),
     })
-    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9', userId: PEER })
 
     vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request, init?: { body?: unknown }) => {
       const href = String(url)
@@ -1267,7 +1278,7 @@ describe('a profile boot with the login action', () => {
       async resume() { throw new Error('no persisted session') },
       get: (id: string) => live.get(id),
     })
-    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9', userId: PEER })
       await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
 
     try {
@@ -1340,7 +1351,7 @@ describe('a profile boot with the login action', () => {
       },
       list: () => [],
     })
-    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9', userId: PEER })
       await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
 
     // Read before disposal on purpose: `dispose` now waits for the channel's
@@ -1432,7 +1443,7 @@ describe('a profile boot with the login action', () => {
       stat: async (id: string) => (id === peerSessionId ? { header: { id } } : undefined),
     })
 
-    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9', userId: PEER })
       await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
 
     try {
@@ -1500,7 +1511,7 @@ describe('a profile boot with no action', () => {
     ctx.provide('agentDefaultModel', {
       currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
     })
-    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9', userId: PEER })
       await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents'], { cwd: '/work' })
 
     // The loop runs detached, so give it a moment to issue its first poll.
@@ -1553,7 +1564,7 @@ describe('a profile boot with no action', () => {
     ctx.provide('agentDefaultModel', {
       currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
     })
-    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9', userId: PEER })
       await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents'], { cwd: '/work' })
 
     // `polling as` is reported once the loop's first poll succeeds, so waiting
@@ -1634,6 +1645,51 @@ describe('a profile boot with no action', () => {
     else process.env['DSH_HOME'] = previous
   }, 30_000)
 
+  it('does not claim a gate refuses everyone before there is a login', async () => {
+    // A fresh install and a profile whose owner has just logged out both have no
+    // stored credential. `createAccessPolicy` then admits nobody, but nothing is
+    // polling either - there is no message for the gate to refuse. Reporting "no
+    // peer is admitted" there is a false error in the one place a first-time user
+    // is most likely to read the log, and it would send them to configure `allow`
+    // before they had ever scanned a QR code.
+    const previous = process.env['DSH_HOME']
+    const home = tempHome('dsh-wechat-no-login-')
+    process.env['DSH_HOME'] = home
+
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ret: 0 }), { status: 200 })) as unknown as typeof fetch)
+
+    const ctx = new Context()
+    provideCmdline(ctx, { args: [], exit: () => {}, ready: { commit() {}, await: async () => {} } } as never)
+    await ctx.plugin(CredentialsLocal as never, {} as never)
+    await ctx.plugin(AgentRegistry)
+    await ctx.plugin(CommandRuntime)
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
+    })
+    await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents'], { cwd: '/work' })
+
+    // Wait on the login line, which every run writes: it is what proves the
+    // diagnostics were emitted at all, so the absence below is not merely "the
+    // file had not been created yet".
+    const logDir = join(home, 'channel-wechat', 'log')
+    await until(async () => {
+      try {
+        return readdirSync(logDir).some(entry => readFileSync(join(logDir, entry), 'utf8').includes('微信登录'))
+      } catch {
+        return false
+      }
+    })
+    await ctx.fiber.dispose()
+
+    const body = readdirSync(logDir)
+      .map(entry => readFileSync(join(logDir, entry), 'utf8'))
+      .join('')
+    expect(body).not.toContain('no peer is admitted')
+
+    if (previous === undefined) delete process.env['DSH_HOME']
+    else process.env['DSH_HOME'] = previous
+  }, 30_000)
+
   it('says why it is not polling when the provider cannot enumerate', async () => {
     // A host whose credentials provider predates `listRecords` still stores and
     // reads a login - the login works - but this process cannot discover its
@@ -1662,7 +1718,7 @@ describe('a profile boot with no action', () => {
     // The login is stored before the method is hidden, which is the shape of the
     // live host: records written by an earlier provider, read by one that cannot
     // walk them.
-    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9', userId: PEER })
     // Shadowed as an own property rather than deleted: the provider's methods
     // live on its prototype, so `delete` would leave the inherited one reachable.
     Object.defineProperty(ctx.credentials as object, 'listRecords', {
@@ -1720,7 +1776,7 @@ describe('a profile boot with no action', () => {
     await ctx.plugin(CredentialsLocal as never, {} as never)
     await ctx.plugin(AgentRegistry)
     await ctx.plugin(CommandRuntime)
-    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9' })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9', userId: PEER })
       await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents'], { cwd: '/work' })
 
     const logDir = join(home, 'channel-wechat', 'log')
@@ -1736,6 +1792,197 @@ describe('a profile boot with no action', () => {
     const body = readFileSync(join(logDir, readdirSync(logDir)[0]!), 'utf8')
     expect(body).toContain('[channel-wechat] channel stopped: ')
     expect(body).toContain('agentDefaultModel')
+
+    if (previous === undefined) delete process.env['DSH_HOME']
+    else process.env['DSH_HOME'] = previous
+  }, 30_000)
+})
+
+describe('the admission gate over a real boot', () => {
+  /**
+   * Mount the profile and hand back the sending and following recorders.
+   *
+   * The owner is recorded through the real credential, because that is where the
+   * gate reads it from: a test that supplied the owner directly would not prove
+   * the login's own `ilink_user_id` is what admits the user after an upgrade.
+   */
+  async function bootWithPeers(peers: readonly string[], storedUserId: string | undefined): Promise<{
+    followed: string[]
+    sent: string[]
+    dispose: () => Promise<void>
+  }> {
+    const previous = process.env['DSH_HOME']
+    process.env['DSH_HOME'] = tempHome('dsh-wechat-access-')
+
+    const followed: string[] = []
+    const sent: string[] = []
+    const live = new Map<string, unknown>()
+    let polls = 0
+    let context: Context | undefined
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const href = String(url)
+      if (href.includes('getupdates')) {
+        polls += 1
+        return new Response(JSON.stringify({
+          ret: 0,
+          msgs: polls === 1
+            ? peers.map((peer, index) => ({
+              message_id: index + 1,
+              from_user_id: peer,
+              message_type: 1,
+              context_token: `ctx-${String(index)}`,
+              item_list: [{ type: 1, text_item: { text: `hi from ${peer}` } }],
+            }))
+            : [],
+          get_updates_buf: `c${String(polls)}`,
+        }), { status: 200 })
+      }
+      if (href.includes('sendmessage')) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          msg?: { item_list?: { text_item?: { text?: string } }[] }
+        }
+        const text = body.msg?.item_list?.[0]?.text_item?.text
+        if (typeof text === 'string') sent.push(text)
+        return new Response(JSON.stringify({ ret: 0 }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ ret: 0 }), { status: 200 })
+    }) as unknown as typeof fetch)
+
+    const ctx = new Context()
+    context = ctx
+    provideCmdline(ctx, { args: [], exit: () => {}, ready: { commit() {}, await: async () => {} } } as never)
+    await ctx.plugin(CredentialsLocal as never, {} as never)
+    await ctx.plugin(CommandRuntime)
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
+    })
+    ctx.provide('agents', {
+      async create({ sessionId }: { sessionId: string }) {
+        const agent = {
+          id: sessionId,
+          // Recorded per session id, which is what the assertions turn back into
+          // a peer through the id prefix.
+          followup: () => { followed.push(sessionId) },
+          // A command is answered by the channel itself, so nothing commits and
+          // nothing is followed for one - which is exactly what the refusal
+          // assertions need to see.
+          whenIdle: async () => {
+            const emit = context?.emit as unknown as (name: string, session: unknown, event: unknown) => void
+            emit?.call(context, 'session/event', { id: sessionId }, {
+              type: 'assistant/message',
+              data: { message: { content: [{ type: 'text', text: 'answered' }] } },
+            })
+          },
+        }
+        live.set(sessionId, agent)
+        return { agent, dispose: async () => void live.delete(sessionId) }
+      },
+      async resume() { throw new Error('no persisted session') },
+      get: (id: string) => live.get(id),
+    })
+    await saveAccount(ctx, {
+      botToken: 'tok-1',
+      accountId: 'bot-9',
+      ...(storedUserId === undefined ? {} : { userId: storedUserId }),
+    })
+    await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
+
+    return {
+      followed,
+      sent,
+      dispose: async () => {
+        await ctx.fiber.dispose()
+        if (previous === undefined) delete process.env['DSH_HOME']
+        else process.env['DSH_HOME'] = previous
+      },
+    }
+  }
+
+  it('admits the account that scanned the login, with no allow list configured', async () => {
+    // The upgrade case, and the reason the default is not "deny everyone": an
+    // existing installation has never configured `allow`, so failing closed would
+    // mute it on upgrade - indistinguishable from a broken channel.
+    const owner = 'owner@im.wechat'
+    const booted = await bootWithPeers([owner], owner)
+    try {
+      await until(async () => booted.followed.length > 0, 5_000)
+    } finally {
+      await booted.dispose()
+    }
+
+    expect(booted.followed).toEqual([`channel-wechat-${owner}`])
+    expect(booted.sent).toContain('answered')
+  }, 30_000)
+
+  it('ignores a stranger without creating a session for them', async () => {
+    // The exposure this gate closes. A refusal that arrived after `sessionFor`
+    // would still register an agent for the stranger, and one that arrived after
+    // the command routing would let them rewrite the operator's configuration.
+    //
+    // Both peers send in the same poll batch: the owner's answer is what proves
+    // the batch was processed, so the assertion cannot pass merely because
+    // nothing had run yet. Ordering the stranger first makes "the owner still got
+    // through" the stronger of the two facts.
+    const owner = 'owner@im.wechat'
+    const stranger = 'stranger@im.wechat'
+    const booted = await bootWithPeers([stranger, owner], owner)
+    try {
+      // Waited on the owner's own reply: the poll delivers both messages in one
+      // batch, so the owner's turn proves the batch was processed.
+      await until(async () => booted.followed.length > 0, 5_000)
+      // A little longer, so a wrongly-admitted stranger would have been seen.
+      await new Promise(resolve => setTimeout(resolve, 150))
+    } finally {
+      await booted.dispose()
+    }
+
+    expect(booted.followed).toEqual([`channel-wechat-${owner}`])
+    expect(booted.sent).toEqual(['answered'])
+  }, 30_000)
+
+  it('does not run a command a stranger sent', async () => {
+    // `/new` on a peer with no session is the cheapest command that would leave
+    // an observable trace: it advances the persisted generation. A refusal after
+    // the command routing would still have rotated the conversation.
+    const owner = 'owner@im.wechat'
+    const stranger = 'stranger@im.wechat'
+    const previous = process.env['DSH_HOME']
+    const home = tempHome('dsh-wechat-access-cmd-')
+    process.env['DSH_HOME'] = home
+
+    let polls = 0
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes('getupdates')) {
+        polls += 1
+        return new Response(JSON.stringify({
+          ret: 0,
+          msgs: polls === 1
+            ? [{ message_id: 1, from_user_id: stranger, message_type: 1, item_list: [{ type: 1, text_item: { text: '/new' } }] }]
+            : [],
+          get_updates_buf: `c${String(polls)}`,
+        }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ ret: 0 }), { status: 200 })
+    }) as unknown as typeof fetch)
+
+    const ctx = new Context()
+    provideCmdline(ctx, { args: [], exit: () => {}, ready: { commit() {}, await: async () => {} } } as never)
+    await ctx.plugin(CredentialsLocal as never, {} as never)
+    await ctx.plugin(AgentRegistry)
+    await ctx.plugin(CommandRuntime)
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
+    })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9', userId: owner })
+    await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
+
+    const store = join(home, 'channel-wechat', 'peer-sessions.json')
+    await until(async () => polls > 2, 5_000)
+    await ctx.fiber.dispose()
+
+    // The rotation would have written this file; a refused command writes nothing.
+    expect(() => readFileSync(store, 'utf8')).toThrow()
 
     if (previous === undefined) delete process.env['DSH_HOME']
     else process.env['DSH_HOME'] = previous

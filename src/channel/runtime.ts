@@ -14,6 +14,7 @@ import type { AgentHandleLike, AgentPresetsLike, AgentRegistryLike, PeerGenerati
 import type { MessageApi } from '../wechat/api.ts'
 import { LOGIN_BASE_URL } from '../wechat/login-runner.ts'
 import { Channel, type CardAnswererLike, type SessionEventsLike } from './channel.ts'
+import type { AccessPolicy } from './access.ts'
 import { readFileBytes, sendFileToPeer } from '../bridge/send-file.ts'
 import { uploadToCdn } from '../wechat/cdn-upload.ts'
 import { CDN_BASE_URL } from '../wechat/cdn.ts'
@@ -67,6 +68,18 @@ export interface RuntimeOptions {
   maxThrottleAttempts?: number
   /** Observe a handler failure. */
   onMessageError?: (error: unknown, message: unknown) => void
+  /**
+   * Who may drive a conversation through this channel.
+   *
+   * Required, like `sessionExists` and `sessionEvents`, because omitting it is
+   * not a neutral default: the transport delivers every sender the bot receives,
+   * so a run with no gate lets any of them reach the agent and the command
+   * surface. Built from this channel's own `allow` list and the recorded login
+   * owner in `index.ts`, which is the only place that knows both.
+   */
+  access: AccessPolicy
+  /** Observe a message refused by {@link RuntimeOptions.access}. */
+  onPeerDenied?: (peerId: string) => void
   /**
    * Build the typing indicator for the account this run polls as.
    *
@@ -262,13 +275,27 @@ async function sendDeclaredFiles(params: {
   }
 }
 
+/**
+ * Whether this run has an account it can actually poll as.
+ *
+ * Exported because a caller that reports about the run has to know whether one
+ * will start: the admission gate's start-up line is about messages that will be
+ * dropped, and no message is dropped when nothing polls. Two copies of this rule
+ * would drift apart the first time one of them changed.
+ *
+ * @param account - the stored login, if any.
+ * @returns true when the run will start a poll loop.
+ */
+export function canPoll(account: WechatAccount | undefined): account is WechatAccount & { botToken: string } {
+  return account !== undefined && account.botToken !== undefined && account.botToken.trim() !== ''
+}
+
 export async function startChannelFromStore(options: RuntimeOptions): Promise<void> {
   const accounts = await options.listAccounts()
   const account = accounts[0]
   // Nothing to poll as: without a token every request would be unauthenticated
   // and the server would reject the loop rather than this call.
-  if (account === undefined) return
-  if (account.botToken === undefined || account.botToken.trim() === '') return
+  if (!canPoll(account)) return
 
   const token = account.botToken
   const baseUrl = account.baseUrl ?? LOGIN_BASE_URL
@@ -300,6 +327,8 @@ export async function startChannelFromStore(options: RuntimeOptions): Promise<vo
     ...(options.minSendIntervalMs === undefined ? {} : { minSendIntervalMs: options.minSendIntervalMs }),
     ...(options.maxThrottleAttempts === undefined ? {} : { maxThrottleAttempts: options.maxThrottleAttempts }),
     ...(options.onMessageError === undefined ? {} : { onMessageError: options.onMessageError }),
+    access: options.access,
+    ...(options.onPeerDenied === undefined ? {} : { onPeerDenied: options.onPeerDenied }),
     ...(options.onUnreadableQuote === undefined ? {} : { onUnreadableQuote: options.onUnreadableQuote }),
     ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
     ...(options.now === undefined ? {} : { now: options.now }),

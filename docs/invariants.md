@@ -10,6 +10,42 @@
 
 ## 一、会静默改变行为的
 
+### 身份门控必须在命令路由之前
+
+**规则**：`Channel.handleMessage` 在解析出入站消息后、**做任何其他事情之前**问 `options.access.allows(peerId)`；
+被拒则只上报（`onPeerDenied`，带上 peer id）后 `return`，不建会话、不跑命令、不回答卡片、不发任何回执。
+`access` 是**必填**参数，和 `sessionExists`、`sessionEvents` 同级。
+
+**违反的后果**：长轮询把机器人收到的每一条消息都交进来，协议层没有任何「所有者」概念。没有门控时，**任何能给
+这个微信号发消息的人**都能驱动会话——而且不只是聊天：同一条入站路径会走到 `/model`（改写本插件的 provider
+与 model）、`/cwd`（把会话迁到主机上任意目录）、`/new`，以及宿主暴露的全部命令。暴露面是**配置与文件系统**，
+不只是 token。
+
+**三个位置细节，错了都不报错**：
+
+| 放错位置 | 后果 |
+|---|---|
+| 在 `handleCommand` 之后 | 陌生人仍能执行 `/model`、`/cwd`、`/new`，只是拿不到对话 |
+| 在 `cards.answer` 之后 | 陌生人能替你回答正在等答案的审批卡/提问卡 |
+| 在 `sessionFor` 之后 | 会为被拒的 peer 建出第 1 个会话（注册表里多一个 agent） |
+
+**默认策略是「放行扫码的人」，而不是「全部拒绝」**：`allow` 为空时，用登录时记下的 `ilink_user_id`
+（就是 `~/.dsh/.credentials.yaml` 里的 `userId`，也正是私聊里的 `from_user_id`）作为唯一放行对象。
+选「空=全拒」会让**所有已安装用户升级后微信突然不回消息**——症状与本文档开头那个「通道看起来健康但没人
+回复」的缺陷一模一样，用户无法自行诊断。登录响应没带 `ilink_user_id` 时退化为**真的什么都不放行**，并在
+启动时上报一行说明（`admitsAnyone()`），而不是等到有人发消息才暴露。
+
+**显式名单是权威的**：`allow` 非空时**不再**把 owner 并进去，否则页面上写的名单与实际放行的人不一致，
+操作者读自己的配置也发现不了。
+
+**被拒时不回复**：回「未授权」等于向对方确认机器人活着；而上报的那行必须带**被拒的 peer id 原样**，
+因为那正是操作者要粘进 `allow` 的值。
+
+**依据**：`src/channel/access.ts`、`src/channel/channel.ts` 的 `handleMessage`、`src/index.ts` 的 `runChannel`；
+`tests/unit/access.spec.ts`（9 条）、`tests/integration/channel.spec.ts`「the admission gate over a real boot」
+（3 条，走真实 `apply`：放行登录者、拒绝陌生人且不建会话、陌生人的 `/new` 不落盘）。
+
+
 ### 会话 id 是 peer 的纯函数
 
 **规则**：peer → `channel-wechat-<escaped peerId>[~g<N>]`。起跑前必须先探测这个 id 是否已有持久化状态
@@ -27,6 +63,41 @@
 （真实微信 id 为 `[A-Za-z0-9_.@-]@im.wechat`，不可能含 `~`）。
 
 **依据**：plan-v1 §Q41；`src/bridge/peer-map.ts`、`src/index.ts` 的 `sessionExistsOf`。
+
+### 同一个会话可能已被本进程的另一个使用方持有
+
+**规则**：`sessionFor` 在探测/恢复之前，先看 `ctx.agents.get(sessionId)` 是否已经活着；活着就**接管**
+这个 agent（句柄的 `dispose` 是空操作），不再走 `resume`。若 `resume` 仍撞上写租约
+（`SessionAlreadyOwnedError`），则**有界等待（1s）**该 agent 被发布后再接管；等不到才抛错，且错误文案
+写明原因与处置（关掉另一个窗口或 `/new`）。
+
+**违反的后果**：DSH 对每个会话目录有跨进程写租约（Windows 上是名字由会话目录路径哈希出的内核信号量）。
+桌面端的 Web app 会恢复 GUI 上次打开的会话并**先拿到这把锁**，通道再去 `resume` 同一个 id 就被拒；
+被拒之后**本次进程的每一条入站消息都在进入会话前被丢掉**，微信侧零反馈，只有一行日志。形状与上面
+「会话 id 是 peer 的纯函数」完全相同：通道看起来健康，发什么都没人回。
+
+**为什么是接管而不是换新会话**：换新（代次 +1）会让刚重启的用户突然找不到原来的对话，而且每次重启
+都要付出一次对话丢失。接管让重启**继续原来的会话**，这正是用户要的语义。
+
+**两个必须守住的细节**：
+
+- **接管的句柄不得持有所有权**。那个 agent 属于先打开它的一方（Web app 的 session controller）；
+  通道 `stop()` 会 dispose 自己的全部会话，若把借来的也 dispose，每次配置保存触发的 `apply` 重跑
+  都会把用户正在看的 GUI 会话关掉。
+- **等待必须有界**。持有者可能卡死或根本不在本进程；无界等待会把「这条消息没回复」变成「这个通道永远
+  没回复」。
+
+**代价（记录在案）**：微信与 GUI 变成**同一段对话的两个入口**，用户在同一时刻两边发消息会被
+`whenIdle` 的整-agent 静默语义串行化（后发的等前一轮结束）。这是用户明确选择的取舍。
+
+**凭据结构判定，不 import**：错误按 `name === 'SessionAlreadyOwnedError'` 或消息文本识别，因为该错误类
+属于本插件刻意不依赖的 persistence 包，且要允许挂载别的 backend。
+
+**依据**：`src/bridge/peer-map.ts` 的 `adopt`/`resumeOrAdopt`/`adoptWhenPublished`；
+`tests/unit/peer-map.spec.ts`「a session another owner already holds」（4 条，变异已验证）；
+`tests/integration/channel-composition.spec.ts`「continues a session another owner already holds open」。
+实测：`~/.dsh/channel-wechat/log/channel-wechat-2026-10-24.log` 两次重启各一行该错误，
+GUI Local Storage 的 `dsh.sessions.current` 指向同一 `~g12`。
 
 ### 回复读的是 durable `assistant/message` 事件
 

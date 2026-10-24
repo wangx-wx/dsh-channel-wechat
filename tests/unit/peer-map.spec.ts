@@ -30,6 +30,21 @@ function fakeRegistry(options: {
   recordedPresets?: Record<string, string>
   /** Directories the stored sessions recorded, read back on resume. */
   recordedCwds?: Record<string, string>
+  /**
+   * Sessions another owner already holds a write handle for.
+   *
+   * The real failure is thrown by the persistence backend, before any agent is
+   * published: this is the shape a channel sees when the Web app restored the
+   * session the GUI had open.
+   */
+  writeLeaseHeld?: string[]
+  /**
+   * Whether the lease holder's agent is already published in the registry.
+   *
+   * `false` models the narrower race: the lease is taken, the owner is still
+   * resuming, and the agent appears only after the refusal.
+   */
+  publishLeaseHolder?: boolean
 } = {}) {
   const created: string[] = []
   const resumed: string[] = []
@@ -39,6 +54,13 @@ function fakeRegistry(options: {
   /** Every metadata object the registry was handed, create only. */
   const metas: { sessionId: string; meta?: { cwd?: string; agentPreset?: string } }[] = []
   const live = new Map<string, { agent: { id: string }; dispose: () => Promise<void> }>()
+
+  /** The error the persistence backend raises for a second write handle. */
+  const leaseHeld = (sessionId: string): Error => {
+    const error = new Error(`session "${sessionId}" is already owned by an active write handle`)
+    error.name = 'SessionAlreadyOwnedError'
+    return error
+  }
 
   const makeHandle = (sessionId: string, cwd?: string) => {
     const handle = {
@@ -65,6 +87,15 @@ function fakeRegistry(options: {
     asked,
     metas,
     live,
+    /**
+     * Publish the lease holder's agent, as its own owner would.
+     *
+     * Exposed so a test can model the narrower race: the lease is taken first
+     * and the agent shows up while the channel is already waiting.
+     */
+    publishLeaseHolder(sessionId: string) {
+      live.set(sessionId, makeHandle(sessionId))
+    },
     registry: {
       async create({ sessionId, agentOptions, meta }: {
         sessionId: string
@@ -86,6 +117,15 @@ function fakeRegistry(options: {
       }) {
         if (!(options.existingSessions ?? []).includes(resumeSessionId)) {
           throw new Error(`session not found: ${resumeSessionId}`)
+        }
+        if ((options.writeLeaseHeld ?? []).includes(resumeSessionId)) {
+          // The refusal comes first and the agent comes later, which is the
+          // order the Web app's own resume produces: it takes the lease, then
+          // awaits setup, and only then is the agent in the registry.
+          if (options.publishLeaseHolder === true) {
+            setTimeout(() => { live.set(resumeSessionId, makeHandle(resumeSessionId)) }, 5)
+          }
+          throw leaseHeld(resumeSessionId)
         }
         resumed.push(resumeSessionId)
         asked.push({ kind: 'resume', sessionId: resumeSessionId, agentOptions })
@@ -304,6 +344,72 @@ describe('resuming after a restart', () => {
     await map.sessionFor('user-7')
 
     expect(mounted).toEqual([undefined])
+  })
+})
+
+describe('a session another owner already holds', () => {
+  it('adopts the live agent instead of resuming it', async () => {
+    // The defect this suite exists for: the Web app restores the conversation
+    // the GUI was last looking at, taking the session's write lease. A channel
+    // that resumes it then fails with `SessionAlreadyOwnedError`, reports it to
+    // a log, and drops every inbound message for its whole lifetime.
+    const id = 'channel-wechat-user-7'
+    const f = fakeRegistry({ existingSessions: [id] })
+    f.publishLeaseHolder(id)
+    const map = new PeerMap({ registry: f.registry as never, sessionExists: async () => true })
+
+    const session = await map.sessionFor('user-7')
+
+    // Resuming would have collided with the lease; adopting is what makes the
+    // reboot continue the conversation instead of going mute.
+    expect(f.resumed).toEqual([])
+    expect(f.created).toEqual([])
+    expect(session.agent.id).toBe(id)
+    expect(map.has('user-7')).toBe(true)
+  })
+
+  it('adopts the agent that appears after the lease refused the resume', async () => {
+    // The narrower race: the other owner holds the lease but has not published
+    // its agent yet. Nothing can be resumed, but the refusal is not the final
+    // word either - a short wait is.
+    const id = 'channel-wechat-user-7'
+    const f = fakeRegistry({ existingSessions: [id], writeLeaseHeld: [id], publishLeaseHolder: true })
+    const map = new PeerMap({ registry: f.registry as never, sessionExists: async () => true })
+
+    const session = await map.sessionFor('user-7')
+
+    expect(f.resumed).toEqual([])
+    expect(f.created).toEqual([])
+    expect(session.agent.id).toBe(id)
+  })
+
+  it('does not dispose an adopted agent on shutdown', async () => {
+    // A borrowed agent belongs to the owner that opened it. Disposing it would
+    // close the user's GUI conversation every time the poll loop restarts - the
+    // config page saves a volatile field and `apply` re-runs.
+    const id = 'channel-wechat-user-7'
+    const f = fakeRegistry({ existingSessions: [id] })
+    f.publishLeaseHolder(id)
+    const map = new PeerMap({ registry: f.registry as never, sessionExists: async () => true })
+    await map.sessionFor('user-7')
+
+    await map.disposeAll()
+
+    expect(f.disposed).toEqual([])
+    // The agent is still live for its real owner.
+    expect(map.handleFor('user-7')).toBeUndefined()
+    expect(f.live.has(id)).toBe(true)
+  })
+
+  it('still fails when the lease has no visible owner', async () => {
+    // A writer this process cannot see (another window, a stale handle) leaves
+    // nothing to adopt. Failing is correct; what must not happen is a silent
+    // drop, so the error names the cause and what to do about it.
+    const id = 'channel-wechat-user-7'
+    const f = fakeRegistry({ existingSessions: [id], writeLeaseHeld: [id] })
+    const map = new PeerMap({ registry: f.registry as never, sessionExists: async () => true })
+
+    await expect(map.sessionFor('user-7')).rejects.toThrow(/held by another writer/u)
   })
 })
 

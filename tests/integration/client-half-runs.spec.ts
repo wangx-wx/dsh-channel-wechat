@@ -280,7 +280,7 @@ describe.skipIf(!REACT_AVAILABLE)('the browser half as a script', () => {
     const probe = runBundle()
 
     expect(probe.specs.map(spec => spec.field).sort())
-      .toEqual(['cards', 'cwd', 'model', 'permission', 'provider'])
+      .toEqual(['allow', 'cards', 'cwd', 'model', 'permission', 'provider'])
   })
 
   it('rejects a relative working directory before the write', () => {
