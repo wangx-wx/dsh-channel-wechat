@@ -30,7 +30,7 @@ import { mountPanelRoutes, panelUrl } from './channel/mount.ts'
 import { createReporter, type Report } from './channel/report.ts'
 import { createLogFileSink, logDirPath } from './channel/log-file.ts'
 import { createPanel } from './channel/panel.ts'
-import { startChannelFromStore } from './channel/runtime.ts'
+import { canPoll, startChannelFromStore } from './channel/runtime.ts'
 import { createAccessPolicy } from './channel/access.ts'
 import { createTypingIndicator } from './channel/typing-indicator.ts'
 import { TypingTicketCache } from './wechat/typing.ts'
@@ -562,7 +562,12 @@ async function runChannel(ctx: Context, config: Config, signal: AbortSignal): Pr
   // A deployment that admits nobody will silently drop every message, so it is
   // said at start rather than only when one arrives: with no recorded owner and
   // no list there is no way to name anyone implicitly.
-  if (!access.admitsAnyone()) {
+  //
+  // Only once there is a login to poll as. Without one the policy admits nobody,
+  // but the run returns before its first poll - so there is no message to drop.
+  // Saying otherwise put a false error in the log at exactly the moment a
+  // first-time user (or one who just logged out) reads it.
+  if (canPoll(account) && !access.admitsAnyone()) {
     report(
       'no peer is admitted: this login recorded no user id, so configure `allow` with the WeChat id to talk to',
       'every inbound message will be ignored until an allowed peer id is configured',

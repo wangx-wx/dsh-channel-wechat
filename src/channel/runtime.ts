@@ -275,13 +275,27 @@ async function sendDeclaredFiles(params: {
   }
 }
 
+/**
+ * Whether this run has an account it can actually poll as.
+ *
+ * Exported because a caller that reports about the run has to know whether one
+ * will start: the admission gate's start-up line is about messages that will be
+ * dropped, and no message is dropped when nothing polls. Two copies of this rule
+ * would drift apart the first time one of them changed.
+ *
+ * @param account - the stored login, if any.
+ * @returns true when the run will start a poll loop.
+ */
+export function canPoll(account: WechatAccount | undefined): account is WechatAccount & { botToken: string } {
+  return account !== undefined && account.botToken !== undefined && account.botToken.trim() !== ''
+}
+
 export async function startChannelFromStore(options: RuntimeOptions): Promise<void> {
   const accounts = await options.listAccounts()
   const account = accounts[0]
   // Nothing to poll as: without a token every request would be unauthenticated
   // and the server would reject the loop rather than this call.
-  if (account === undefined) return
-  if (account.botToken === undefined || account.botToken.trim() === '') return
+  if (!canPoll(account)) return
 
   const token = account.botToken
   const baseUrl = account.baseUrl ?? LOGIN_BASE_URL

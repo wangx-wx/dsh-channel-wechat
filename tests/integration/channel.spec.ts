@@ -1645,6 +1645,51 @@ describe('a profile boot with no action', () => {
     else process.env['DSH_HOME'] = previous
   }, 30_000)
 
+  it('does not claim a gate refuses everyone before there is a login', async () => {
+    // A fresh install and a profile whose owner has just logged out both have no
+    // stored credential. `createAccessPolicy` then admits nobody, but nothing is
+    // polling either - there is no message for the gate to refuse. Reporting "no
+    // peer is admitted" there is a false error in the one place a first-time user
+    // is most likely to read the log, and it would send them to configure `allow`
+    // before they had ever scanned a QR code.
+    const previous = process.env['DSH_HOME']
+    const home = tempHome('dsh-wechat-no-login-')
+    process.env['DSH_HOME'] = home
+
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ret: 0 }), { status: 200 })) as unknown as typeof fetch)
+
+    const ctx = new Context()
+    provideCmdline(ctx, { args: [], exit: () => {}, ready: { commit() {}, await: async () => {} } } as never)
+    await ctx.plugin(CredentialsLocal as never, {} as never)
+    await ctx.plugin(AgentRegistry)
+    await ctx.plugin(CommandRuntime)
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
+    })
+    await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents'], { cwd: '/work' })
+
+    // Wait on the login line, which every run writes: it is what proves the
+    // diagnostics were emitted at all, so the absence below is not merely "the
+    // file had not been created yet".
+    const logDir = join(home, 'channel-wechat', 'log')
+    await until(async () => {
+      try {
+        return readdirSync(logDir).some(entry => readFileSync(join(logDir, entry), 'utf8').includes('微信登录'))
+      } catch {
+        return false
+      }
+    })
+    await ctx.fiber.dispose()
+
+    const body = readdirSync(logDir)
+      .map(entry => readFileSync(join(logDir, entry), 'utf8'))
+      .join('')
+    expect(body).not.toContain('no peer is admitted')
+
+    if (previous === undefined) delete process.env['DSH_HOME']
+    else process.env['DSH_HOME'] = previous
+  }, 30_000)
+
   it('says why it is not polling when the provider cannot enumerate', async () => {
     // A host whose credentials provider predates `listRecords` still stores and
     // reads a login - the login works - but this process cannot discover its

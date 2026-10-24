@@ -111,7 +111,7 @@ window.__ModuleLoader__.load({
         permissionFullConfirm: '启用完全权限',
         allow: '允许使用的人',
         allowHint: '只有这里列出的微信账号能用这个机器人，一行一个。留空表示只有扫码登录的那个账号——其他人发来的消息一律忽略。',
-        allowInvalid: '不能为空；留空请用重置。',
+        allowPlaceholder: '每行一个微信 id，例如 xxx@im.wechat',
         close: '关闭',
         unavailable: '此部署未提供设置服务。',
         readOnly: '当前连接的设置文档为只读。',
@@ -180,7 +180,7 @@ window.__ModuleLoader__.load({
         permissionFullConfirm: 'Enable Full access',
         allow: 'Who may use this bot',
         allowHint: 'Only these WeChat ids may drive the bot, one per line. Empty means the account that scanned the login — messages from anyone else are ignored.',
-        allowInvalid: 'Cannot be empty; use reset to clear it.',
+        allowPlaceholder: 'One WeChat id per line, e.g. xxx@im.wechat',
         close: 'Close',
         unavailable: 'This deployment serves no settings.',
         readOnly: 'The connected settings document is read-only.',
@@ -733,6 +733,48 @@ window.__ModuleLoader__.load({
       );
     }
 
+    /**
+     * The admission list, as a multi-line text control.
+     *
+     * A `textarea` rather than the primitives' `SettingsValueField`, which is a
+     * single-line `<input>`: HTML strips newlines from an input's value, so the
+     * documented "one id per line" cannot be typed into it at all. Worse, a
+     * stored list would render as one collapsed line and be written back that
+     * way on the next save - the operator's own id would stop matching and
+     * nobody would be told.
+     *
+     * Hand-rolled like `PermissionField` above it, and for the same reason: the
+     * primitive does not offer the control this field needs.
+     */
+    function AllowField(props) {
+      var t = props.t;
+      return h('div', { className: 'cw-field' },
+        h('div', { className: 'cw-head' },
+          h('label', { className: 'cw-label', htmlFor: 'cw-allow' }, t('allow')),
+          props.overridden
+            ? h(Button, {
+              variant: 'ghost',
+              size: 'sm',
+              disabled: props.disabled,
+              onClick: props.onReset,
+            }, t('reset'))
+            : null,
+        ),
+        h('textarea', {
+          id: 'cw-allow',
+          className: 'cw-textarea',
+          rows: 3,
+          spellCheck: false,
+          autoComplete: 'off',
+          disabled: props.disabled,
+          value: props.text,
+          placeholder: t('allowPlaceholder'),
+          onChange: function (event) { props.onEdit(event.target.value); },
+        }),
+        h('p', { className: 'cw-hint' }, t('allowHint')),
+      );
+    }
+
     /** The configuration half: this plugin's own volatile fields. */
     function Config(props) {
       var t = props.t;
@@ -804,23 +846,16 @@ window.__ModuleLoader__.load({
               disabled: disabled,
               onPick: function (next) { props.edit('permission', next); },
             }),
-            // Who may talk to this channel. A single text value rather than a
-            // list control: the settings form model writes single-segment paths,
-            // so a nested array would render and then be unable to save. The
-            // empty value is meaningful - it admits the account that scanned the
-            // login - which is why the hint says so rather than leaving a blank
-            // field unexplained.
-            h(SettingsValueField, {
-              id: 'cw-allow',
-              label: t('allow'),
-              hint: t('allowHint'),
-              overriddenLabel: t('overridden'),
-              resetLabel: t('reset'),
-              invalidLabel: t('allowInvalid'),
-              disabled: disabled,
+            // Who may talk to this channel. A multi-line control, because the
+            // documented format is one id per line and a single-line input
+            // silently merges them. The empty value is meaningful - it admits
+            // the account that scanned the login - which is why the hint says
+            // so rather than leaving a blank field unexplained.
+            h(AllowField, {
+              t: t,
               text: state.allow.text,
               overridden: state.allow.overridden,
-              invalid: state.allow.invalid,
+              disabled: disabled,
               onEdit: function (text) { props.edit('allow', text); },
               onReset: function () { props.resetField('allow'); },
             }),
@@ -1063,6 +1098,16 @@ window.__ModuleLoader__.load({
       // The model trigger sits under its label on the same left edge as the
       // segmented controls, so the three fields read as one column.
       '.cw-field .cw-menu{align-self:flex-start;}',
+      // The admission list. Sized like the primitives' own text input (34px for
+      // one line) but tolerant of several: ids are pasted a column at a time, and
+      // a control that showed one line at a time would hide what is configured.
+      // `resize: vertical` only, so the page's width stays its own.
+      '.cw-textarea{box-sizing:border-box;min-height:60px;padding:6px 12px;resize:vertical;',
+      'border:0.5px solid var(--dsw-alias-border-l4);border-radius:var(--dsw-radius-md);',
+      'background:var(--dsw-alias-bg-layer-3);font:inherit;font-size:13px;line-height:1.5;',
+      'color:var(--dsw-alias-label-primary);}',
+      '.cw-textarea:focus-visible{outline:none;border-color:var(--dsw-alias-state-business-primary);}',
+      '.cw-textarea:disabled{color:var(--dsw-alias-label-tertiary);cursor:default;}',
       // The version card: a heading that carries the running version beside it,
       // the way the other cards carry only a title.
       '.cw-version{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:1.5;}',
@@ -1096,9 +1141,9 @@ window.__ModuleLoader__.load({
         settingsEnumField('permission', ['read-only', 'workspace-write', 'danger-full-access']),
         settingsTextValueField('provider'),
         settingsTextValueField('model'),
-        // Multi-line ids are pasted as text, so this is a text field rather than
-        // a list control: the form model writes single-segment paths and a
-        // nested array could not be saved back.
+        // One string, not an array: the form model writes single-segment paths,
+        // so a nested list could not be saved back. The value's own newlines are
+        // what separate ids, which is why the control above is a textarea.
         settingsTextValueField('allow'),
       ]);
       var store = model.bind(function () {
