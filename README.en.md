@@ -22,6 +22,7 @@ A channel plugin that connects WeChat (Tencent iLink / ClawBot) to [DeepSeek Har
 - Two-way text, image, and file messaging.
 - Inbound WeChat messages become DSH turns; durable `session/event` messages are sent back to WeChat.
 - Commands in WeChat (`/help`, `/skills`, `/cwd`, `/models`, `/model`, `/status`, `/stop`, `/new`), approval cards, and question cards.
+- Only the WeChat account that scanned the login can drive the bot; messages from anyone else create no session, run no command, and get no reply.
 - `/cwd <absolute-path>` switches the working directory from WeChat: the current conversation ends and a new one starts in that directory, and the choice survives a restart.
 - An approval card can switch the current conversation to full access; WeChat shows "typing" while a turn runs.
 - QR login, sign-out, working directory, card delivery, model, and permission settings on the GUI plugin page.
@@ -72,6 +73,8 @@ The GUI page edits all fields. The same values can be written in the profile's `
 ```
 
 `cwd` must be absolute. It is recorded when a session is created and cannot be changed for that session; edits affect sessions created afterwards. See [configuration reference](./docs/configuration.md) for fields, defaults, and permission boundaries.
+
+`allow` decides who may use the bot. Empty admits only the account that scanned the login, which is the zero-configuration default; to admit others, put one WeChat id per line in "Who may use this bot" on the plugin page. A non-empty list is authoritative — the logged-in account is no longer included automatically. A refused message gets no reply; the plugin log keeps one line with the sender's id, which is the value to paste into the list.
 
 Profiles without a web app can use the terminal:
 

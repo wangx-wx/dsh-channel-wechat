@@ -1,7 +1,8 @@
 {
   "name": "dsh-channel-wechat",
   "version": "0.2.6",
-  "description": "WeChat (iLink / ClawBot) channel for DeepSeek Harness",
+  "description": "Answer WeChat messages from a DeepSeek Harness session, with interaction cards relayed to the chat.",
+  "author": "wang.x <wangx.coding@gmail.com>",
   "license": "MIT",
   "type": "module",
   "packageManager": "pnpm@11.7.0",
