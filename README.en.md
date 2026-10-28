@@ -25,6 +25,8 @@ A channel plugin that connects WeChat (Tencent iLink / ClawBot) to [DeepSeek Har
 - Only the WeChat account that scanned the login can drive the bot; messages from anyone else create no session, run no command, and get no reply.
 - `/cwd <absolute-path>` switches the working directory from WeChat: the current conversation ends and a new one starts in that directory, and the choice survives a restart.
 - An approval card can switch the current conversation to full access; WeChat shows "typing" while a turn runs.
+- A question card accepts either an option number or your own words; `0` on the card means "talk it over instead" and closes the card.
+- When several cards arrive at once, only one is shown at a time, headed "N of M", and the next follows once you answer; `/stop` withdraws every card waiting in that conversation.
 - QR login, sign-out, working directory, card delivery, model, and permission settings on the GUI plugin page.
 - Long polling decoupled from turn processing, with terminal and file diagnostics.
 
