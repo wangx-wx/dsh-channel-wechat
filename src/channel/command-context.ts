@@ -28,6 +28,8 @@ export interface CommandContextOptions {
   cancelRunning?: (peerId: string) => Promise<boolean>
   /** Cancel through the lifecycle, used when no override is supplied. */
   cancel: (peerId: string) => Promise<boolean>
+  /** Drop one peer's pending cards; absent when no card answerer is composed. */
+  cancelCards?: (peerId: string) => number
   /** End a peer's session. */
   endSession: (peerId: string) => Promise<void>
   /** Validate a path and end the session in that directory. */
@@ -54,6 +56,9 @@ export function createCommandContext(options: CommandContextOptions): LocalComma
       if (cancel !== undefined) return cancel(peerId)
       return options.cancel(peerId)
     },
+    ...(options.cancelCards === undefined ? {} : {
+      cancelCards: () => options.cancelCards!(peerId),
+    }),
     endSession: async () => { await options.endSession(peerId) },
     accountId: options.accountId,
     sessionCount: peers.size,

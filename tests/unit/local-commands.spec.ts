@@ -106,6 +106,49 @@ describe('/stop', () => {
     const busy = await bench().run('stop')
     expect(idle.text).not.toBe(busy.text)
   })
+
+  it('drops the cards that were asking about the stopped turn', async () => {
+    // Cancelling the turn does not reach this channel by itself, so without
+    // this the card stays on screen and looks answerable. A reply to it then
+    // "decides" a question whose turn is already over.
+    let dropped = 0
+    const b = bench({ cancelCards: () => { dropped += 1; return 2 } })
+
+    await b.run('stop')
+
+    expect(dropped).toBe(1)
+  })
+
+  it('says how many cards it dropped', async () => {
+    // The card vanishing without a word leaves the user unsure whether it was
+    // meant to happen.
+    const b = bench({ cancelCards: () => 2 })
+
+    const result = await b.run('stop')
+
+    expect(result.text).toMatch(/2 张/u)
+  })
+
+  it('drops the cards even when no turn was running', async () => {
+    // The state this exists for: the turn already ended, and its card is still
+    // waiting for an answer nobody can act on.
+    let dropped = 0
+    const b = bench({ cancelRunning: async () => false, cancelCards: () => { dropped += 1; return 1 } })
+
+    const result = await b.run('stop')
+
+    expect(dropped).toBe(1)
+    expect(result.text).toMatch(/1 张/u)
+  })
+
+  it('keeps the original wording when there were no cards', async () => {
+    // A "0 cards dropped" line is noise on the ordinary case.
+    const b = bench()
+
+    const result = await b.run('stop')
+
+    expect(result.text).toBe('已停止当前任务。')
+  })
 })
 
 describe('/status', () => {

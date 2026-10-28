@@ -314,6 +314,136 @@ describe('the card a reply names', () => {
   })
 })
 
+describe('a card that is held back before it is shown', () => {
+  it('sets no timer until it is armed', () => {
+    // Cards are now offered one batch at a time, and a card still waiting its
+    // turn has not been shown to anybody. Counting down on it would expire a
+    // card the user never saw.
+    const b = bench({ timeoutMs: 1_000 })
+
+    b.cards.offer(body(), { arm: false })
+
+    expect(b.timers.size).toBe(0)
+  })
+
+  it('starts counting down when it is armed', () => {
+    const b = bench({ timeoutMs: 1_000 })
+    const { card } = b.cards.offer(body(), { arm: false })
+
+    b.cards.arm(card.id)
+
+    expect(b.timers.size).toBe(1)
+    b.fire()
+    expect(b.expired).toEqual(['P1'])
+  })
+
+  it('counts down from the moment it is shown, not from when it was queued', () => {
+    // The defect this exists for: three cards queued at once, the first
+    // answered after 29 minutes. If all three had started counting at offer
+    // time, the other two would expire the moment they were displayed.
+    const b = bench({ timeoutMs: 1_000 })
+    b.cards.offer(body(), { arm: false })
+    const { card } = b.cards.offer(body(), { arm: false })
+
+    b.cards.arm(card.id)
+    b.fire()
+
+    expect(b.expired).toEqual(['P2'])
+  })
+
+  it('does nothing when arming a card that is no longer open', () => {
+    // The card may have been withdrawn between being queued and its turn.
+    const b = bench({ timeoutMs: 1_000 })
+
+    expect(() => b.cards.arm('P9')).not.toThrow()
+    expect(b.timers.size).toBe(0)
+  })
+
+  it('never sets a timer for an armed card when expiry is disabled', () => {
+    const b = bench({ timeoutMs: 0 })
+    const { card } = b.cards.offer(body(), { arm: false })
+
+    b.cards.arm(card.id)
+
+    expect(b.timers.size).toBe(0)
+  })
+})
+
+describe('withdrawing a card for a reason other than a timeout', () => {
+  it('settles the waiter with the outcome it was given', async () => {
+    // An aborted approval is `cancelled`, not the timeout's fail-closed
+    // `unavailable`; the two are different facts about the turn.
+    const b = bench({ timeoutMs: 0 })
+    const { card, settled } = b.cards.offer(body())
+
+    b.cards.withdraw(card.id, { value: 'cancelled' })
+
+    await expect(settled).resolves.toBe('cancelled')
+  })
+
+  it('rejects the waiter when it is given an error', async () => {
+    // A question has no fail-closed value, so the only honest outcome is a
+    // rejection - the same rule the timeout policy follows.
+    const b = bench({ timeoutMs: 0 })
+    const { card, settled } = b.cards.offer(body())
+
+    b.cards.withdraw(card.id, { error: new Error('user wants to discuss it') })
+
+    await expect(settled).rejects.toThrow('user wants to discuss it')
+  })
+
+  it('closes the card and cancels its timer', () => {
+    const b = bench({ timeoutMs: 1_000 })
+    const { card } = b.cards.offer(body())
+
+    b.cards.withdraw(card.id, { value: 'cancelled' })
+
+    expect(b.cards.isOpen(card.id)).toBe(false)
+    expect(b.timers.size).toBe(0)
+  })
+
+  it('does not tell the user the card expired', () => {
+    // The user did not ignore the card; the turn ended. Reporting an expiry
+    // would blame them for something they could not have answered.
+    const b = bench({ timeoutMs: 1_000 })
+    const { card } = b.cards.offer(body())
+
+    b.cards.withdraw(card.id, { value: 'cancelled' })
+
+    expect(b.expired).toEqual([])
+  })
+
+  it('reports whether there was a card to withdraw', () => {
+    const b = bench()
+    const { card } = b.cards.offer(body())
+    b.cards.withdraw(card.id, { value: 'cancelled' })
+
+    expect(b.cards.withdraw(card.id, { value: 'cancelled' })).toBe(false)
+  })
+
+  it('withdraws every card one peer holds, and only that peer', async () => {
+    // `/stop` stops one conversation. A card belonging to someone else is
+    // another turn's business.
+    const b = bench({ timeoutMs: 0 })
+    const mine = b.cards.offer(body({ peerId: 'user-7' }))
+    const alsoMine = b.cards.offer(body({ peerId: 'user-7' }))
+    const theirs = b.cards.offer(body({ peerId: 'user-9' }))
+
+    const count = b.cards.withdrawAll('user-7', { value: 'cancelled' })
+
+    expect(count).toBe(2)
+    await expect(mine.settled).resolves.toBe('cancelled')
+    await expect(alsoMine.settled).resolves.toBe('cancelled')
+    expect(b.cards.isOpen(theirs.card.id)).toBe(true)
+  })
+
+  it('reports zero when the peer had nothing waiting', () => {
+    const b = bench()
+
+    expect(b.cards.withdrawAll('user-7', { value: 'cancelled' })).toBe(0)
+  })
+})
+
 describe('scheduling', () => {
   it('uses the injected clock rather than the real one', () => {
     // The timeout is minutes long in production, so the suite must not wait for

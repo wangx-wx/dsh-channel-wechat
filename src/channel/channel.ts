@@ -57,6 +57,16 @@ export interface CardAnswererLike {
   addressesCard: (text: string) => boolean
   /** Answer the open card this text names. Returns whether it was claimed. */
   answer: (peerId: string, text: string) => Promise<boolean>
+  /**
+   * Drop every card one conversation is being asked to answer.
+   *
+   * `/stop` needs this: cancelling the turn does not by itself tell this
+   * channel, so a card would otherwise stay open - and look answerable - long
+   * after the work it asks about has stopped.
+   * @param peerId - the conversation whose cards are dropped.
+   * @returns how many were dropped, for the reply.
+   */
+  withdrawAll: (peerId: string) => number
   /** Stop answering cards and reject what is still open. */
   dispose: () => void
 }
@@ -644,6 +654,7 @@ export class Channel {
       ...(this.options.accountId === undefined ? {} : { accountId: this.options.accountId }),
       ...(this.options.cancelRunning === undefined ? {} : { cancelRunning: this.options.cancelRunning }),
       cancel: peer => this.lifecycle.cancel(peer),
+      ...(this.cards === undefined ? {} : { cancelCards: (peer: string) => this.cards!.withdrawAll(peer) }),
       endSession: peer => this.lifecycle.end(peer),
       changeCwd: async (peer, path) => {
         // Validated before anything is torn down: a typo must cost the user a

@@ -92,7 +92,7 @@ describe('rendering an approval card', () => {
       ? undefined
       : parseCardReply(instructed, typed => (typed === 'P7' ? 'P7' : undefined))
 
-    expect(reply).toEqual({ cardId: 'P7', selections: ['1'] })
+    expect(reply).toEqual({ cardId: 'P7', selections: ['1'], raw: '1' })
     expect(readApprovalReply(reply?.selections ?? [])).toEqual({ kind: 'decided', outcome: 'allowed-once' })
   })
 
@@ -162,6 +162,47 @@ describe('rendering a question card', () => {
 
     expect(text).toContain('What should I name it?')
   })
+
+  it('tells the user a question with options also takes their own words', () => {
+    // The option list is not a closed set any more: anything that is not all
+    // option numbers is taken as the user's own answer. Nothing on the card
+    // said so before, and a user who wanted a third choice had no way to learn
+    // that typing it would work.
+    const text = formatCard(question([
+      { id: 'q', question: 'Which mode?', options: [{ label: 'Fast' }] },
+    ]))
+
+    expect(text).toMatch(/自己的答案|直接写/u)
+  })
+
+  it('offers the card-level way out into conversation', () => {
+    // Choosing to discuss instead of deciding ends the whole card, so the
+    // option belongs to the card rather than to any one question. Numbered `0`
+    // so it can never collide with a question's own option numbers.
+    const text = formatCard(question([
+      { id: 'a', question: 'First?', options: [{ label: 'X' }] },
+      { id: 'b', question: 'Second?', options: [{ label: 'Y' }] },
+    ]))
+
+    expect(text).toContain('0. ')
+    expect(text).toMatch(/对话|直接说/u)
+  })
+
+  it('says which card this is when several are waiting', () => {
+    // Cards are shown one at a time now, so the card has to say where it sits
+    // in the run: a user who answers and gets another card needs to know
+    // whether that was the last one.
+    const text = formatCard(question([{ id: 'q', question: 'Which?' }]), { index: 2, total: 3 })
+
+    expect(text).toContain('2/3')
+  })
+
+  it('says nothing about position when it is the only card', () => {
+    // A lone card announcing "1/1" is noise, and it is the common case.
+    const text = formatCard(question([{ id: 'q', question: 'Which?' }]))
+
+    expect(text).not.toMatch(/\d\/\d/u)
+  })
 })
 
 describe('recognizing a card reply', () => {
@@ -170,15 +211,15 @@ describe('recognizing a card reply', () => {
   const open = (typed: string) => (typed.toUpperCase() === 'P1' ? 'P1' : undefined)
 
   it('reads the id and the chosen numbers', () => {
-    expect(parseCardReply('P1 1', open)).toEqual({ cardId: 'P1', selections: ['1'] })
+    expect(parseCardReply('P1 1', open)).toEqual({ cardId: 'P1', selections: ['1'], raw: '1' })
   })
 
   it('accepts a comma-separated list', () => {
-    expect(parseCardReply('P1 1,2', open)).toEqual({ cardId: 'P1', selections: ['1', '2'] })
+    expect(parseCardReply('P1 1,2', open)).toEqual({ cardId: 'P1', selections: ['1', '2'], raw: '1,2' })
   })
 
   it('accepts a space-separated list, which is easier on a phone', () => {
-    expect(parseCardReply('P1 1 2', open)).toEqual({ cardId: 'P1', selections: ['1', '2'] })
+    expect(parseCardReply('P1 1 2', open)).toEqual({ cardId: 'P1', selections: ['1', '2'], raw: '1 2' })
   })
 
   it('reports the issued id, not what the user typed', () => {
@@ -339,5 +380,155 @@ describe('reading a question reply', () => {
     const reply = readQuestionReply(card, ['1', '9'])
     expect(reply.kind).toBe('invalid')
     if (reply.kind === 'invalid') expect(reply.text).toContain('第 2 题')
+  })
+})
+
+describe('answering with your own words', () => {
+  // An option list is a suggestion, not a closed set. DSH's answer shape has
+  // always carried `custom`, and the GUI's composer has always offered it;
+  // only this channel had no way to send one.
+
+  it('takes words in place of an option number', () => {
+    const card = question([{ id: 'q', question: 'Pick', options: [{ label: 'A' }, { label: 'B' }] }])
+
+    expect(readQuestionReply(card, [], 'blue-green')).toEqual({
+      kind: 'answered',
+      answers: [{ id: 'q', selected: [], custom: 'blue-green' }],
+    })
+  })
+
+  it('keeps the words whole, spaces and all', () => {
+    // The splitter used to cut the reply on whitespace, which would have
+    // turned "use a softer blue" into three option numbers and refused it.
+    const card = question([{ id: 'q', question: 'Pick', options: [{ label: 'A' }] }])
+
+    expect(readQuestionReply(card, [], 'use a softer blue')).toEqual({
+      kind: 'answered',
+      answers: [{ id: 'q', selected: [], custom: 'use a softer blue' }],
+    })
+  })
+
+  it('still reads an all-number answer as the options it names', () => {
+    // The one rule that decides between the two readings: numbers are options,
+    // anything else is the user's own words. `1 2` on a multi-select must not
+    // silently become the custom text "1 2".
+    const card = question([
+      { id: 'q', question: 'Pick', multiSelect: true, options: [{ label: 'A' }, { label: 'B' }] },
+    ])
+
+    expect(readQuestionReply(card, [], '1 2')).toEqual({
+      kind: 'answered',
+      answers: [{ id: 'q', selected: ['A', 'B'] }],
+    })
+  })
+
+  it('answers one question per line when the reply has a line per question', () => {
+    // A computer's keyboard can send newlines; this is the readable form.
+    const card = question([
+      { id: 'a', question: 'First?', options: [{ label: 'X' }, { label: 'Y' }] },
+      { id: 'b', question: 'Second?', options: [{ label: 'Z' }] },
+    ])
+
+    expect(readQuestionReply(card, [], '2\n1')).toEqual({
+      kind: 'answered',
+      answers: [
+        { id: 'a', selected: ['Y'] },
+        { id: 'b', selected: ['Z'] },
+      ],
+    })
+  })
+
+  it('falls back to a bar between questions, which a phone can type', () => {
+    // A phone's send button is its return key, so the newline form is
+    // unreachable there. `|` is the same shape on one line.
+    const card = question([
+      { id: 'a', question: 'First?', options: [{ label: 'X' }, { label: 'Y' }] },
+      { id: 'b', question: 'Second?', options: [{ label: 'Z' }, { label: 'W' }] },
+    ])
+
+    expect(readQuestionReply(card, [], '2 | 1')).toEqual({
+      kind: 'answered',
+      answers: [
+        { id: 'a', selected: ['Y'] },
+        { id: 'b', selected: ['Z'] },
+      ],
+    })
+  })
+
+  it('mixes a chosen option with written words across questions', () => {
+    const card = question([
+      { id: 'a', question: 'First?', options: [{ label: 'X' }, { label: 'Y' }] },
+      { id: 'b', question: 'Second?', options: [{ label: 'Z' }] },
+    ])
+
+    expect(readQuestionReply(card, [], '1 | something else entirely')).toEqual({
+      kind: 'answered',
+      answers: [
+        { id: 'a', selected: ['X'] },
+        { id: 'b', selected: [], custom: 'something else entirely' },
+      ],
+    })
+  })
+
+  it('prefers lines over bars when both would split', () => {
+    // `a | b` typed on one line is the phone form; a reply that actually has
+    // newlines was written deliberately, so lines win.
+    const card = question([
+      { id: 'a', question: 'First?' },
+      { id: 'b', question: 'Second?' },
+    ])
+
+    expect(readQuestionReply(card, [], 'east | west\nnorth')).toEqual({
+      kind: 'answered',
+      answers: [
+        { id: 'a', selected: [], custom: 'east | west' },
+        { id: 'b', selected: [], custom: 'north' },
+      ],
+    })
+  })
+
+  it('refuses when the segments do not line up with the questions', () => {
+    // Handing the model a half-filled shape is worse than asking again.
+    const card = question([
+      { id: 'a', question: 'First?', options: [{ label: 'X' }] },
+      { id: 'b', question: 'Second?', options: [{ label: 'Y' }] },
+    ])
+
+    expect(readQuestionReply(card, [], '1 | 2 | 3').kind).toBe('invalid')
+  })
+})
+
+describe('choosing to discuss instead of deciding', () => {
+  it('closes the card when the user answers 0', () => {
+    // `0` is the card's own option, not a question's: the user wants to talk
+    // the decision through, and every question on this card waits on the same
+    // conversation. So the whole card goes, not one question.
+    const card = question([
+      { id: 'a', question: 'First?', options: [{ label: 'X' }] },
+      { id: 'b', question: 'Second?', options: [{ label: 'Y' }] },
+    ])
+
+    expect(readQuestionReply(card, [], '0')).toEqual({ kind: 'discuss' })
+  })
+
+  it('closes the card when 0 is one of the per-question answers', () => {
+    // A user who writes `1 | 0` meant the same thing as `0`: they want to
+    // discuss. Honouring it only in the exact `0` reply would make the intent
+    // depend on which form they happened to type.
+    const card = question([
+      { id: 'a', question: 'First?', options: [{ label: 'X' }] },
+      { id: 'b', question: 'Second?', options: [{ label: 'Y' }] },
+    ])
+
+    expect(readQuestionReply(card, [], '1 | 0')).toEqual({ kind: 'discuss' })
+  })
+
+  it('does not mistake a written answer starting with 0 for the discuss option', () => {
+    const card = question([{ id: 'q', question: 'How many?', options: [{ label: 'A' }] }])
+
+    expect(readQuestionReply(card, [], '0.5 seconds')).toEqual({
+      kind: 'answered',
+      answers: [{ id: 'q', selected: [], custom: '0.5 seconds' }],
+    })
   })
 })

@@ -99,7 +99,7 @@ function build(options: {
   /** Where conversation generations are kept, for /new tests. */
   generations?: { generation: (peerId: string) => Promise<number>; startNew: (peerId: string) => Promise<number> }
   /** The card answerer, for the queue-bypass tests. */
-  cards?: { addressesCard: (text: string) => boolean; answer: (peerId: string, text: string) => Promise<boolean>; dispose: () => void }
+  cards?: { addressesCard: (text: string) => boolean; answer: (peerId: string, text: string) => Promise<boolean>; withdrawAll: (peerId: string) => number; dispose: () => void }
   /** Turns a message's media into content blocks; absent means none is supported. */
   prepareMedia?: (media: readonly InboundMedia[]) => Promise<{ parts: readonly ContentBlock[]; notes: readonly string[] }>
   /** Sends the files the agent declared as deliverables. */
@@ -1007,6 +1007,7 @@ describe('answering a card while the turn holds the queue', () => {
           releaseTurn?.()
           return true
         },
+        withdrawAll: () => 0,
         dispose: () => {},
       },
     })

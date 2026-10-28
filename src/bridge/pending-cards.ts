@@ -72,7 +72,12 @@ interface Entry<Value> {
   resolve: (value: Value) => void
   /** Rejects the listener, for a seam where no valid answer exists. */
   reject: (error: unknown) => void
-  /** Fires when the card is given up on, so its turn is not held open. */
+  /**
+   * Fires when the card is given up on, so its turn is not held open.
+   *
+   * Mutable because a card may be offered before it is shown: its countdown
+   * starts when {@link PendingCards.arm} is called, not when it was queued.
+   */
   timer: ReturnType<typeof setTimeout> | undefined
 }
 
@@ -152,10 +157,19 @@ export class PendingCards<Value> {
    *
    * The caller sends the rendered text itself; this only owns the wait, so the
    * transport stays out of the registry.
+   *
+   * `arm: false` offers the card without starting its countdown. That exists for
+   * a channel that shows cards one at a time: a card still waiting its turn has
+   * not been shown to anyone, and expiring it would be timing out a question the
+   * user was never asked. {@link arm} starts the countdown when it is displayed.
    * @param card - the card, without its id.
+   * @param options - whether to start the countdown now; defaults to yes.
    * @returns the id to render, and the promise the listener returns.
    */
-  offer(card: Omit<PendingCard, 'id'>): { card: PendingCard; settled: Promise<Value> } {
+  offer(
+    card: Omit<PendingCard, 'id'>,
+    options: { arm?: boolean } = {},
+  ): { card: PendingCard; settled: Promise<Value> } {
     const id = this.allocateId()
     let resolve!: (value: Value) => void
     let reject!: (error: unknown) => void
@@ -164,11 +178,27 @@ export class PendingCards<Value> {
       reject = rejectInner
     })
     const complete: PendingCard = { ...card, id }
-    const timer = this.options.timeoutMs > 0
-      ? (this.options.schedule ?? ((work, ms) => setTimeout(work, ms)))(() => { this.expire(id) }, this.options.timeoutMs)
-      : undefined
-    this.entries.set(id, { card: complete, resolve, reject, timer })
+    this.entries.set(id, { card: complete, resolve, reject, timer: undefined })
+    if (options.arm ?? true) this.arm(id)
     return { card: complete, settled }
+  }
+
+  /**
+   * Start one card's countdown, as it is shown to the user.
+   *
+   * A card that is not open is ignored: the run may have moved on it while it
+   * waited, and arming a closed card would reschedule a timer for a promise that
+   * has already settled.
+   * @param cardId - the card being displayed.
+   */
+  arm(cardId: string): void {
+    const entry = this.entries.get(cardId)
+    if (entry === undefined || entry.timer !== undefined) return
+    if (this.options.timeoutMs <= 0) return
+    entry.timer = (this.options.schedule ?? ((work, ms) => setTimeout(work, ms)))(
+      () => { this.expire(cardId) },
+      this.options.timeoutMs,
+    )
   }
 
   /**
@@ -228,6 +258,47 @@ export class PendingCards<Value> {
     if (entry.timer !== undefined) (this.options.cancelSchedule ?? clearTimeout)(entry.timer)
     entry.resolve(value)
     return true
+  }
+
+  /**
+   * Close one card for a reason of the caller's choosing.
+   *
+   * Distinct from answering, which only a user may do, and from expiring, which
+   * says the user ignored the card. This is "the card no longer applies": the
+   * turn was stopped, another answerer won, or the user asked to discuss
+   * instead. The outcome is the caller's because the three are different facts
+   * and the waiting listener acts on them differently.
+   * @param cardId - the card to close.
+   * @param outcome - the value to resolve with, or the error to reject with.
+   * @returns whether there was an open card to close.
+   */
+  withdraw(cardId: string, outcome: { value: Value } | { error: unknown }): boolean {
+    const entry = this.entries.get(cardId)
+    if (entry === undefined) return false
+    this.entries.delete(cardId)
+    if (entry.timer !== undefined) (this.options.cancelSchedule ?? clearTimeout)(entry.timer)
+    if ('error' in outcome) entry.reject(outcome.error)
+    else entry.resolve(outcome.value)
+    return true
+  }
+
+  /**
+   * Close every card one peer holds; cards belonging to other peers are left
+   * alone.
+   *
+   * A card belongs to the conversation it was sent to, so an action on one
+   * conversation - `/stop`, above all - must not reach into another's turn.
+   * @param peerId - the conversation whose cards are dropped.
+   * @param outcome - the value to resolve with, or the error to reject with.
+   * @returns how many cards were closed.
+   */
+  withdrawAll(peerId: string, outcome: { value: Value } | { error: unknown }): number {
+    // Collected first: `withdraw` deletes from the map being iterated.
+    const mine = [...this.entries]
+      .filter(([, entry]) => entry.card.peerId === peerId)
+      .map(([id]) => id)
+    for (const id of mine) this.withdraw(id, outcome)
+    return mine.length
   }
 
   /**

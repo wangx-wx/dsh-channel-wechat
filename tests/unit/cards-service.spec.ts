@@ -34,6 +34,7 @@ function bench(overrides: {
   shareWithGui?: boolean
   timeoutMs?: number
   elevate?: (sessionId: string) => boolean
+  onExpired?: (cardId: string) => void
 } = {}) {
   const sent: { peerId: string; text: string }[] = []
   const cardsSent: string[] = []
@@ -55,7 +56,10 @@ function bench(overrides: {
       },
     }),
     onCardSent: card => void cardsSent.push(card.id),
-    onExpired: card => void expired.push(card.id),
+    onExpired: card => {
+      expired.push(card.id)
+      overrides.onExpired?.(card.id)
+    },
   })
   service.attach()
   /** Invoke the registered listener for one seam. */
@@ -165,6 +169,85 @@ describe('claiming a request', () => {
 
     expect(next).toHaveBeenCalled()
     expect(outcome).toBe('allowed-once')
+  })
+
+  it('says so when the GUI answers a card that is on the phone’s screen', async () => {
+    // The wechat card is withdrawn the moment the GUI decides, so it simply
+    // disappears from the chat. Without a word the user cannot tell whether
+    // their pending decision went anywhere.
+    const b = bench({ shareWithGui: true })
+
+    await b.fire('approval/request', approvalRequest(), async () => 'rejected' as const)
+
+    expect(b.sent.some(entry => entry.text.includes('Harness 界面'))).toBe(true)
+  })
+
+  it('frees the display slot when the GUI wins', async () => {
+    // Otherwise the next card waits behind a card nobody on this side will ever
+    // answer.
+    const b = bench({ shareWithGui: true })
+    // Awaited, because the wording that tells the user is sent before the card
+    // is closed - so the withdrawal lands after that send resolves.
+    await b.fire('approval/request', approvalRequest({ toolName: 'bash' }), async () => 'rejected' as const)
+    await Promise.resolve()
+
+    // The wechat card is gone...
+    expect(b.service.addressesCard('P1 1')).toBe(false)
+    // ...and the next card is no longer blocked behind it.
+    void b.fire('approval/request', approvalRequest({ toolName: 'write' }), async () => 'rejected' as const)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(b.sent.some(entry => entry.text.includes('write'))).toBe(true)
+  })
+})
+
+describe('a card that expires while others wait', () => {
+  it('reports an expiry before showing the card behind it', async () => {
+    // The chat reads in send order, so an expiry notice sent after the next
+    // card would leave the user reading a new question and only then learning
+    // why the previous one vanished.
+    vi.useFakeTimers()
+    try {
+      const seen: string[] = []
+      // The service's own `onExpired` hook is where the application sends its
+      // "this card expired" message, so its position in the sequence is the
+      // position that message would take in the chat.
+      const b = bench({ timeoutMs: 1_000, onExpired: id => void seen.push(`expired:${id}`) })
+      void b.fire('approval/request', approvalRequest({ toolName: 'bash' }))
+      await vi.advanceTimersByTimeAsync(0)
+      void b.fire('approval/request', approvalRequest({ toolName: 'write' }))
+      await vi.advanceTimersByTimeAsync(0)
+
+      await vi.advanceTimersByTimeAsync(1_000)
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(b.expired).toEqual(['P1'])
+      expect(seen).toEqual(['expired:P1'])
+      // And the card behind it is displayed, after that report.
+      expect(b.sent.some(entry => entry.text.includes('write'))).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('a service that is disposed and reused', () => {
+  it('shows cards again after disposal', async () => {
+    // `runs` points at cards disposal removed. Left behind, every later display
+    // would bail out on a slot that can never be freed.
+    const b = bench()
+    void b.fire('approval/request', approvalRequest({ toolName: 'bash' }))
+    await Promise.resolve()
+
+    b.service.dispose()
+    // A fresh listener set, as a replacement run would register.
+    b.service.attach()
+    void b.fire('approval/request', approvalRequest({ toolName: 'write' }))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(b.sent.some(entry => entry.text.includes('write'))).toBe(true)
   })
 })
 
@@ -365,11 +448,15 @@ describe('the id space', () => {
   it('is shared between the two seams', async () => {
     // A reply is matched against open cards of both kinds. Two independent
     // counters would both hand out `P1`, and `P1 1` could name either.
+    // The second card is queued rather than displayed, so the ids are read in
+    // order: the question's turn comes after the approval is answered.
     const b = bench()
     void b.fire('approval/request', approvalRequest())
     await Promise.resolve()
     void b.fire('user-questions/request', questionRequest())
     await Promise.resolve()
+
+    await b.service.answer('user-7', 'P1 1')
 
     expect(b.cardsSent).toEqual(['P1', 'P2'])
   })
@@ -440,5 +527,311 @@ describe('the approval outcome vocabulary', () => {
     const all: ApprovalOutcomeLike[] = ['allowed-once', 'rejected', 'cancelled', 'unavailable']
 
     expect(all).toHaveLength(4)
+  })
+})
+
+describe('showing several cards one at a time', () => {
+  // Parallel tool calls raise their approvals together. Sending all of them at
+  // once put three long cards and three ids on one phone screen, and the reader
+  // had to hold all of them in mind to answer any.
+
+  it('sends only the first card when several arrive together', async () => {
+    const b = bench()
+    const first = b.fire('approval/request', approvalRequest({ toolName: 'bash' }))
+    await Promise.resolve()
+    void b.fire('approval/request', approvalRequest({ toolName: 'write' }))
+    await Promise.resolve()
+    void b.fire('approval/request', approvalRequest({ toolName: 'edit' }))
+    await Promise.resolve()
+
+    expect(b.sent).toHaveLength(1)
+    expect(b.sent[0]?.text).toContain('bash')
+    // The other two are open and waiting; they are simply not on screen yet.
+    expect(b.service.pending).toBe(3)
+    void first
+  })
+
+  it('sends the next card once the first is answered', async () => {
+    const b = bench()
+    void b.fire('approval/request', approvalRequest({ toolName: 'bash' }))
+    await Promise.resolve()
+    void b.fire('approval/request', approvalRequest({ toolName: 'write' }))
+    await Promise.resolve()
+
+    await b.service.answer('user-7', 'P1 1')
+
+    expect(b.sent.some(entry => entry.text.includes('write'))).toBe(true)
+  })
+
+  it('numbers a displayed card by what is queued when it appears', async () => {
+    // The count is fixed when a card is displayed, from what is queued at that
+    // moment: renumbering the card already on screen would mean sending it
+    // twice. A card that arrives afterwards is simply the next one.
+    const b = bench()
+    void b.fire('approval/request', approvalRequest({ toolName: 'bash' }))
+    await Promise.resolve()
+    void b.fire('approval/request', approvalRequest({ toolName: 'write' }))
+    await Promise.resolve()
+
+    // The first card was alone when it went out, so it says nothing about a
+    // run; the second one knows it is the last of the two.
+    expect(b.sent[0]?.text).not.toMatch(/\d\/\d/u)
+
+    await b.service.answer('user-7', 'P1 1')
+
+    expect(b.sent.some(entry => entry.text.includes('2/2'))).toBe(true)
+  })
+
+  it('does not renumber a card that is already on screen', async () => {
+    // Re-sending the visible card would put a second copy of it in the chat.
+    const b = bench()
+    void b.fire('approval/request', approvalRequest({ toolName: 'bash' }))
+    await Promise.resolve()
+    void b.fire('approval/request', approvalRequest({ toolName: 'write' }))
+    await Promise.resolve()
+
+    // Only the first was ever displayed; the arrival of the second changed
+    // nothing on screen.
+    expect(b.sent).toHaveLength(1)
+  })
+
+  it('acknowledges the answer before showing the next card', async () => {
+    // Sends are queued per peer in order, so whatever is queued first is read
+    // first. Showing the next card before the receipt makes the user see a new
+    // question appear with no word that their last answer landed.
+    const b = bench()
+    void b.fire('approval/request', approvalRequest({ toolName: 'bash' }))
+    await Promise.resolve()
+    void b.fire('approval/request', approvalRequest({ toolName: 'write' }))
+    await Promise.resolve()
+
+    await b.service.answer('user-7', 'P1 1')
+
+    const receipt = b.sent.findIndex(entry => entry.text.includes('已收到'))
+    const next = b.sent.findIndex(entry => entry.text.includes('write'))
+    expect(receipt).toBeGreaterThanOrEqual(0)
+    expect(next).toBeGreaterThan(receipt)
+  })
+
+  it('refuses an answer to a card that has not been shown yet', async () => {
+    // Accepting it would decide a card the user has never seen. Dropping the
+    // message silently is worse: `P2 1` then reads as ordinary prose and is
+    // queued behind the turn it was meant to unblock.
+    const b = bench()
+    void b.fire('approval/request', approvalRequest())
+    await Promise.resolve()
+    void b.fire('approval/request', approvalRequest())
+    await Promise.resolve()
+
+    expect(await b.service.answer('user-7', 'P2 1')).toBe(true)
+
+    expect(b.sent.at(-1)?.text).toMatch(/\u8fd8\u6ca1\u8f6e\u5230|\u5148\u56de\u7b54/u)
+    // The first card is still the one waiting.
+    expect(b.service.pending).toBe(2)
+  })
+
+  it('is recognized as a card reply even before its turn', async () => {
+    // This predicate decides whether the message BYPASSES the peer queue. A
+    // queued card's reply must bypass it too, because the queue is held by the
+    // very turn the card is waiting on - going through it means the "not your
+    // turn yet" answer arrives only after the turn it cannot unblock ends,
+    // which is never. Said `false`, the reply reads as ordinary prose and is
+    // queued behind that turn.
+    const b = bench()
+    void b.fire('approval/request', approvalRequest())
+    await Promise.resolve()
+    void b.fire('approval/request', approvalRequest())
+    await Promise.resolve()
+
+    expect(b.service.addressesCard('P2 1')).toBe(true)
+  })
+
+  it('still answers nothing for an id no card holds', async () => {
+    // Widening the predicate must not widen it into "anything with a P".
+    const b = bench()
+    void b.fire('approval/request', approvalRequest())
+    await Promise.resolve()
+
+    expect(b.service.addressesCard('P9 1')).toBe(false)
+  })
+})
+
+describe('a card whose turn has ended', () => {
+  it('stops being answerable when the request is aborted', async () => {
+    // `/stop` cancels the turn, which aborts the tool signal the request
+    // carries. The card cannot be answered any more - but nothing used to say
+    // so, and it stayed open for 30 minutes. A reply then "won" its settle and
+    // the user was told "received, continuing" about a turn that was gone.
+    const b = bench()
+    const controller = new AbortController()
+    void b.fire('approval/request', approvalRequest({ signal: controller.signal }))
+    await Promise.resolve()
+
+    controller.abort()
+    await Promise.resolve()
+
+    expect(b.service.addressesCard('P1 1')).toBe(false)
+    expect(b.service.pending).toBe(0)
+  })
+
+  it('settles an aborted approval as cancelled, not as a refusal', async () => {
+    // The seam distinguishes them: `cancelled` means the question was
+    // withdrawn, `rejected` means a person said no.
+    const b = bench()
+    const controller = new AbortController()
+    const pending = b.fire('approval/request', approvalRequest({ signal: controller.signal }))
+    await Promise.resolve()
+
+    controller.abort()
+
+    await expect(pending).resolves.toBe('cancelled')
+  })
+
+  it('rejects an aborted question rather than inventing an answer', async () => {
+    const b = bench()
+    const controller = new AbortController()
+    const pending = b.fire('user-questions/request', questionRequest({ signal: controller.signal }))
+    await Promise.resolve()
+
+    controller.abort()
+
+    await expect(pending).rejects.toThrow()
+  })
+
+  it('shows the next card when the shown one is aborted', async () => {
+    const b = bench()
+    const controller = new AbortController()
+    void b.fire('approval/request', approvalRequest({ toolName: 'bash', signal: controller.signal }))
+    await Promise.resolve()
+    void b.fire('approval/request', approvalRequest({ toolName: 'write' }))
+    await Promise.resolve()
+
+    controller.abort()
+    await Promise.resolve()
+
+    expect(b.sent.some(entry => entry.text.includes('write'))).toBe(true)
+  })
+
+  it('does not flash every queued card on screen when one turn aborts', async () => {
+    // One turn's signal is shared by every card that turn raised, so a single
+    // abort runs every listener. Displaying on each one would push all the
+    // queued cards to the chat and withdraw them in the same breath.
+    const b = bench()
+    const controller = new AbortController()
+    void b.fire('approval/request', approvalRequest({ toolName: 'bash', signal: controller.signal }))
+    await Promise.resolve()
+    void b.fire('approval/request', approvalRequest({ toolName: 'write', signal: controller.signal }))
+    await Promise.resolve()
+    void b.fire('approval/request', approvalRequest({ toolName: 'edit', signal: controller.signal }))
+    await Promise.resolve()
+
+    controller.abort()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    // Only the card that was already on screen was ever sent; the two behind
+    // it went away without appearing.
+    expect(b.sent).toHaveLength(1)
+    expect(b.service.pending).toBe(0)
+  })
+
+  it('ignores an abort that arrives after the card was answered', async () => {
+    // A turn may abort on its way out. The answer already decided the card, and
+    // re-settling would be a second decision.
+    const b = bench()
+    const controller = new AbortController()
+    const pending = b.fire('approval/request', approvalRequest({ signal: controller.signal }))
+    await Promise.resolve()
+    await b.service.answer('user-7', 'P1 1')
+
+    controller.abort()
+
+    await expect(pending).resolves.toBe('allowed-once')
+  })
+})
+
+describe('withdrawing a peer\u2019s cards', () => {
+  it('reports how many cards it dropped', async () => {
+    const b = bench()
+    void b.fire('approval/request', approvalRequest())
+    await Promise.resolve()
+    void b.fire('approval/request', approvalRequest())
+    await Promise.resolve()
+
+    expect(b.service.withdrawAll('user-7')).toBe(2)
+  })
+
+  it('leaves another conversation\u2019s cards alone', async () => {
+    const b = bench({ peerOfSession: sessionId => (sessionId === 's1' ? 'user-7' : 'user-9') })
+    void b.fire('approval/request', approvalRequest())
+    await Promise.resolve()
+    void b.fire('approval/request', approvalRequest({ agent: { id: 'a2', session: { id: 's2' } } }))
+    await Promise.resolve()
+
+    expect(b.service.withdrawAll('user-7')).toBe(1)
+    expect(b.service.pending).toBe(1)
+  })
+
+  it('settles a withdrawn approval as cancelled', async () => {
+    const b = bench()
+    const pending = b.fire('approval/request', approvalRequest())
+    await Promise.resolve()
+
+    b.service.withdrawAll('user-7')
+
+    await expect(pending).resolves.toBe('cancelled')
+  })
+
+  it('rejects a withdrawn question, so the tool sees a failed call', async () => {
+    const b = bench()
+    const pending = b.fire('user-questions/request', questionRequest())
+    await Promise.resolve()
+
+    b.service.withdrawAll('user-7')
+
+    await expect(pending).rejects.toThrow()
+  })
+
+  it('reports zero when the peer has nothing waiting', () => {
+    expect(bench().service.withdrawAll('user-7')).toBe(0)
+  })
+})
+
+describe('answering a question with words', () => {
+  it('sends the custom answer the user typed', async () => {
+    const b = bench()
+    void b.fire('user-questions/request', questionRequest())
+    await Promise.resolve()
+
+    await b.service.answer('user-7', 'P1 use a softer blue')
+
+    expect(b.sent.at(-1)?.text).toMatch(/\u5df2\u6536\u5230/u)
+    expect(b.service.pending).toBe(0)
+  })
+
+  it('closes the card when the user asks to discuss it instead', async () => {
+    const b = bench()
+    const pending = b.fire('user-questions/request', questionRequest())
+    await Promise.resolve()
+
+    await b.service.answer('user-7', 'P1 0')
+
+    // The card is gone, and the tool call ended without an invented answer.
+    expect(b.service.pending).toBe(0)
+    await expect(pending).rejects.toThrow()
+  })
+
+  it('tells the user their next message is the one that matters', async () => {
+    const b = bench()
+    // Caught here because this test is about the reply, not the rejection: the
+    // real seam attaches its own handler, which the `fire` helper does not.
+    const pending = b.fire('user-questions/request', questionRequest())
+    pending.catch(() => {})
+    await Promise.resolve()
+
+    await b.service.answer('user-7', 'P1 0')
+
+    expect(b.sent.at(-1)?.text).toMatch(/\u76f4\u63a5\u8bf4|\u60f3\u6cd5/u)
+    await expect(pending).rejects.toThrow()
   })
 })
