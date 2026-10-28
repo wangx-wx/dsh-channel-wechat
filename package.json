@@ -1,6 +1,6 @@
 {
   "name": "dsh-channel-wechat",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "description": "Answer WeChat messages from a DeepSeek Harness session, with interaction cards relayed to the chat.",
   "author": "wang.x <wangx.coding@gmail.com>",
   "license": "MIT",
