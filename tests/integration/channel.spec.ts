@@ -969,6 +969,133 @@ describe('a profile boot with the login action', () => {
     expect(outcome).toBe('allowed-once')
   }, 30_000)
 
+  it('withdraws an approval card when /stop ends the turn asking for it', async () => {
+    // The defect this exists for, and it is silent: `/stop` cancels the turn,
+    // which aborts the tool signal the approval request carries, so DSH settles
+    // the request itself. Nothing told this plugin, so the card stayed open for
+    // the full 30 minutes looking answerable - and a reply to it "won" its
+    // settle and was answered "received, continuing" about a turn long gone.
+    //
+    // Driven through the real plugin, because the missing link is the wiring
+    // from the request's signal to the card registry, which no unit test that
+    // injects a `CardService` can see.
+    const previous = process.env['DSH_HOME']
+    const home = tempHome('dsh-wechat-cards-stop-')
+    process.env['DSH_HOME'] = home
+
+    /** Text the channel sent over the wire, in order. */
+    const sentTexts: string[] = []
+    /** The id the card told the user to reply with. */
+    let cardId = ''
+    let cardSent = false
+    let stopped = false
+    let polls = 0
+    /** Set by the fake agent's `cancel`, standing in for the turn's abort. */
+    let abortTurn: (() => void) | undefined
+
+    vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request, init?: { body?: unknown }) => {
+      const href = String(url)
+      if (href.includes('getupdates')) {
+        polls += 1
+        // `hi` starts a turn; once the card is out, `/stop` arrives - exactly
+        // the order a person produces by reading the card and giving up on it.
+        const msgs = polls === 1
+          ? [{
+            message_id: 1, from_user_id: 'user-7', message_type: 1,
+            context_token: 'ctx-1', item_list: [{ type: 1, text_item: { text: 'hi' } }],
+          }]
+          : cardSent && !stopped
+            ? (stopped = true, [{
+              message_id: 2, from_user_id: 'user-7', message_type: 1,
+              context_token: 'ctx-2', item_list: [{ type: 1, text_item: { text: '/stop' } }],
+            }])
+            : []
+        return new Response(JSON.stringify({ ret: 0, msgs, get_updates_buf: `c${polls}` }), { status: 200 })
+      }
+      if (href.includes('sendmessage')) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          msg?: { item_list?: { text_item?: { text?: string } }[] }
+        }
+        const text = body.msg?.item_list?.[0]?.text_item?.text
+        if (typeof text === 'string') {
+          sentTexts.push(text)
+          if (text.includes('需要权限确认')) {
+            cardSent = true
+            cardId = /回复：(\S+)/u.exec(text)?.[1] ?? ''
+          }
+        }
+      }
+      return new Response(JSON.stringify({ ret: 0 }), { status: 200 })
+    }) as unknown as typeof fetch)
+
+    const ctx = new Context()
+    provideCmdline(ctx, { args: [], exit: () => {}, ready: { commit() {}, await: async () => {} } } as never)
+    await ctx.plugin(CredentialsLocal as never, {} as never)
+    await ctx.plugin(CommandRuntime)
+    ctx.provide('agentDefaultModel', {
+      currentSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-v4.1-flash' }),
+    })
+    const live = new Map<string, unknown>()
+    // The agent cancels the way a real turn does: aborting the request signal
+    // the tool call passed on. That is the whole mechanism under test.
+    ctx.provide('agents', {
+      async create({ sessionId }: { sessionId: string }) {
+        const agent = {
+          id: sessionId,
+          followup: () => {},
+          whenIdle: async () => {},
+          cancel: () => { abortTurn?.() },
+        }
+        live.set(sessionId, agent)
+        return { agent, dispose: async () => void live.delete(sessionId) }
+      },
+      async resume() { throw new Error('no persisted session') },
+      get: (id: string) => live.get(id),
+    })
+    await saveAccount(ctx, { botToken: 'tok-1', accountId: 'bot-9', userId: PEER })
+    await mountChannel(ctx, ['cmdlineArgs', 'credentials', 'agents', 'commands', 'agentDefaultModel'], { cwd: '/work' })
+
+    let card = ''
+    let outcome: unknown
+    try {
+      // The first message creates the session, and that mapping is how a card
+      // finds the conversation it belongs to.
+      await until(async () => live.size > 0, 3_000)
+      const sessionId = 'channel-wechat-user-7'
+      const controller = new AbortController()
+      abortTurn = () => { controller.abort() }
+      const agent = { id: 'a1', session: { id: sessionId } }
+      const waterfall = ctx.waterfall.bind(ctx) as unknown as (
+        target: unknown, event: string, request: unknown, fallback: () => Promise<unknown>,
+      ) => Promise<unknown>
+      const settled = waterfall(
+        agent,
+        'approval/request',
+        { agent, toolName: 'bash', reason: 'rm -rf build', signal: controller.signal },
+        async () => 'unavailable',
+      )
+      void settled.catch(() => {})
+      await until(async () => cardSent, 3_000)
+      card = sentTexts.find(text => text.includes('需要权限确认')) ?? ''
+
+      // `/stop` reaches the channel, cancels the turn, and drops the card.
+      await until(async () => sentTexts.some(text => text.includes('已停止')), 5_000)
+      outcome = await settled
+    } finally {
+      await ctx.fiber.dispose()
+      if (previous === undefined) delete process.env['DSH_HOME']
+      else process.env['DSH_HOME'] = previous
+    }
+
+    expect(card).toContain('bash')
+    const stopReply = sentTexts.find(text => text.includes('已停止')) ?? ''
+    expect(stopReply).toMatch(/1 张/u)
+    // The request was withdrawn rather than answered: `cancelled` is the seam's
+    // word for "the question went away", and the tool call fails closed on it.
+    expect(outcome).toBe('cancelled')
+    void cardId
+  }, 30_000)
+
   it('admits an inbound image and delivers it as an image block', async () => {
     // The production half of M4's inbound path, and the defect it exists for:
     // every other media test injects a preparer, so none of them can see whether

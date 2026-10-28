@@ -227,6 +227,72 @@ GUI Local Storage 的 `dsh.sessions.current` 指向同一 `~g12`。
 
 **依据**：plan-v1 §Q42、§5.6；`src/bridge/cards-service.ts`、`src/channel/channel.ts`。
 
+### 卡片串行显示，超时从**显示时**起算
+
+**规则**：同一 peer 同时只显示一张卡，答完（或作废、超时、abort）才发下一张；
+`PendingCards.offer` 传 `{ arm: false }`，由 `pump()` 在真正发出时调 `arm()` 起计时。
+
+**违反的后果**：
+
+| 漏掉的东西 | 后果 |
+|---|---|
+| 串行闸门 | 并行工具调用一次推三四张长卡到手机上，用户要同时记住所有 `Px` 编号 |
+| 显示时才计时 | 排在队里的卡在用户**根本没看见**的时候超时作废，那张卡的 turn 白白失败 |
+
+**「识别」与「接受」必须分开**。`addressesCard` 对**任何未结算的卡**返回 true（含排队中的），
+因为 `channel.ts` 用它决定**是否绕过 peer 队列**；只有 `answer()` 内部再用 `isShown` 判定能否作答。
+
+| 若 `addressesCard` 只认已显示 | 后果 |
+|---|---|
+| 排队卡的回复返回 `false` | 该消息走 `peers.runExclusive`，**排在那轮正在等的 turn 后面** |
+| 于是 `answer()` 里「还没轮到」的提示 | **永远发不出去**，用户只看到沉默 |
+
+**展示必须合并到微任务**：一轮的取消信号是共享的，一次 abort 会**同时**跑完所有卡的监听器。
+在监听器里直接显示，会让排队卡全部刷屏后立刻被撤掉；同步调度器下还会
+`expire → release → display → arm → expire` 递归。所以 `CardQueue.schedule` 用 `queueMicrotask` 合并。
+
+**确认文案先于下一张卡入队**：出站队列按 peer FIFO，`release()` 会触发下一张卡的 `send`。
+先 `release` 会让用户看到新问题出现在「已收到」之前。
+
+**`onExpired` 先告诉用户再推进**：等价理由——作废提示要排在替代它的那张卡之前。
+
+**位置标注的时机**：`第 N/M 张` 的 M 在**该卡显示的那一刻**定格。后到的卡是新一轮，
+重发屏幕上那张以更新分母会造成重复消息。
+
+**`onExpired` 必须推进队列**：超时的卡如果不 `advance()`，它会永远占住显示位，后面的卡再也发不出来。
+
+**`dispose()` 必须清空展示状态**：`runs` 指向的卡已被 `disposeAll()` 删掉，留着会让之后每次显示
+都卡在一个永远释放不了的槽位上（同一个 service 复用时不显示任何卡）。
+
+**`shareWithGui` 下 GUI 赢时要发一条通知**：微信那张卡会被撤掉，不发通知的话它在聊天里凭空消失，
+用户无法判断自己的待决问题去了哪里。
+
+**依据**：`src/bridge/card-queue.ts`（`schedule` / `release` / `display`）、
+`src/bridge/cards-service.ts`、`src/bridge/pending-cards.ts`（`offer({arm:false})` / `arm`）。
+
+### 中断必须撤卡，`/stop` 立即作废
+
+**规则**：两个 listener 都要监听 `req.signal`；`/stop` 还要显式调 `cards.withdrawAll(peerId)`。
+
+**为什么两层都要**：signal 覆盖 GUI 取消、turn 被其他原因中断；`withdrawAll` 覆盖「turn 早已结束、
+signal 也早已 abort 但没人监听」的历史状态，并让 `/stop` 能说出作废了几张。
+
+**违反的后果是静默的假话**：卡片留着、看起来可答；用户回复后 `settle()` 成功，插件回
+「已收到，正在继续」——而那一轮**早就结束了**。
+
+**`/stop` 里先撤卡再取消**：`agent.cancel()` 会同步 abort 请求信号，而 signal 监听也会撤卡。
+先取消的话计数永远是 0（卡已被信号路径撤掉），用户就得不到「作废了 N 张」这句提示。
+两种顺序的结局相同（审批 `cancelled`、提问 reject），所以先撤卡是安全的。
+
+**撤卡不是超时**：`withdraw()` 接受调用方给的结局，不复用 `onTimeout`。审批要 `'cancelled'`（不是
+fail-closed 的 `'unavailable'`），提问转对话要能和过期区分开。
+
+**测试盲区**：注入 `CardService` 的单测看不见 `index.ts` 是否真的把 signal 传进来；
+端到端回归在 `tests/integration/channel.spec.ts` 的「withdraws an approval card when /stop ends the turn」。
+
+**依据**：`src/bridge/cards-service.ts`（`watchAbort` / `withdrawAll`）、`src/bridge/local-commands.ts`（`stop`）、
+`src/channel/command-context.ts`、`src/channel/channel.ts`（`CardAnswererLike.withdrawAll`）。
+
 ### 媒体失败绝不吞掉消息
 
 **规则**：CDN 报错、字节不被 store 接受、模型不支持图片——一律降级为**追加在文本后的说明**。

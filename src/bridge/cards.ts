@@ -32,11 +32,37 @@ export type ApprovalChoice = (typeof APPROVAL_OPTIONS)[number]
  * The number is the card's id, so replying with it names one card even when
  * several are open at once - which is the common case, because tool calls run in
  * parallel.
+ *
+ * `position` is how a run of cards presents itself now that they are shown one
+ * at a time: a user who answers and immediately gets another card needs to know
+ * whether that was the last one.
  * @param card - the card to render.
+ * @param position - where this card sits in the run, when more than one waits.
  * @returns the message text.
  */
-export function formatCard(card: PendingCard): string {
-  return card.kind === 'approval' ? formatApproval(card) : formatQuestion(card)
+export function formatCard(card: PendingCard, position?: CardPosition): string {
+  return card.kind === 'approval' ? formatApproval(card, position) : formatQuestion(card, position)
+}
+
+/** Where one card sits in the run of cards waiting for its peer. */
+export interface CardPosition {
+  /** One-based position of this card. */
+  readonly index: number
+  /** How many cards the run holds in total. */
+  readonly total: number
+}
+
+/**
+ * The heading suffix naming a card's place in the run.
+ *
+ * Empty for a lone card: "1/1" on every single approval would be noise, and a
+ * lone card is the ordinary case.
+ * @param position - where the card sits, when it was given one.
+ * @returns the suffix to append to a heading, possibly empty.
+ */
+function positionSuffix(position: CardPosition | undefined): string {
+  if (position === undefined || position.total <= 1) return ''
+  return `（第 ${String(position.index)}/${String(position.total)} 张）`
 }
 
 /**
@@ -47,9 +73,9 @@ export function formatCard(card: PendingCard): string {
  * @param card - the approval card to render.
  * @returns the message text.
  */
-function formatApproval(card: PendingCard): string {
+function formatApproval(card: PendingCard, position?: CardPosition): string {
   const lines = [
-    '🔒 需要权限确认',
+    `🔒 需要权限确认${positionSuffix(position)}`,
     `工具：${card.toolName ?? '(未知)'}`,
   ]
   // The asker's own words, when it supplied any. `displayReason` is a localized
@@ -89,14 +115,20 @@ function describeApproval(choice: ApprovalChoice): string {
 /**
  * Render a question card.
  *
- * Every option is numbered, and the reply is an option's number for that
- * question. A question with no options expects free text, which is the only case
- * where an answer is not a number.
+ * Every option is numbered, and an all-number reply names options. Anything
+ * else is the user's own words for that question, which is why the card says so:
+ * an option list reads as a closed set unless it is told otherwise.
+ *
+ * `0` is the card's own way out into conversation rather than a question's
+ * option, so it is numbered below every question's own numbering and can never
+ * collide with one.
  * @param card - the question card to render.
+ * @param position - where this card sits in the run, when more than one waits.
  * @returns the message text.
  */
-function formatQuestion(card: PendingCard): string {
-  const lines = ['❓ 需要你确认']
+function formatQuestion(card: PendingCard, position?: CardPosition): string {
+  const lines = [`❓ 需要你确认${positionSuffix(position)}`]
+  const multiple = card.questions.length > 1
   card.questions.forEach((question, index) => {
     if (index > 0) lines.push('')
     if (question.header !== undefined && question.header.trim() !== '') {
@@ -104,7 +136,7 @@ function formatQuestion(card: PendingCard): string {
     }
     // Numbered only when there is more than one, so a single question reads
     // without ceremony but a multi-question card stays addressable.
-    const prefix = card.questions.length > 1 ? `${String(index + 1)}. ` : ''
+    const prefix = multiple ? `${String(index + 1)}. ` : ''
     lines.push(`${prefix}${question.question}`)
     if (question.detail !== undefined && question.detail.trim() !== '') {
       lines.push(...indent(question.detail.trim()))
@@ -115,12 +147,34 @@ function formatQuestion(card: PendingCard): string {
         ? `  ${label}`
         : `  ${label} — ${option.description}`)
     })
-    if (question.options !== undefined && question.options.length > 0 && (question.multiSelect ?? false)) {
-      lines.push('  （可多选，用逗号分隔编号）')
+    if (question.options !== undefined && question.options.length > 0) {
+      if (question.multiSelect ?? false) lines.push('  （可多选，用逗号分隔编号）')
+      // Said on every question that offers options, because it is a rule about
+      // the reply and not a property of this particular question.
+      lines.push('  （也可直接写你自己的答案）')
     }
   })
-  lines.push('', `回复：${card.id} 1` + (card.questions.length > 1 ? ' 2 …' : ''))
+  lines.push('', '0. 换成对话 — 作废本卡，直接说你的想法')
+  lines.push('', ...questionReplyHint(card, multiple))
   return clamp(lines.join('\n'))
+}
+
+/**
+ * The reply syntax line, taught with the delimiters the parser accepts.
+ *
+ * A multi-question card that mixed words and numbers cannot be answered with
+ * bare spaces, so the hint names the separators in the order they are tried.
+ * @param card - the card being rendered.
+ * @param multiple - whether the card asks more than one question.
+ * @returns the lines to append.
+ */
+function questionReplyHint(card: PendingCard, multiple: boolean): string[] {
+  if (!multiple) return [`回复：${card.id} 1`]
+  const count = String(card.questions.length)
+  return [
+    `回复：${card.id} ${Array.from({ length: card.questions.length }, (_, index) => String(index + 1)).join(' | ')}`,
+    `（每题的答案用 | 分隔，电脑上也可一行一题，共 ${count} 题）`,
+  ]
 }
 
 /** Indent a block, so multi-line details read as part of their label. */
@@ -140,6 +194,15 @@ export interface ParsedCardReply {
   cardId: string
   /** The option numbers the reply selected, in the order given. */
   selections: readonly string[]
+  /**
+   * Everything after the id, exactly as typed.
+   *
+   * `selections` cannot carry a written answer: it splits on whitespace, which
+   * turns "use a softer blue" into four tokens. An answer that may be prose is
+   * read from here instead, so the whitespace is still available to the
+   * question parser.
+   */
+  raw: string
 }
 
 /**
@@ -178,7 +241,11 @@ export function parseCardReply(
     .flatMap(part => part.split(','))
     .map(part => part.trim())
     .filter(part => part !== '')
-  return { cardId, selections }
+  // The id is the first word, so what follows it starts after exactly that much
+  // of the trimmed text. Newlines are preserved here on purpose: they are one
+  // of the separators a multi-question answer may use.
+  const raw = trimmed.slice(head.length).trim()
+  return { cardId, selections, raw }
 }
 
 /** What one approval reply means, or why it is not usable. */
@@ -232,48 +299,126 @@ export interface QuestionAnswer {
 /** What one question reply means, or why it is not usable. */
 export type QuestionReply =
   | { readonly kind: 'answered'; readonly answers: readonly QuestionAnswer[] }
+  /**
+   * The user chose to talk the decision through instead of deciding.
+   *
+   * Distinct from `invalid` because the card is over: the turn ends, and the
+   * user's next ordinary message is what carries their thinking. Treating it as
+   * invalid would keep the card open and re-ask a question they just declined
+   * to answer from a menu.
+   */
+  | { readonly kind: 'discuss' }
   | { readonly kind: 'invalid'; readonly text: string }
 
 /**
  * Read a question reply.
  *
- * A question with options takes option numbers; one without takes the text as
- * typed. Either every question is answered or none is, because a partial answer
- * would leave the model with a half-filled shape it cannot act on.
+ * **Numbers choose, anything else is written.** A segment made only of option
+ * numbers names those options; any other segment is the user's own answer for
+ * that question. This is the whole rule, and it is what makes a third choice
+ * expressible at all.
+ *
+ * **One segment per question.** Newlines are tried first because a computer's
+ * keyboard can send them, then `|` because a phone's return key is its send
+ * button, then bare whitespace for the numbered form. The first split that
+ * yields one segment per question wins.
+ *
+ * Either every question is answered or none is, because a partial answer would
+ * leave the model with a half-filled shape it cannot act on.
  * @param card - the card being answered.
- * @param selections - the parts of the reply after the card id.
- * @returns the answers to return from the listener, or an explanation to send back.
+ * @param selections - the whitespace-split tokens after the card id.
+ * @param raw - the reply after the card id, exactly as typed; `undefined` falls
+ *   back to `selections`, which cannot carry a written answer.
+ * @returns the answers to return from the listener, an intent to discuss, or an
+ *   explanation to send back.
  */
-export function readQuestionReply(card: PendingCard, selections: readonly string[]): QuestionReply {
+export function readQuestionReply(
+  card: PendingCard,
+  selections: readonly string[],
+  raw?: string,
+): QuestionReply {
+  const text = raw ?? selections.join(' ')
+  // The card-level way out. Checked on the whole reply first so `0` is
+  // honoured however many questions the card asks.
+  if (isDiscussReply(text)) return { kind: 'discuss' }
+  const segments = splitQuestionAnswers(text, card.questions.length)
+  if (segments === undefined) return invalidQuestion(card.questions.length, card.questions.length)
+  // A `0` among several segments means the same thing as a lone `0`: the user
+  // wants to discuss. Requiring the exact form would make the intent depend on
+  // which syntax they happened to use.
+  if (segments.some(segment => isDiscussReply(segment))) return { kind: 'discuss' }
+
   const answers: QuestionAnswer[] = []
   for (const [index, question] of card.questions.entries()) {
-    const hasOptions = question.options !== undefined && question.options.length > 0
-    if (hasOptions) {
-      // With one question the whole reply is its selection; with several, each
-      // question has its own token.
-      const token = card.questions.length === 1 ? selections.join(' ') : selections[index]
-      const picked = (token ?? '').split(/[\s,]+/u).filter(part => part !== '')
-      const labels = picked.map(part => question.options?.[Number(part) - 1]?.label)
-      if (labels.length === 0 || labels.some(label => label === undefined)) {
-        return invalidQuestion(index, card.questions.length)
-      }
-      if (labels.length > 1 && !(question.multiSelect ?? false)) {
-        return invalidQuestion(index, card.questions.length)
-      }
-      answers.push({ id: question.id, selected: labels as string[] })
-    } else {
-      const text = (card.questions.length === 1 ? selections.join(' ') : selections[index] ?? '').trim()
-      if (text === '') return invalidQuestion(index, card.questions.length)
-      answers.push({ id: question.id, selected: [], custom: text })
+    const segment = segments[index] ?? ''
+    const picked = segment.split(/[\s,]+/u).filter(part => part !== '')
+    if (picked.length === 0) return invalidQuestion(index, card.questions.length)
+    // All numbers is the only shape read as options. A segment of words is the
+    // user's answer even on a question that listed options.
+    if (!picked.every(part => /^\d+$/u.test(part))) {
+      answers.push({ id: question.id, selected: [], custom: segment.trim() })
+      continue
     }
+    const labels = picked.map(part => question.options?.[Number(part) - 1]?.label)
+    if (labels.some(label => label === undefined)) return invalidQuestion(index, card.questions.length)
+    if (labels.length > 1 && !(question.multiSelect ?? false)) {
+      return invalidQuestion(index, card.questions.length)
+    }
+    if (labels.length === 0) return invalidQuestion(index, card.questions.length)
+    answers.push({ id: question.id, selected: labels as string[] })
   }
   return { kind: 'answered', answers }
+}
+
+/**
+ * Whether a reply is the card-level "let us discuss this" choice.
+ *
+ * Exact, not a prefix: `0.5 seconds` is a written answer that happens to start
+ * with a zero, and reading it as the discuss option would throw the answer away.
+ * @param text - the reply, or one of its per-question segments.
+ * @returns whether the user asked to discuss instead.
+ */
+function isDiscussReply(text: string): boolean {
+  return text.trim() === '0'
+}
+
+/**
+ * Cut a reply into one segment per question.
+ *
+ * The separators are tried in the order a person produces them: a newline from
+ * a real keyboard, then the bar a phone can type, then plain whitespace for the
+ * all-numbered form. A split that does not produce exactly one segment per
+ * question is not the right one - a written answer may itself contain any of
+ * these separators.
+ * @param text - the reply after the card id.
+ * @param count - how many questions the card asks.
+ * @returns the segments, or `undefined` when no separator lines up.
+ */
+function splitQuestionAnswers(text: string, count: number): string[] | undefined {
+  const trimmed = text.trim()
+  if (count === 1) return trimmed === '' ? undefined : [trimmed]
+  const separators: readonly RegExp[] = [/\r?\n/u, /\|/u, /\s+/u]
+  for (const separator of separators) {
+    const parts = trimmed.split(separator)
+    // A trailing separator produces an empty tail that is not a question's
+    // answer; anything else empty means this split misreads the reply.
+    const cleaned = parts.length > count && parts[parts.length - 1] === ''
+      ? parts.slice(0, -1)
+      : parts
+    if (cleaned.length === count && cleaned.every(part => part.trim() !== '')) {
+      return cleaned.map(part => part.trim())
+    }
+  }
+  return undefined
 }
 
 /** The reply for a question answer nobody can act on. */
 function invalidQuestion(index: number, total: number): QuestionReply {
   const which = total > 1 ? `第 ${String(index + 1)} 题的` : ''
-  return { kind: 'invalid', text: `请回复卡片编号和${which}选项编号，例如「P1 1」。` }
+  const how = total > 1
+    ? `请回复卡片编号和每题的答案，例如「P1 1 | 2」，共 ${String(total)} 题。`
+    : '请回复卡片编号和选项编号，例如「P1 1」。'
+  return { kind: 'invalid', text: `请回复卡片编号和${which}答案。${how}` }
 }
 
 /** One card as the channel holds it, re-exported for callers that render. */

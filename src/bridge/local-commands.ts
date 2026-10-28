@@ -33,6 +33,16 @@ export interface LocalCommandContext {
    * @returns whether there was a turn to cancel.
    */
   cancelRunning: () => Promise<boolean>
+  /**
+   * Drop the interaction cards this peer is being asked to answer.
+   *
+   * Returns how many were dropped, so `/stop` can say so: a user who stopped a
+   * turn while a card was on screen would otherwise find it gone with no word
+   * about whether that was expected.
+   *
+   * Absent on a deployment that answers no cards.
+   */
+  cancelCards?: () => number
   /** End the peer's session, so the next message starts a fresh one. */
   endSession: () => Promise<void>
   /** The account being polled, when one is. */
@@ -130,12 +140,29 @@ export async function runLocalCommand(
   }
 }
 
-/** Cancel the peer's running turn. */
+/**
+ * Cancel the peer's running turn, and the cards that were asking about it.
+ *
+ * The cards are closed whether or not a turn was running: a card outliving its
+ * turn is the defect this exists for. One that stays open looks answerable, and
+ * the reply that finally "decides" it is about work that has already stopped.
+ * @param ctx - what the command needs to know.
+ * @returns the outcome to send back.
+ */
 async function stop(ctx: LocalCommandContext): Promise<CommandOutcome> {
+  // The cards go first, and the count comes from doing it rather than from
+  // inspecting afterwards: cancelling the turn aborts each request's signal,
+  // which withdraws its card too - so counting after the cancel always found
+  // nothing left and told the user 0 cards had been dropped.
+  //
+  // The order is safe because both paths settle an approval `cancelled` and
+  // reject a question; which one gets there first does not change the outcome.
+  const cards = ctx.cancelCards?.() ?? 0
   const stopped = await ctx.cancelRunning()
+  const head = stopped ? '已停止当前任务。' : '当前没有正在运行的任务。'
   return {
     kind: 'success',
-    text: stopped ? '已停止当前任务。' : '当前没有正在运行的任务。',
+    text: cards === 0 ? head : `${head}\n${String(cards)} 张待确认的卡片已作废。`,
   }
 }
 
